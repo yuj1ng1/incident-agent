@@ -1,4 +1,4 @@
-from tool_registry import tool
+from tools.tool_registry import tool
 
 @tool
 def query_logs(service:str)->str:

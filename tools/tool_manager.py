@@ -1,5 +1,7 @@
 import json
-from tool_registry import tool_registry
+import time
+from tools.tool_registry import tool_registry
+from agent_logger.logger_config import logger
 
 class ToolManager:
     def get_tool_schemas(self):
@@ -8,13 +10,61 @@ class ToolManager:
     def run_tool(self,item):
         tool_info=tool_registry.get(item.name)
         if tool_info is None:
-            return f"没有找到工具：{item.name}"
-        arguments=json.loads(item.arguments)
+            result=f"没有找到工具：{item.name}"
+            output_item={
+                "type":"function_call_output",
+                "call_id":item.call_id,
+                "output":result
+            }
+            return False,output_item,result
+        try:
+            arguments=json.loads(item.arguments)
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"工具参数解析失败 "
+                f"name={item.name} "
+                f"arguments={item.arguments} "
+                f"error={e}"
+                )
+                
+            result=f"工具{item.name}的参数格式错误"
+            output_item={
+                "type":"function_call_output",
+                "call_id":item.call_id,
+                "output":result
+            }
+            return False,output_item,result
         tool_func=tool_info["func"]
-        result=tool_func(**arguments)
+        start_time=time.perf_counter()
+        try:
+            result=tool_func(**arguments)
+        except Exception as e:
+            cost_time=time.perf_counter()-start_time
+            logger.error(
+                f"工具执行失败 "
+                f"name={item.name} "
+                f"args={arguments} "
+                f"time={cost_time:.2f}s "
+                f"error={e}"
+            )
+            result=f"工具{item.name}执行失败：{e}"
+
+            output_item={
+                "type":"function_call_output",
+                "call_id":item.call_id,
+                "output":result
+            }
+            return False,output_item,result
         output_item={
             "type": "function_call_output",
             "call_id": item.call_id,
             "output": str(result)
         }
-        return output_item
+        cost_time=time.perf_counter()-start_time
+        logger.info(
+            f"工具调用成功 "
+            f"name={item.name} "
+            f"args={arguments} "
+            f"time={cost_time:.2f}s"
+        )
+        return True,output_item,result
