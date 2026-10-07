@@ -1,3 +1,4 @@
 from tools.logs import query_logs
 from tools.metrics import query_metrics
 from tools.health import check_service_health
+from tools.dependencies import get_service_dependencies,check_dependency_health

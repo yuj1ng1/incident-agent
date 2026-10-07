@@ -119,7 +119,8 @@ class IncidentMonitor:
 
         else:
             incident=create_incident_from_alert(
-                alert
+                alert,
+                fingerprint
             )
 
             logger.info(

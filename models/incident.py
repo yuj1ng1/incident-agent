@@ -16,6 +16,8 @@ class Evidence(BaseModel):
 
 class Incident(BaseModel):
     incident_id:str
+    fingerprint:str|None=None
+
     service:str
     severity:str
     status:str

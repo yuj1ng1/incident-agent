@@ -123,7 +123,9 @@ class IncidentRegressionTests(unittest.TestCase):
         self.monitor.process_alerts_once()
 
     def seed(self, value=0.27, last_at=NOW, last_value=None):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert(value)))
+        incident = create_incident_from_alert(
+            parse_prometheus_alert(raw_alert(value)), self.fp
+        )
         incident.last_investigated_at = last_at
         incident.last_investigated_value = value if last_value is None else last_value
         self.store.save_incident(self.fp, incident)
@@ -154,7 +156,9 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertIsInstance(namespace["incident_store"], IncidentStore)
             self.assertIsInstance(namespace["monitor"], IncidentMonitor)
             self.assertEqual(get_alerts.call_count, 2)
-            self.assertEqual(json.loads((self.work / "data" / "incidents.json").read_text()), {})
+            self.assertEqual(json.loads((self.work / "data" / "incidents.json").read_text()), {
+                "version": 2, "incidents": {}, "active_by_fingerprint": {}
+            })
         finally:
             os.chdir(old_cwd)
 
@@ -169,7 +173,9 @@ class IncidentRegressionTests(unittest.TestCase):
             with self.subTest(state=state):
                 self.assertIsNone(parse_prometheus_alert(raw_alert(state=state)))
         self.poll(raw_alert(state="pending"))
-        self.assertEqual(self.store.load(), {})
+        self.assertEqual(self.store.load(), {
+            "version": 2, "incidents": {}, "active_by_fingerprint": {}
+        })
         self.sdk.responses.create.assert_not_called()
 
     def test_fingerprint_is_stable_across_value_and_severity_changes(self):
@@ -187,20 +193,22 @@ class IncidentRegressionTests(unittest.TestCase):
         seen = []
 
         def model_call(**kwargs):
-            row = self.store.load()[self.fp]
-            seen.append(row["incident_id"])
-            self.assertEqual(row["status"], "investigating")
-            self.assertEqual(row["alerts"][0]["value"], 0.27)
+            incident = self.store.get_active_incident(self.fp)
+            self.assertIsNotNone(incident)
+            seen.append(incident.incident_id)
+            self.assertEqual(incident.status, "investigating")
+            self.assertEqual(incident.alerts[0].value, 0.27)
+            self.assertEqual(incident.fingerprint, self.fp)
             self.assertEqual({t["name"] for t in kwargs["tools"]},
                              {"query_logs", "query_metrics", "check_service_health"})
             return model_response()
 
         self.sdk.responses.create.side_effect = model_call
         self.poll(raw_alert())
-        row = self.store.load()[self.fp]
-        self.assertEqual(seen, [row["incident_id"]])
-        self.assertRegex(row["incident_id"], r"^inc-[0-9a-f]{8}$")
-        self.assertEqual(row["investigations"][0]["status"], "completed")
+        incident = self.store.get_active_incident(self.fp)
+        self.assertEqual(seen, [incident.incident_id])
+        self.assertRegex(incident.incident_id, r"^inc-[0-9a-f]{8}$")
+        self.assertEqual(incident.investigations[0].status, InvestigationStatus.COMPLETED)
 
     def test_new_incident_tool_results_and_investigation_persist(self):
         self.sdk.responses.create.side_effect = [
@@ -210,7 +218,9 @@ class IncidentRegressionTests(unittest.TestCase):
             "status": "success", "data": {"result": [{"value": [0, "0.27"]}]}
         }):
             self.poll(raw_alert())
-        row = self.store.load()[self.fp]
+        data = self.store.load()
+        incident_id = data["active_by_fingerprint"][self.fp]
+        row = data["incidents"][incident_id]
         self.assertEqual(len(row["evidence"]), 1)
         self.assertEqual(row["evidence"][0]["source"], "query_metrics")
         self.assertEqual(json.loads(row["evidence"][0]["detail"])["value"], 0.27)
@@ -222,31 +232,32 @@ class IncidentRegressionTests(unittest.TestCase):
         with patch("monitor.incident_monitor.create_incident_from_alert") as factory:
             self.poll(raw_alert(), raw_alert())
         factory.assert_not_called()
-        self.assertEqual(self.store.load()[self.fp]["incident_id"], incident.incident_id)
-        self.assertEqual(len(self.store.load()), 1)
+        self.assertEqual(self.store.get_active_incident(self.fp).incident_id, incident.incident_id)
+        self.assertEqual(len(self.store.load()["incidents"]), 1)
         self.assertEqual(self.sdk.responses.create.call_count, 1)
 
     def test_stable_alert_before_cooldown_skips_investigation(self):
         incident = self.seed(last_at=NOW - timedelta(minutes=1))
         self.poll(raw_alert(value=0.30))
         self.sdk.responses.create.assert_not_called()
-        self.assertEqual(self.store.load()[self.fp]["incident_id"], incident.incident_id)
+        self.assertEqual(self.store.get_active_incident(self.fp).incident_id, incident.incident_id)
 
     def test_cooldown_boundary_reinvestigates_same_incident(self):
         incident = self.seed(last_at=NOW - timedelta(minutes=REINVESTIGATE_COOLDOWN_MINUTES))
         self.poll(raw_alert())
         self.assertEqual(self.sdk.responses.create.call_count, 1)
-        row = self.store.load()[self.fp]
-        self.assertEqual(row["incident_id"], incident.incident_id)
-        self.assertEqual(len(row["alerts"]), 2)
-        self.assertEqual(len(row["investigations"]), 1)
+        reloaded = self.store.get_active_incident(self.fp)
+        self.assertEqual(reloaded.incident_id, incident.incident_id)
+        self.assertEqual(len(reloaded.alerts), 2)
+        self.assertEqual(len(reloaded.investigations), 1)
 
     def test_significant_http_5xx_worsening_reinvestigates_early(self):
         incident = self.seed(value=0.20, last_at=NOW - timedelta(seconds=1))
         self.poll(raw_alert(value=0.50))
         self.assertEqual(self.sdk.responses.create.call_count, 1)
-        self.assertEqual(self.store.load()[self.fp]["incident_id"], incident.incident_id)
-        self.assertEqual(self.store.load()[self.fp]["last_investigated_value"], 0.50)
+        reloaded = self.store.get_active_incident(self.fp)
+        self.assertEqual(reloaded.incident_id, incident.incident_id)
+        self.assertEqual(reloaded.last_investigated_value, 0.50)
 
     def test_exact_decimal_worsening_threshold_reinvestigates(self):
         self.assertEqual(HTTP_5XX_RATE_INCREASE_THRESHOLD, 0.2)
@@ -254,7 +265,7 @@ class IncidentRegressionTests(unittest.TestCase):
         self.poll(raw_alert(value=0.70))
         self.assertEqual(self.sdk.responses.create.call_count, 1,
                          "0.50 -> 0.70 reaches the configured 0.20 threshold")
-        self.assertEqual(self.store.load()[self.fp]["incident_id"], incident.incident_id)
+        self.assertEqual(self.store.get_active_incident(self.fp).incident_id, incident.incident_id)
 
     def test_other_metrics_use_cooldown_instead_of_http_5xx_threshold(self):
         incident = self.seed(value=0.27, last_at=NOW)
@@ -264,27 +275,55 @@ class IncidentRegressionTests(unittest.TestCase):
     def test_missing_firing_alert_resolves_incident(self):
         incident = self.seed()
         self.poll()
-        row = self.store.load()[self.fp]
+        data = self.store.load()
+        row = data["incidents"][incident.incident_id]
         self.assertEqual(row["status"], "resolved")
         self.assertEqual(row["incident_id"], incident.incident_id)
+        self.assertNotIn(self.fp, data["active_by_fingerprint"])
         self.assertIsNone(self.store.get_active_incident(self.fp))
 
     def test_pending_alert_resolves_previously_firing_incident(self):
-        self.seed()
-        self.poll(raw_alert(state="pending"))
-        self.assertEqual(self.store.load()[self.fp]["status"], "resolved")
-
-    def test_refiring_after_resolution_creates_new_incident_id(self):
         incident = self.seed()
-        self.poll()
+        self.poll(raw_alert(state="pending"))
+        data = self.store.load()
+        self.assertEqual(data["incidents"][incident.incident_id]["status"], "resolved")
+        self.assertNotIn(self.fp, data["active_by_fingerprint"])
+        self.assertIsNone(self.store.get_active_incident(self.fp))
+
+    def test_refiring_after_resolution_preserves_old_incident_history(self):
         self.poll(raw_alert())
-        row = self.store.load()[self.fp]
-        self.assertNotEqual(row["incident_id"], incident.incident_id)
-        self.assertEqual(row["status"], "investigating")
-        self.assertEqual(len(row["investigations"]), 1)
+        first_incident = self.store.get_active_incident(self.fp)
+        self.assertIsNotNone(first_incident)
+        first_id = first_incident.incident_id
+        self.assertEqual(first_incident.status, "investigating")
+        data = self.store.load()
+        self.assertEqual(set(data["incidents"]), {first_id})
+        self.assertEqual(data["active_by_fingerprint"], {self.fp: first_id})
+
+        self.poll()
+        data = self.store.load()
+        self.assertEqual(data["incidents"][first_id]["status"], "resolved")
+        self.assertNotIn(self.fp, data["active_by_fingerprint"])
+        self.assertIsNone(self.store.get_active_incident(self.fp))
+        resolved_row = data["incidents"][first_id]
+
+        self.poll(raw_alert(value=0.40))
+        refired_incident = self.store.get_active_incident(self.fp)
+        self.assertIsNotNone(refired_incident)
+        second_id = refired_incident.incident_id
+        self.assertNotEqual(second_id, first_id)
+        data = self.store.load()
+        self.assertEqual(set(data["incidents"]), {first_id, second_id})
+        self.assertEqual(data["incidents"][first_id]["status"], "resolved")
+        self.assertEqual(data["incidents"][second_id]["status"], "investigating")
+        self.assertEqual(data["incidents"][first_id], resolved_row)
+        self.assertEqual(data["active_by_fingerprint"], {self.fp: second_id})
+        self.assertEqual(len(refired_incident.investigations), 1)
+        self.assertEqual(refired_incident.alerts[0].value, 0.40)
+        self.assertEqual(self.sdk.responses.create.call_count, 2)
 
     def test_completed_result_is_successful(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         result = self.agent.investigate(incident)
         self.assertTrue(result.success)
         self.assertEqual(result.status, InvestigationStatus.COMPLETED)
@@ -298,11 +337,11 @@ class IncidentRegressionTests(unittest.TestCase):
             self.poll(raw_alert())
         self.assertEqual(self.sdk.responses.create.call_count, MAX_AGENT_LOOPS)
         self.assertEqual(query.call_count, 1)
-        row = self.store.load()[self.fp]
-        self.assertEqual(row["investigations"][0]["status"], "max_round_reached")
-        self.assertIsNone(row["last_investigated_at"])
-        self.assertIsNone(row["last_investigated_value"])
-        self.assertEqual(len(row["evidence"]), 1)
+        incident = self.store.get_active_incident(self.fp)
+        self.assertEqual(incident.investigations[0].status, InvestigationStatus.MAX_ROUND_REACHED)
+        self.assertIsNone(incident.last_investigated_at)
+        self.assertIsNone(incident.last_investigated_value)
+        self.assertEqual(len(incident.evidence), 1)
 
     def test_failed_reinvestigation_preserves_previous_success_timestamp_and_value(self):
         previous = NOW - timedelta(minutes=REINVESTIGATE_COOLDOWN_MINUTES)
@@ -316,46 +355,46 @@ class IncidentRegressionTests(unittest.TestCase):
         self.assertEqual(row.investigations[0].status, InvestigationStatus.MAX_ROUND_REACHED)
 
     def test_successful_tool_output_becomes_evidence(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         result, query = self.investigate_with_metrics(incident)
         self.assertTrue(result.success)
         query.assert_called_once()
         self.assertEqual(len(incident.evidence), 1)
 
     def test_no_data_does_not_become_evidence(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, empty=True)
         self.assertEqual(incident.evidence, [])
         outputs = [i for i in self.agent.history if isinstance(i, dict) and i.get("type") == "function_call_output"]
         self.assertEqual(json.loads(outputs[0]["output"])["status"], "no_data")
 
     def test_undefined_metric_does_not_become_valid_evidence(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, value="NaN")
         self.assertEqual(incident.evidence, [], "An undefined 0/0 rate must not be stored as successful metric evidence")
 
     def test_identical_evidence_across_investigations_is_not_duplicated(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident)
         self.investigate_with_metrics(incident)
         self.assertEqual(len(incident.evidence), 1)
 
     def test_changed_evidence_across_investigations_is_added(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, value=0.27)
         self.investigate_with_metrics(incident, value=0.40)
         self.assertEqual(len(incident.evidence), 2)
         self.assertEqual([json.loads(e.detail)["value"] for e in incident.evidence], [0.27, 0.40])
 
     def test_evidence_key_order_does_not_defeat_deduplication(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         item = SimpleNamespace(name="query_metrics")
         self.agent.add_evidence(incident, item, {"status": "ok", "value": 0.27}, True, False)
         self.agent.add_evidence(incident, item, {"value": 0.27, "status": "ok"}, True, False)
         self.assertEqual(len(incident.evidence), 1)
 
     def test_failed_tools_do_not_become_evidence(self):
-        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()))
+        incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.sdk.responses.create.side_effect = [model_response(answer=None, calls=[tool_call()]), model_response()]
         with patch("tools.metrics.prometheus_client.query", side_effect=RuntimeError("test tool unavailable")):
             self.agent.investigate(incident)
@@ -370,7 +409,7 @@ class IncidentRegressionTests(unittest.TestCase):
             if not observed:
                 observed.append("failure")
                 raise ConnectionError("test Prometheus unavailable")
-            self.assertEqual(self.store.load()[self.fp]["status"], "investigating")
+            self.assertEqual(self.store.get_active_incident(self.fp).status, "investigating")
             observed.append("recovered")
             return active_response
 
@@ -381,7 +420,7 @@ class IncidentRegressionTests(unittest.TestCase):
             self.monitor.run()
         self.assertEqual(observed, ["failure", "recovered"])
         self.assertIn("test Prometheus unavailable", "\n".join(captured.output))
-        self.assertEqual(self.store.load()[self.fp]["incident_id"], incident.incident_id)
+        self.assertEqual(self.store.get_active_incident(self.fp).incident_id, incident.incident_id)
 
     def test_agent_exception_is_logged_and_next_poll_retries_same_incident(self):
         self.prometheus.get_alerts.return_value = {"status": "success", "data": {"alerts": [raw_alert()]}}
@@ -392,15 +431,15 @@ class IncidentRegressionTests(unittest.TestCase):
             self.monitor.run()
         self.assertEqual(self.prometheus.get_alerts.call_count, 2)
         self.assertEqual(self.sdk.responses.create.call_count, 2)
-        self.assertEqual(len(self.store.load()), 1)
-        self.assertEqual(len(self.store.load()[self.fp]["investigations"]), 1)
+        self.assertEqual(len(self.store.load()["incidents"]), 1)
+        self.assertEqual(len(self.store.get_active_incident(self.fp).investigations), 1)
         self.assertIn("test investigation failed", "\n".join(captured.output))
 
     def test_one_agent_exception_does_not_block_other_alerts(self):
         self.sdk.responses.create.side_effect = [RuntimeError("test first investigation failed"), model_response()]
         with self.assertLogs("agent", level="ERROR"):
             self.poll(raw_alert(), raw_alert(service="second-service"))
-        rows = list(self.store.load().values())
+        rows = list(self.store.load()["incidents"].values())
         self.assertEqual(len(rows), 2)
         self.assertEqual([len(row["investigations"]) for row in rows], [0, 1])
 
@@ -420,16 +459,16 @@ class IncidentRegressionTests(unittest.TestCase):
             "status": "success", "data": {"result": [{"value": [0, "0.27"]}]}
         }), self.assertLogs("agent", level="ERROR"):
             self.poll(raw_alert())
-        row = self.store.load()[self.fp]
-        self.assertIsNone(row["last_investigated_at"])
-        self.assertEqual(len(row["evidence"]), 1, "Successful evidence must survive a later model exception")
+        incident = self.store.get_active_incident(self.fp)
+        self.assertIsNone(incident.last_investigated_at)
+        self.assertEqual(len(incident.evidence), 1, "Successful evidence must survive a later model exception")
 
     def test_incomplete_model_response_does_not_mark_investigation_successful(self):
         self.sdk.responses.create.return_value = model_response(answer=None, status="incomplete")
         self.poll(raw_alert())
-        row = self.store.load()[self.fp]
-        self.assertIsNone(row["last_investigated_at"], "An incomplete model response must not update success timestamp")
-        self.assertNotEqual(row["investigations"][0]["status"], "completed")
+        incident = self.store.get_active_incident(self.fp)
+        self.assertIsNone(incident.last_investigated_at, "An incomplete model response must not update success timestamp")
+        self.assertNotEqual(incident.investigations[0].status, InvestigationStatus.COMPLETED)
 
     def test_invalid_alert_snapshot_does_not_falsely_resolve_active_incident(self):
         self.seed()
@@ -438,7 +477,7 @@ class IncidentRegressionTests(unittest.TestCase):
             self.monitor.process_alerts_once()
         except (ValueError, KeyError):
             pass
-        self.assertEqual(self.store.load()[self.fp]["status"], "investigating",
+        self.assertEqual(self.store.get_active_incident(self.fp).status, "investigating",
                          "A response without data.alerts is not a valid empty alert snapshot")
 
     def test_store_roundtrip_retains_evidence_and_investigations(self):
@@ -449,11 +488,11 @@ class IncidentRegressionTests(unittest.TestCase):
         self.assertEqual(reloaded.last_investigated_at, NOW)
 
     def test_store_load_accepts_existing_null_evidence_and_investigations(self):
-        self.seed()
-        rows = self.store.load()
-        rows[self.fp]["evidence"] = None
-        rows[self.fp]["investigations"] = None
-        self.store.save(rows)
+        incident = self.seed()
+        data = self.store.load()
+        data["incidents"][incident.incident_id]["evidence"] = None
+        data["incidents"][incident.incident_id]["investigations"] = None
+        self.store.save(data)
         reloaded = self.store.get_active_incident(self.fp)
         self.assertEqual(reloaded.evidence, [])
         self.assertEqual(reloaded.investigations, [])
