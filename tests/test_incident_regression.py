@@ -46,6 +46,7 @@ with patch("logging.FileHandler", side_effect=isolated_log_handler):
     from monitor.incident_monitor import IncidentMonitor
     from openai.types.responses import Response
     from prompts.agent_prompt import agent_prompt
+    from tools.tool_registry import tool_registry
     import reinvestigation
 
 
@@ -200,7 +201,7 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertEqual(incident.alerts[0].value, 0.27)
             self.assertEqual(incident.fingerprint, self.fp)
             self.assertEqual({t["name"] for t in kwargs["tools"]},
-                             {"query_logs", "query_metrics", "check_service_health"})
+                             set(tool_registry))
             return model_response()
 
         self.sdk.responses.create.side_effect = model_call
