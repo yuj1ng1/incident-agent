@@ -37,6 +37,20 @@ class Agent:
         )
 
         for loop_num in range(1,self.max_loop_round+1):
+            remaining_tool_calls=self.max_tool_calls-tool_call_count
+            round_instructions=(
+                self.agent_prompt
+                +f"""
+                当前调查资源限制：
+                剩余工具调用次数：{remaining_tool_calls}
+                剩余模型响应轮数（含本轮）：{self.max_loop_round-loop_num+1}
+
+                请优先调用最能够填补关键证据缺口的工具。
+                不要为了完整性机械查询所有指标。
+                当剩余工具调用次数较少时，应优先验证当前最关键的故障假设。
+                独立证据工具可同轮调用；最后一轮请基于现有证据输出结论，不再请求工具。
+                """
+            )
             if tool_call_count>=self.max_tool_calls:
                 available_tools=[]
             else:
@@ -47,7 +61,7 @@ class Agent:
             )
             response=self.model_client.call_model(
                 input_data=self.history,
-                instructions=self.agent_prompt,
+                instructions=round_instructions,
                 tools=available_tools
             )
 

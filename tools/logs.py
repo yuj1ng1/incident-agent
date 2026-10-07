@@ -1,6 +1,14 @@
 from tools.tool_registry import tool
 from clients.loki_client import LokiClient
 from config import LOKI_URL
+from datetime import datetime,timezone
+
+
+def timestamp_to_utc(timestamp):
+    # 用整数拆分，避免 Unix 纳秒经 float 转换产生精度损失。
+    seconds,nanoseconds=divmod(int(timestamp),1_000_000_000)
+    prefix=datetime.fromtimestamp(seconds,timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{prefix}.{nanoseconds:09d}Z" if nanoseconds else f"{prefix}Z"
 
 loki_client=LokiClient(
     base_url=LOKI_URL
@@ -48,6 +56,7 @@ def query_logs(service:str)->dict:
             logs.append(
                 {
                     "timestamp":timestamp,
+                    "timestamp_utc":timestamp_to_utc(timestamp),
                     "line":line,
                     "labels":labels
                 }

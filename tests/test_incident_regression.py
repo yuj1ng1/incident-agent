@@ -151,7 +151,8 @@ class IncidentRegressionTests(unittest.TestCase):
             os.chdir(self.work)
             with patch.object(PrometheusClient, "get_alerts", return_value={
                 "status": "success", "data": {"alerts": []}
-            }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]):
+            }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]), \
+                    patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}):
                 namespace = runpy.run_path(str(ROOT / "main.py"), run_name="__main__")
             self.assertIsInstance(namespace["agent"], Agent)
             self.assertIsInstance(namespace["prometheus_client"], PrometheusClient)

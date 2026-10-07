@@ -9,7 +9,7 @@ class LokiClient:
             params={
                 "query":logql,
                 "limit":limit,
-                "diection":"backward"
+                "direction":"backward"
             },
             timeout=5
         )

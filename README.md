@@ -48,6 +48,38 @@ python -B -m unittest discover -s tests -v
 
 Store 仍按 fingerprint 保存单个 Incident：恢复后再次 firing 会创建新 ID，但覆盖同 fingerprint 的旧记录。后续需要决定是否保留历史 Incident；本次未修改该业务设计。
 
-默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。Agent 最多调查 5 轮、执行工具 8 次。
+默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。Agent 最多调查 7 轮、执行工具 13 次，每轮提示剩余预算。
 
 仓库中的依赖清单用于记录直接依赖，版本尚未全部锁定。
+
+## 代码级因果证据工具
+
+调查仍沿 Agent → Tool → Client → 只读 HTTP。新增：
+
+- `get_running_version(service)`：从 `SERVICE_URLS[service] + /version` 获取实例自报
+  SHA、UTC 进程启动时间及允许公开的 `simulate_code_regression`。未配置、404、
+  unknown SHA 或异常结构明确返回 `no_data` 和 reason，不猜测版本。
+- `get_commit_diff(service, commit_sha)`：只通过 `CODE_REPOSITORIES` 选择 GitHub 仓库。
+  最多 15 个文件，每个 patch 6000 字符，所有 patch 合计 24000 字符；分页、缺失
+  patch、大小截断均显式标记。缺失 patch 不表示没有代码变化。
+- `get_source_file(service, path, ref)`：同一仓库白名单内读取指定 ref 的 UTF-8 文本，
+  最多 20000 字符；拒绝绝对路径、目录穿越、目录、symlink 和二进制/不支持编码。
+  >1MB 文件通过受限 raw 前缀读取，最多 80004 字节，再限制字符数并标记 truncated。
+  查当前逻辑时 ref 必须使用运行完整 SHA。超大文件前缀之外内容未验证。
+
+GitHub 使用 requests 和环境变量 `GITHUB_TOKEN`，无需新 SDK；fine-grained Token
+只需目标仓库 Contents 读取权限，无需 All repositories。所有 Agent 工具只读，
+不提交修复、不推送、不改变环境或重启服务。
+API 依据：[commit](https://docs.github.com/en/rest/commits/commits#get-a-commit)、
+[contents](https://docs.github.com/en/rest/repos/contents#get-repository-content)。
+
+`query_logs` 保留原始 timestamp、line、labels，并从 Loki 纳秒时间戳精确生成
+`timestamp_utc`，包含 UTC Z 和需要时的 9 位小数；不要使用 line 内的无时区时间
+计算与 commit 的精确间隔。近期提交日期使用 committer.date，区分 author 日期。
+
+调查顺序：日志和依赖证据支持应用层异常时，先查近期提交，再查运行版本，然后
+查疑似引入逻辑的 diff；仅在缺 patch、截断、需上下文或需确认当前运行逻辑时读源码。
+Prompt 区分提交存在、实例版本自报、进程启动、代码修改、源码存在和路径实际执行。
+代码引入条件与运行时触发条件必须分开；13 次工具预算、7 轮和每轮剩余次数提示保留。
+
+回归测试：`& 'D:\conda\envs\agentlearn\python.exe' -B -m unittest discover -s tests -v`。

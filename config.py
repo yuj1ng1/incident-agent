@@ -1,7 +1,7 @@
 MODEL_NAME="deepseek-flash"
 
-MAX_AGENT_LOOPS=5
-MAX_TOOL_CALLS=8
+MAX_AGENT_LOOPS=7
+MAX_TOOL_CALLS=13
 MODEL_RETRIES=3
 
 PROMETHEUS_URL="http://localhost:9090"
@@ -42,5 +42,13 @@ DEPENDENCIES={
         "database":"orders",
         "user":"demo",
         "password":"demo"
+    }
+}
+
+CODE_REPOSITORIES={
+    "order-service":{
+        "provider":"github",
+        "repo":"yuj1ng1/prometheus-demo",
+        "branch":"codex/postgres-monitoring"
     }
 }

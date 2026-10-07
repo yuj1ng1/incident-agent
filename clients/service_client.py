@@ -19,3 +19,13 @@ class ServiceClient:
             "http_status":response.status_code,
             "body":body
         }
+
+    def version(self):
+        response=requests.get(
+            f"{self.base_url.rstrip('/')}/version",
+            timeout=5
+        )
+        return {
+            "http_status":response.status_code,
+            "body":response.json() if response.status_code==200 else None
+        }

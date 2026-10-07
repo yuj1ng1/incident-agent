@@ -2,3 +2,5 @@ from tools.logs import query_logs
 from tools.metrics import query_metrics
 from tools.health import check_service_health
 from tools.dependencies import get_service_dependencies,check_dependency_health
+from tools.code_changes import get_recent_code_changes,get_commit_diff,get_source_file
+from tools.version import get_running_version
