@@ -14,6 +14,8 @@ from config import (
 from incident_store import IncidentStore
 from monitor.incident_monitor import IncidentMonitor
 from prompts.agent_prompt import agent_prompt
+from remediation.planner import RemediationPlanner
+from remediation.store import RemediationStore
 
 
 load_dotenv()
@@ -44,7 +46,8 @@ monitor=IncidentMonitor(
     prometheus_client=prometheus_client,
     agent=agent,
     incident_store=incident_store,
-    poll_interval=ALERT_POLL_INTERVAL_SECONDS
+    poll_interval=ALERT_POLL_INTERVAL_SECONDS,
+    remediation_planner=RemediationPlanner(RemediationStore())
 )
 
 

@@ -15,12 +15,14 @@ class IncidentMonitor:
         prometheus_client,
         agent,
         incident_store,
-        poll_interval
+        poll_interval,
+        remediation_planner=None
     ):
         self.prometheus_client=prometheus_client#依赖注入
         self.agent=agent
         self.incident_store=incident_store
         self.poll_interval=poll_interval
+        self.remediation_planner=remediation_planner
 
     def process_alerts_once(self):
         response=self.prometheus_client.get_alerts()
@@ -146,6 +148,7 @@ class IncidentMonitor:
         alert,
         fingerprint
     ):
+        evidence_before=len(incident.evidence)
         try:
             result=self.agent.investigate(
                 incident
@@ -203,6 +206,21 @@ class IncidentMonitor:
             fingerprint,
             incident
         )
+        if self.remediation_planner is not None:
+            try:
+                proposal=self.remediation_planner.propose(
+                    incident, result, incident.evidence[evidence_before:]
+                )
+                if proposal is not None:
+                    print(
+                        f"Remediation proposal={proposal.proposal_id} "
+                        f"incident={proposal.incident_id} status={proposal.status.value} "
+                        f"action={proposal.action_type} risk={proposal.risk.value}\n"
+                        f"{proposal.summary}\n{proposal.reason}\n"
+                        "等待独立 CLI 人工审批；Monitor 不执行修复。"
+                    )
+            except Exception:
+                logger.warning("Remediation 规划或存储失败；调查已保存，Monitor 继续运行")
     def run(self):
         try:
             while True:
