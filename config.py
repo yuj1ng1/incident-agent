@@ -9,6 +9,13 @@ LOKI_URL="http://localhost:3100"
 SERVICE_URLS={
     "order-service":"http://localhost:8001"
     }
+MONITORING_TARGETS={
+    "order-db":{
+        "type":"postgresql",
+        "job":"postgres",
+        "database":"orders"
+    }
+}
 
 REINVESTIGATE_COOLDOWN_MINUTES=5
 
