@@ -20,6 +20,7 @@ class IncidentMonitor:
         poll_interval,
         remediation_planner=None,
         normalizer=normalize_snapshot,
+        investigation_manager=None,
     ):
         self.prometheus_client = prometheus_client
         self.agent = agent
@@ -29,6 +30,7 @@ class IncidentMonitor:
         self.normalizer = normalizer
         self.last_snapshot = None
         self.model_blocked_reason = None
+        self.investigation_manager = investigation_manager
 
     def process_alerts_once(self):
         snapshot = self.normalizer(self.prometheus_client.get_alerts())
@@ -69,7 +71,10 @@ class IncidentMonitor:
                 incident = self.incident_store.get_active_incident(fingerprint)
                 if incident is not None:
                     incident.alert_state = "pending"
-                    self.incident_store.save_incident(fingerprint, incident)
+                    if self.investigation_manager is not None:
+                        self.incident_store.save_observation(fingerprint, incident)
+                    else:
+                        self.incident_store.save_incident(fingerprint, incident)
         if not snapshot.complete:
             logger.warning("Untrusted/incomplete alert snapshot; clearing skipped")
             return snapshot
@@ -113,9 +118,15 @@ class IncidentMonitor:
         if self.model_blocked_reason:
             incident.investigation_suspended_reason = self.model_blocked_reason
             investigate = False
-        self.incident_store.save_incident(fingerprint, incident)
+        if self.investigation_manager is not None:
+            self.incident_store.save_observation(fingerprint, incident)
+        else:
+            self.incident_store.save_incident(fingerprint, incident)
         if investigate:
-            self.investigate_incident(incident, alert, fingerprint)
+            if self.investigation_manager is not None:
+                self.investigation_manager.enqueue(incident, reinvestigate=True)
+            else:
+                self.investigate_incident(incident, alert, fingerprint)
 
     def investigate_incident(self, incident, alert, fingerprint):
         evidence_before = len(incident.evidence)

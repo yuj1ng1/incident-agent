@@ -1,0 +1,80 @@
+"""Isolated fixtures; no network or repair action is invoked."""
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from unittest.mock import Mock
+
+from openai.types.responses import Response
+
+import tools
+from agent.agent import Agent
+from fingerprint import generate_alert_fingerprint
+from incident_factory import create_incident_from_alert
+from incident_store import IncidentStore
+from investigation.manager import InvestigationManager
+from investigation.models import RuntimeLimits
+from investigation.store import RuntimeStore
+from models.incident import Alert
+
+SHA = "a" * 40
+
+
+def response(answer="证据不足，尚未确认根因。", calls=(), status="completed"):
+    output = list(calls)
+    if answer:
+        output.append({
+            "type": "message", "id": "msg-fixture", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": answer, "annotations": []}],
+        })
+    return Response.model_validate({
+        "id": "resp-fixture", "created_at": 0, "model": "fixture", "object": "response",
+        "output": output, "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+        "status": status,
+    })
+
+
+def call(name="query_metrics", arguments=None, call_id="call-fixture"):
+    return {
+        "type": "function_call", "id": "fc-" + call_id, "call_id": call_id,
+        "name": name,
+        "arguments": json.dumps(arguments or {"service": "order-service", "metric": "http_5xx_rate"}),
+    }
+
+
+class FixtureAgent(Agent):
+    def __init__(self, responses=None, tool_result=None):
+        super().__init__(Mock(), "只读证据调查，不执行修复。")
+        self.request_durable_response = Mock(side_effect=responses or [response()])
+        self.executions = []
+        self.tool_result = tool_result
+        self.tool_manager.run_tool = self.run_fixture_tool
+
+    def run_fixture_tool(self, item):
+        self.executions.append(item.name)
+        if self.tool_result is not None:
+            result = self.tool_result(item)
+        elif item.name == "get_running_version":
+            result = {
+                "status": "ok", "service": "order-service", "commit_sha": SHA,
+                "process_started_at": "2026-10-08T00:00:00Z",
+                "runtime_flags": {"simulate_code_regression": False},
+            }
+        else:
+            result = {"status": "ok", "value": 0.3, "service": json.loads(item.arguments).get("service")}
+        return True, self.tool_manager.build_output_item(item, result), result
+
+
+def create_runtime(root, clock=None, limits=None):
+    root = Path(root)
+    incidents = IncidentStore(root / "incidents.json")
+    store = RuntimeStore(root / "runtime.sqlite3", **({"clock": clock} if clock else {}))
+    manager = InvestigationManager(store, incidents, limits=limits or RuntimeLimits())
+    return manager
+
+
+def create_session(manager, service="order-service", severity="critical", suffix=""):
+    alert = Alert(service=service, severity=severity, metric="http_5xx_rate", value=0.3, threshold=0.2)
+    fp = generate_alert_fingerprint(alert) + suffix
+    incident = create_incident_from_alert(alert, fp)
+    manager.incident_store.save_incident(fp, incident)
+    return manager.enqueue(incident)

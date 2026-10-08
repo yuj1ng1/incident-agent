@@ -12,6 +12,7 @@ from models.remediation import (
 )
 from remediation.approval import approve_proposal, reject_proposal
 from remediation.state import RemediationError
+from storage_lock import FileLock as SharedFileLock, FileLockError
 
 DEFAULT_STORE = Path(__file__).resolve().parents[1] / "data" / "remediation.json"
 
@@ -20,44 +21,12 @@ class StoreError(RemediationError):
     pass
 
 
-class FileLock:
-    """Nonblocking OS lock: a crash releases it; never guess that a lock is stale."""
-    def __init__(self, path):
-        self.path = Path(path)
-
+class FileLock(SharedFileLock):
     def __enter__(self):
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.handle = self.path.open("a+b")
-        except OSError:
-            raise StoreError("remediation_store_lock_unavailable") from None
-        try:
-            if os.fstat(self.handle.fileno()).st_size == 0:
-                self.handle.write(b"0")
-                self.handle.flush()
-            self.handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            self.handle.close()
+            return super().__enter__()
+        except FileLockError:
             raise StoreError("store_busy") from None
-        return self
-
-    def __exit__(self, *args):
-        try:
-            if os.name == "nt":
-                import msvcrt
-                self.handle.seek(0)
-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            self.handle.close()
 
 
 class RemediationStore:

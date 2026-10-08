@@ -1,0 +1,239 @@
+"""Short SQLite IMMEDIATE transactions, CAS versions and expiring fenced claims."""
+from contextlib import contextmanager
+from datetime import timedelta
+import json
+from pathlib import Path
+import sqlite3
+from uuid import uuid4
+
+from investigation.checkpoint import encode
+from investigation.models import Checkpoint, InvestigationSession, SessionStatus as S, utc_now
+from investigation.state import LostClaim, RuntimeErrorBase, TERMINAL, transition
+
+DEFAULT_STORE = Path(__file__).resolve().parents[1] / "data" / "runtime.sqlite3"
+SCHEMA_VERSION = 1
+
+
+class RuntimeStore:
+    def __init__(self, path=DEFAULT_STORE, clock=utc_now):
+        self.path = Path(path)
+        self.clock = clock
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # A corrupt or newer DB fails closed; never replace it with an empty DB.
+        with self.transaction() as db:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeErrorBase("unsupported_runtime_schema")
+            if version == 0:
+                existing = db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+                if existing:
+                    raise RuntimeErrorBase("unversioned_runtime_database")
+                statements = [
+                    """CREATE TABLE investigation_sessions (
+                        session_id TEXT PRIMARY KEY, incident_id TEXT NOT NULL,
+                        status TEXT NOT NULL, state_version INTEGER NOT NULL,
+                        data TEXT NOT NULL)""",
+                    """CREATE UNIQUE INDEX one_active_incident ON investigation_sessions(incident_id)
+                        WHERE status NOT IN ('COMPLETED','EXHAUSTED','FAILED','CANCELLED')""",
+                    """CREATE TABLE investigation_checkpoints (
+                        checkpoint_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
+                        created_at TEXT NOT NULL, data TEXT NOT NULL)""",
+                    """CREATE TABLE investigation_commands (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        command_id TEXT NOT NULL UNIQUE,
+                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
+                        status TEXT NOT NULL, data TEXT NOT NULL)""",
+                    """CREATE TABLE human_messages (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        command_id TEXT NOT NULL UNIQUE REFERENCES investigation_commands(command_id),
+                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
+                        consumed_at TEXT, data TEXT NOT NULL)""",
+                    """CREATE TABLE human_requests (
+                        request_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
+                        status TEXT NOT NULL, data TEXT NOT NULL)""",
+                    """CREATE UNIQUE INDEX one_pending_request ON human_requests(session_id)
+                        WHERE status='pending'""",
+                    """CREATE TABLE investigation_events (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_id TEXT NOT NULL UNIQUE,
+                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
+                        event_type TEXT NOT NULL, timestamp TEXT NOT NULL,
+                        actor TEXT NOT NULL, data TEXT NOT NULL)""",
+                    "CREATE TABLE runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                    "PRAGMA user_version=1",
+                ]
+                for statement in statements:
+                    db.execute(statement)
+            if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise RuntimeErrorBase("runtime_database_corrupt")
+
+    @contextmanager
+    def transaction(self):
+        db = sqlite3.connect(str(self.path), timeout=5, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("PRAGMA busy_timeout=5000")
+            db.execute("PRAGMA synchronous=FULL")
+            # DELETE journal intentionally avoids Windows WAL handling assumptions.
+            db.execute("BEGIN IMMEDIATE")
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def get(self, session_id, db=None):
+        if db is None:
+            with self.transaction() as connection:
+                return self.get(session_id, connection)
+        row = db.execute(
+            "SELECT * FROM investigation_sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeErrorBase("session_not_found")
+        session = InvestigationSession.model_validate_json(row["data"])
+        if session.state_version != row["state_version"] or session.status.value != row["status"]:
+            raise RuntimeErrorBase("runtime_projection_mismatch")
+        return session
+
+    def list_sessions(self, db=None):
+        if db is None:
+            with self.transaction() as connection:
+                return self.list_sessions(connection)
+        rows = db.execute("SELECT session_id FROM investigation_sessions ORDER BY rowid").fetchall()
+        return [self.get(row[0], db) for row in rows]
+
+    def insert(self, session, db):
+        db.execute(
+            "INSERT INTO investigation_sessions VALUES (?,?,?,?,?)",
+            (session.session_id, session.incident_id, session.status.value,
+             session.state_version, session.model_dump_json()),
+        )
+        self.event(db, session.session_id, "session_created", "manager")
+
+    def save(self, session, db):
+        previous_version = session.state_version
+        session.updated_at = self.clock()
+        session.state_version += 1
+        validated = InvestigationSession.model_validate(session.model_dump())
+        changed = db.execute(
+            """UPDATE investigation_sessions SET status=?,state_version=?,data=?
+                WHERE session_id=? AND state_version=?""",
+            (validated.status.value, validated.state_version, validated.model_dump_json(),
+             validated.session_id, previous_version),
+        ).rowcount
+        if changed != 1:
+            raise LostClaim("session_version_conflict")
+
+    def guard(self, db, session_id, owner, fence):
+        session = self.get(session_id, db)
+        if (
+            session.status != S.RUNNING
+            or session.owner_token != owner
+            or session.fencing_token != fence
+            or session.lease_until is None
+            or session.lease_until <= self.clock()
+        ):
+            raise LostClaim("worker_claim_lost")
+        return session
+
+    def event(self, db, session_id, event_type, actor="runtime", **metadata):
+        db.execute(
+            """INSERT INTO investigation_events
+                (event_id,session_id,event_type,timestamp,actor,data) VALUES (?,?,?,?,?,?)""",
+            ("evt-" + uuid4().hex, session_id, event_type,
+             self.clock().isoformat(), actor, encode(metadata)),
+        )
+
+    def events(self, session_id, limit=100):
+        if not 1 <= limit <= 1000:
+            raise RuntimeErrorBase("event_limit_invalid")
+        with self.transaction() as db:
+            self.get(session_id, db)
+            rows = db.execute(
+                """SELECT * FROM investigation_events WHERE session_id=?
+                    ORDER BY sequence DESC LIMIT ?""", (session_id, limit),
+            ).fetchall()
+            return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
+
+    def checkpoint(self, session, payload, db, keep=4):
+        Checkpoint.model_validate(payload)
+        checkpoint_id = "cp-" + uuid4().hex
+        db.execute(
+            "INSERT INTO investigation_checkpoints VALUES (?,?,?,?)",
+            (checkpoint_id, session.session_id, self.clock().isoformat(), encode(payload)),
+        )
+        session.checkpoint_id = checkpoint_id
+        self.event(db, session.session_id, "checkpoint_saved", phase=payload.get("phase"))
+        db.execute(
+            """DELETE FROM investigation_checkpoints WHERE session_id=? AND checkpoint_id NOT IN (
+                SELECT checkpoint_id FROM investigation_checkpoints WHERE session_id=?
+                ORDER BY rowid DESC LIMIT ?)""",
+            (session.session_id, session.session_id, keep),
+        )
+
+    def load_checkpoint(self, session, db=None):
+        if db is None:
+            with self.transaction() as connection:
+                return self.load_checkpoint(session, connection)
+        if not session.checkpoint_id:
+            return {
+                "schema_version": 1,
+                "phase": "ready",
+                "records": [],
+                "messages": [],
+                "trace": [],
+            }
+        row = db.execute(
+            "SELECT session_id,data FROM investigation_checkpoints WHERE checkpoint_id=?",
+            (session.checkpoint_id,),
+        ).fetchone()
+        if row is None or row[0] != session.session_id:
+            raise RuntimeErrorBase("checkpoint_missing_or_mismatched")
+        payload = json.loads(row[1])
+        if payload.get("schema_version") != 1:
+            raise RuntimeErrorBase("unsupported_checkpoint_schema")
+        Checkpoint.model_validate(payload)
+        return payload
+
+    def claim(self, owner, limits):
+        with self.transaction() as db:
+            sessions = self.list_sessions(db)
+            now = self.clock()
+            # Across all sessions there is at most one unexpired Worker claim.
+            if any(s.status == S.RUNNING and s.lease_until and s.lease_until > now for s in sessions):
+                return None
+            candidates = [s for s in sessions if s.status == S.QUEUED]
+            if not candidates:
+                return None
+            candidates.sort(key=lambda s: (
+                0 if (now - s.queued_at).total_seconds() >= limits.starvation_seconds else 1,
+                -s.priority if (now - s.queued_at).total_seconds() < limits.starvation_seconds else 0,
+                s.queued_at,
+                s.session_id,
+            ))
+            session = candidates[0]
+            transition(session, S.RUNNING)
+            session.owner_token = owner
+            session.fencing_token += 1
+            session.lease_until = now + timedelta(seconds=limits.lease_seconds)
+            self.save(session, db)
+            self.event(db, session.session_id, "worker_claimed", owner, fence=session.fencing_token)
+            return session
+
+    def metadata(self, db, key, value=None, write=False):
+        if write:
+            db.execute(
+                "INSERT INTO runtime_metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, encode(value)),
+            )
+            return value
+        row = db.execute("SELECT value FROM runtime_metadata WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None

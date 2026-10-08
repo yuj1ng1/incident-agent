@@ -88,3 +88,8 @@ Prompt 区分提交存在、实例版本自报、进程启动、代码修改、�
 
 - [架构、规则与扩展指南](docs/MULTI_SIGNAL_ALERTS_GUIDE_2026-10-08_18-17-52.md)
 - [单元、规则及真实集成验证](docs/MULTI_SIGNAL_ALERTS_VALIDATION_2026-10-08_18-24-41.md)
+
+## Durable Runtime 与人类介入
+
+- [持久化调查、恢复、预算及 CLI 使用指南](docs/DURABLE_AGENT_RUNTIME_GUIDE.md)
+- [单元、跨进程及真实模型验收记录](docs/DURABLE_AGENT_RUNTIME_VALIDATION.md)

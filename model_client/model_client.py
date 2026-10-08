@@ -8,6 +8,16 @@ class ModelClient:
         self.model_name=model_name
         self.retries=retries
 
+    def call_once(self, input_data, instructions, tools, timeout=60):
+        """Runtime owns retries and counts every actual SDK request."""
+        client = self.client.with_options(max_retries=0, timeout=timeout)
+        return client.responses.create(
+            model=self.model_name,
+            input=input_data,
+            instructions=instructions,
+            tools=tools,
+        )
+
     def call_model(self,input_data,instructions,tools):
         for attempt in range(self.retries):
             try:

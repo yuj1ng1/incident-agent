@@ -3,23 +3,46 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from functools import wraps
+import threading
+
+from storage_lock import FileLock
 
 from models.incident import Incident
+
+
+def locked_update(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._thread_lock:
+            if getattr(self._lock_depth, "active", False):
+                return method(self, *args, **kwargs)
+            with FileLock(str(self.file_path) + ".lock"):
+                self._lock_depth.active = True
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self._lock_depth.active = False
+    return wrapped
 
 
 class IncidentStore:
     def __init__(self,file_path):
         self.file_path=Path(file_path)
+        self._thread_lock = threading.RLock()
+        self._lock_depth = threading.local()
 
         self.file_path.parent.mkdir(
             parents=True,
             exist_ok=True
         )
 
+        self._initialize()
+
+    @locked_update
+    def _initialize(self):
         if not self.file_path.exists():
-            self.save(
-                self.create_empty_data()
-            )
+            self.save(self.create_empty_data())
 
     def create_empty_data(self):
         return {
@@ -49,6 +72,7 @@ class IncidentStore:
             return migrated
         raise ValueError("unsupported_or_corrupt_incident_store")
 
+    @locked_update
     def save(self,data):
         temporary = None
         try:
@@ -76,6 +100,81 @@ class IncidentStore:
             if incident_id in data["incidents"]
         ]
 
+    def get_incident(self, incident_id):
+        value = self.load()["incidents"].get(incident_id)
+        return Incident.model_validate(value) if value is not None else None
+
+    @locked_update
+    def save_observation(self, fingerprint, incident):
+        """Merge monitor observations with the latest Worker-owned fields."""
+        latest = self.get_incident(incident.incident_id)
+        if latest is not None:
+            latest.alerts = incident.alerts
+            latest.alert_state = incident.alert_state
+            latest.related_alerts = incident.related_alerts
+            latest.severity = incident.severity
+            incident = latest
+        self.save_incident(fingerprint, incident)
+
+    @locked_update
+    def apply_runtime_projection(self, session, checkpoint):
+        """Idempotent outbox consumer; never overwrite monitor alert lifecycle."""
+        from models.incident import Evidence
+        from models.investigation import InvestigationRecord
+        from investigation.models import SessionStatus as S
+        incident = self.get_incident(session.incident_id)
+        if incident is None:
+            return
+        previous_data = incident.model_dump()
+        known = {item.observation_id for item in incident.evidence if item.observation_id}
+        for record in checkpoint.get("records", []):
+            if (
+                record.get("success")
+                and record.get("result", {}).get("status") == "ok"
+                and record["observation_id"] not in known
+            ):
+                incident.evidence.append(Evidence(
+                    source=record["name"],
+                    summary=f"{record['name']}查询结果（采集时观测）",
+                    detail=json.dumps(record["result"], ensure_ascii=False),
+                    collected_at=record["collected_at"],
+                    runtime_session_id=session.session_id,
+                    observation_id=record["observation_id"],
+                ))
+                known.add(record["observation_id"])
+        if session.attempt_count:
+            incident.last_attempted_at = session.updated_at
+        incident.investigation_suspended_reason = (
+            session.last_error_category if session.status == S.PAUSED else None
+        )
+        result = checkpoint.get("result")
+        if (
+            result
+            and session.status in {S.COMPLETED, S.EXHAUSTED, S.FAILED}
+            and not any(r.session_id == session.session_id for r in incident.investigations)
+        ):
+            stamp = session.completed_at or session.updated_at
+            incident.investigations.append(InvestigationRecord(
+                session_id=session.session_id,
+                investigated_at=stamp,
+                status=result["status"],
+                alert_value=checkpoint.get("investigated_value"),
+                answer=result["answer"],
+                model_rounds=session.total_model_requests,
+                tool_calls=session.total_tool_executions,
+                tool_trace=checkpoint.get("trace", []),
+            ))
+            if result["success"]:
+                incident.consecutive_investigation_failures = 0
+                incident.last_investigated_at = stamp
+                incident.last_investigated_value = checkpoint.get("investigated_value")
+                incident.last_investigated_state = checkpoint.get("investigated_state")
+            else:
+                incident.consecutive_investigation_failures += 1
+        if incident.model_dump() != previous_data:
+            self.save_incident(session.alert_fingerprint, incident)
+
+    @locked_update
     def get_or_migrate_active(self, alert, fingerprint):
         incident = self.get_active_incident(fingerprint)
         if incident is not None or alert.identity_labels:
@@ -101,6 +200,7 @@ class IncidentStore:
         self.save(data)
         return old
 
+    @locked_update
     def record_recovery_verification(self, incident_id, evidence, verified_at):
         if verified_at.tzinfo is None or not evidence:
             raise ValueError("explicit_timed_recovery_evidence_required")
@@ -113,6 +213,7 @@ class IncidentStore:
         data["incidents"][incident_id] = incident.model_dump(mode="json")
         self.save(data)
 
+    @locked_update
     def resume_investigation(self, incident_id):
         """Operator call only, never an Agent tool; does not clear alert/recovery state."""
         data = self.load()
@@ -153,6 +254,7 @@ class IncidentStore:
             incident_data
         )
     
+    @locked_update
     def save_incident(self,fingerprint,incident):
         incident = Incident.model_validate(incident.model_dump())
         data=self.load()
@@ -187,6 +289,7 @@ class IncidentStore:
 
         self.save(data)
 
+    @locked_update
     def resolve_inactive_incidents(self,active_fingerprints, eligible_fingerprints=None):
         data=self.load()
 

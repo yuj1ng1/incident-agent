@@ -16,6 +16,7 @@ class InvestigationResult(BaseModel):
     tool_trace: list[dict] = Field(default_factory=list)
 
 class InvestigationRecord(BaseModel):
+    session_id: str | None = None
     investigated_at:datetime
     status:InvestigationStatus
     alert_value:float | None = None

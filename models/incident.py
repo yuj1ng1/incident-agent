@@ -79,6 +79,9 @@ class Evidence(BaseModel):
     source:str
     summary:str
     detail:str
+    collected_at: datetime | None = None
+    runtime_session_id: str | None = None
+    observation_id: str | None = None
 
 class Incident(BaseModel):
     incident_id:str

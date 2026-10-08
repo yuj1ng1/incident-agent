@@ -12,6 +12,22 @@ HTTP_5XX_RATE_INCREASE_THRESHOLD=0.2
 
 ALERT_POLL_INTERVAL_SECONDS=30
 
+# Session lifetime limits are separate from the unchanged 7/13 attempt limits.
+RUNTIME_LIMITS = {
+    "max_attempts": 3,
+    "max_model_requests": 21,
+    "max_tool_executions": 39,
+    "max_resumes": 8,
+    "max_duration_seconds": 3600,
+    "lease_seconds": 120,
+    "model_timeout_seconds": 60,
+    "retry_base_seconds": 5,
+    "max_human_requests": 3,
+    "human_timeout_seconds": 1800,
+    "starvation_seconds": 120,
+    "checkpoints_to_keep": 4,
+}
+
 # Legacy imports remain read-only projections of the validated registry.
 from services.compatibility import LegacyView
 from services.configuration import SERVICES
