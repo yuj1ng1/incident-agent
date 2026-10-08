@@ -503,14 +503,36 @@ class IncidentRegressionTests(unittest.TestCase):
 
 class MetricsRegressionTests(unittest.TestCase):
     def setUp(self):
-        self.targets = {
-            "order-db": {"type": "postgresql", "job": "postgres", "database": "orders"},
-            "http-target": {"type": "http", "job": "demo-python"},
-        }
-        self.enterContext(patch("tools.metrics.MONITORING_TARGETS", self.targets))
-        self.query = self.enterContext(patch("tools.metrics.prometheus_client.query", return_value={
-            "status": "success", "data": {"resultType": "vector", "result": [{"value": [0, "1"]}]}
-        }))
+        from services.configuration import SERVICES
+        from services.registry import ServiceRegistry
+        from copy import deepcopy
+
+        self.definitions = deepcopy(SERVICES)
+        self.definitions.append(
+            {
+                "name": "http-target",
+                "type": "http_service",
+                "metrics": {
+                    "provider": "prometheus",
+                    "profile": "http_service",
+                },
+            }
+        )
+        self.registry_patch = self.enterContext(
+            patch("tools.metrics.registry", ServiceRegistry(self.definitions))
+        )
+        self.query = self.enterContext(
+            patch(
+                "tools.metrics.prometheus_client.query",
+                return_value={
+                    "status": "success",
+                    "data": {
+                        "resultType": "vector",
+                        "result": [{"value": [0, "1"]}],
+                    },
+                },
+            )
+        )
 
     def assert_query(self, metric, promql, service="order-db"):
         result = query_metrics(service, metric)
@@ -595,17 +617,43 @@ class MetricsRegressionTests(unittest.TestCase):
         self.assertNotIn("value", result)
 
     def test_postgres_targets_are_not_hardcoded(self):
-        self.targets["inventory-db"] = {"type": "postgresql", "job": "inventory", "database": "stock"}
-        self.assert_query("postgres_connections", (
-            'sum(pg_stat_database_numbackends{job="inventory",datname="stock"})'
-        ), service="inventory-db")
+        from services.registry import ServiceRegistry
+
+        self.definitions.append(
+            {
+                "name": "inventory-db",
+                "type": "postgresql",
+                "metrics": {
+                    "provider": "prometheus",
+                    "profile": "postgresql",
+                    "job": "inventory",
+                    "database": "stock",
+                },
+            }
+        )
+        import tools.metrics
+
+        tools.metrics.registry = ServiceRegistry(self.definitions)
+        self.assert_query(
+            "postgres_connections",
+            ('sum(pg_stat_database_numbackends{job="inventory",datname="stock"})'),
+            service="inventory-db",
+        )
 
     def test_postgres_label_values_are_escaped(self):
-        self.targets["order-db"]["job"] = 'post"gres\\east'
-        self.targets["order-db"]["database"] = 'order"books'
-        self.assert_query("postgres_connections", (
-            r'sum(pg_stat_database_numbackends{job="post\"gres\\east",datname="order\"books"})'
-        ))
+        from services.registry import ServiceRegistry
+
+        self.definitions[1]["metrics"]["job"] = 'post"gres\\east'
+        self.definitions[1]["metrics"]["database"] = 'order"books'
+        import tools.metrics
+
+        tools.metrics.registry = ServiceRegistry(self.definitions)
+        self.assert_query(
+            "postgres_connections",
+            (
+                r'sum(pg_stat_database_numbackends{job="post\"gres\\east",datname="order\"books"})'
+            ),
+        )
 
     def test_missing_postgres_target_returns_no_data_without_query(self):
         result = query_metrics("missing-db", "postgres_up")
@@ -616,16 +664,22 @@ class MetricsRegressionTests(unittest.TestCase):
     def test_non_postgres_target_returns_no_data_without_query(self):
         result = query_metrics("http-target", "postgres_connections")
         self.assertEqual(result["status"], "no_data")
-        self.assertIn("不是postgresql", result["message"])
+        self.assertEqual(result["reason"], "metric_not_supported_by_profile")
         self.query.assert_not_called()
 
     def test_incomplete_postgres_target_returns_clear_configuration_error(self):
+        from services.registry import ServiceRegistry
+        from pydantic import ValidationError
+        from copy import deepcopy
+
         for field in ("job", "database"):
             for value in (None, "", " ", 10):
-                with self.subTest(field=field, value=value), patch.dict(self.targets["order-db"], {field: value}):
-                    result = query_metrics("order-db", "postgres_up")
-                    self.assertEqual(result["status"], "no_data")
-                    self.assertIn(field, result["message"])
+                with self.subTest(field=field, value=value):
+                    definitions = deepcopy(self.definitions)
+                    definitions[1]["metrics"][field] = value
+                    with self.assertRaises(ValidationError) as caught:
+                        ServiceRegistry(definitions)
+                    self.assertIn(field, str(caught.exception))
                     self.query.assert_not_called()
 
     def test_unsupported_metrics_return_no_data_without_query(self):

@@ -4,28 +4,28 @@ class ServiceClient:
     def __init__(self,base_url):
         self.base_url=base_url
 
-    def health(self):
-        response=requests.get(
-            f"{self.base_url}/health",
-            timeout=5
+    def health(self, endpoint="/health"):
+        response = requests.get(
+            f"{self.base_url.rstrip('/')}{endpoint}",
+            timeout=5,
         )
         try:
-            body=response.json()
+            body = response.json()
         except ValueError:
-            body={
-                "message":response.text
+            body = {
+                "message": response.text,
             }
         return {
-            "http_status":response.status_code,
-            "body":body
+            "http_status": response.status_code,
+            "body": body,
         }
 
-    def version(self):
-        response=requests.get(
-            f"{self.base_url.rstrip('/')}/version",
-            timeout=5
+    def version(self, endpoint="/version"):
+        response = requests.get(
+            f"{self.base_url.rstrip('/')}{endpoint}",
+            timeout=5,
         )
         return {
-            "http_status":response.status_code,
-            "body":response.json() if response.status_code==200 else None
+            "http_status": response.status_code,
+            "body": response.json() if response.status_code == 200 else None,
         }

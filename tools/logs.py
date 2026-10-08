@@ -2,6 +2,9 @@ from tools.tool_registry import tool
 from clients.loki_client import LokiClient
 from config import LOKI_URL
 from datetime import datetime,timezone
+from services.registry import registry, CapabilityUnavailable
+from services.metric_profiles import selector
+import requests
 
 
 def timestamp_to_utc(timestamp):
@@ -15,7 +18,7 @@ loki_client=LokiClient(
 )
 
 @tool
-def query_logs(service:str)->dict:
+def query_logs(service: str) -> dict:
     """
     查询指定服务的近期日志。
 
@@ -23,53 +26,92 @@ def query_logs(service:str)->dict:
         service: 需要查询日志的服务名称
     """
 
-    logql=f'{{service="{service}"}}'
+    try:
+        settings = registry.require_capability(service, "logs")
+    except CapabilityUnavailable as exc:
+        return {
+            "status": "no_data",
+            "service": service,
+            "reason": exc.reason,
+            "logs": [],
+        }
+    logql = "{" + selector(settings.labels) + "}"
 
-    response=loki_client.query_range(
-        logql=logql,
-        limit=50
-    )
+    try:
+        response = loki_client.query_range(
+            logql=logql,
+            limit=50,
+        )
+    except (requests.RequestException, ValueError):
+        return {
+            "status": "no_data",
+            "service": service,
+            "logs": [],
+            "reason": "logs_unreachable_or_invalid",
+        }
+    if (
+        not isinstance(response, dict)
+        or not isinstance(response.get("data"), dict)
+    ):
+        return {
+            "status": "no_data",
+            "service": service,
+            "logs": [],
+            "reason": "invalid_logs_response",
+        }
 
-    streams=response.get(
-        "data",{}
+    streams = response.get(
+        "data",
+        {},
     ).get(
-        "result",[]
+        "result",
+        [],
     )
+
+    if not isinstance(streams, list):
+        return {
+            "status": "no_data",
+            "service": service,
+            "logs": [],
+            "reason": "invalid_logs_response",
+        }
 
     if not streams:
         return {
-            "status":"no_data",
-            "service":service,
-            "logs":[]
+            "status": "no_data",
+            "service": service,
+            "logs": [],
         }
 
-    logs=[]
+    logs = []
 
     for stream in streams:
-        labels=stream.get(
-            "stream",{}
+        labels = stream.get(
+            "stream",
+            {},
         )
 
-        for timestamp,line in stream.get(
-            "values",[]
+        for timestamp, line in stream.get(
+            "values",
+            [],
         ):
             logs.append(
                 {
-                    "timestamp":timestamp,
-                    "timestamp_utc":timestamp_to_utc(timestamp),
-                    "line":line,
-                    "labels":labels
+                    "timestamp": timestamp,
+                    "timestamp_utc": timestamp_to_utc(timestamp),
+                    "line": line,
+                    "labels": labels,
                 }
             )
 
     logs.sort(
-        key=lambda log:int(log["timestamp"]),
-        reverse=True
+        key=lambda log: int(log["timestamp"]),
+        reverse=True,
     )
 
     return {
-        "status":"ok",
-        "service":service,
-        "logs":logs[:50],
-        "logql":logql
+        "status": "ok",
+        "service": service,
+        "logs": logs[:50],
+        "logql": logql,
     }

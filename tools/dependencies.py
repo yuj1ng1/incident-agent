@@ -1,74 +1,58 @@
-from config import SERVICE_DEPENDENCIES,DEPENDENCIES
+from services.health_providers import probe_health
+from services.registry import registry, CapabilityUnavailable
 from tools.tool_registry import tool
-from clients.database_client import DatabaseClient
+
 
 @tool
-def get_service_dependencies(service:str):
+def get_service_dependencies(service: str) -> dict:
+    """获取已注册服务依赖的下游组件，空列表表示没有配置依赖。
+
+    Args:
+        service: 服务名称
     """
-    获取指定服务依赖的下游组件。
-
-    service: 服务名称
-    """
-
-    dependencies=SERVICE_DEPENDENCIES.get(service)
-
-    if dependencies is None:
+    try:
+        names = registry.dependencies(service)
+    except CapabilityUnavailable as exc:
         return {
-            "status":"no_data",
-            "service":service,
-            "message":"没有找到该服务的依赖关系"
+            "status": "no_data",
+            "service": service,
+            "reason": exc.reason,
         }
     return {
-        "status":"ok",
-        "service":service,
-        "dependencies":dependencies
+        "status": "ok",
+        "service": service,
+        "dependencies": [
+            {
+                "name": name,
+                "type": "database"
+                if registry.get(name).type == "postgresql"
+                else registry.get(name).type,
+            }
+            for name in names
+        ],
     }
 
+
 @tool
-def check_dependency_health(dependency:str):
+def check_dependency_health(dependency: str) -> dict:
+    """探测已注册依赖，PostgreSQL 保留 DNS/TCP/连接/SELECT 1 分阶段证据。
+
+    Args:
+        dependency: 依赖组件名称
     """
-    检查指定依赖当前是否可访问并能够正常响应。
-
-    dependency: 依赖组件名称
-    """
-
-    config=DEPENDENCIES.get(dependency)
-
-    if config is None:
+    try:
+        settings = registry.require_capability(dependency, "health")
+    except CapabilityUnavailable as exc:
         return {
-            "status":"no_data",
-            "dependency":dependency,
-            "message":"没有找到该依赖的访问配置"
+            "status": "no_data",
+            "dependency": dependency,
+            "reason": exc.reason,
         }
-    if config["type"]!="database":
-        return {
-            "status":"no_data",
-            "dependency":dependency,
-            "message":"当前暂不支持该依赖类型"
-        }
-    if  config["engine"]!="postgresql":
-        return {
-            "status":"no_data",
-            "dependency":dependency,
-            "message":"当前暂不支持该数据库类型"
-        }
-    client=DatabaseClient(
-        host=config["host"],
-        port=config["port"],
-        database=config["database"],
-        user=config["user"],
-        password=config["password"]
-    )
- 
-    healthy=client.health()
-    reachable=(
-        healthy["database_connected"] and healthy["query_ok"]
-    )
-
+    result = probe_health(settings)
+    if settings.provider == "http" and result.get("status") == "ok":
+        result["reachable"] = result["http_status"] == 200 and result["health"] == "ok"
     return {
-            "status":"ok",
-            "dependency":dependency,
-            "dependency_type":"database",
-            "reachable":reachable,
-            **healthy
-        }
+        "dependency": dependency,
+        "dependency_type": "database" if settings.provider == "postgresql" else "http",
+        **result,
+    }

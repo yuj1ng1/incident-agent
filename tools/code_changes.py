@@ -7,7 +7,7 @@ import requests
 
 from tools.tool_registry import tool
 from clients.github_client import GithubClient
-from config import CODE_REPOSITORIES
+from services.registry import registry, CapabilityUnavailable
 
 
 MAX_DIFF_FILES=15
@@ -19,15 +19,13 @@ github_client=GithubClient()
 
 
 def repository_for(service):
-    repository=CODE_REPOSITORIES.get(service)
-    if not isinstance(repository,dict):
-        return None,"repository_not_configured"
-    if repository.get("provider")!="github":
-        return None,"unsupported_provider"
-    repo=repository.get("repo")
-    if not isinstance(repo,str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",repo):
-        return None,"invalid_repository_configuration"
-    return repository,None
+    try:
+        source = registry.require_capability(service, "source")
+    except CapabilityUnavailable as exc:
+        return None, exc.reason
+    if source.provider != "github":
+        return None, "unsupported_provider"
+    return source.model_dump(), None
 
 
 def read_error(service,repo,exc):
@@ -130,7 +128,7 @@ def get_commit_diff(service:str,commit_sha:str)->dict:
     """只读查询配置仓库指定 commit 的有界 diff；不证明该提交已部署。
 
     Args:
-        service: CODE_REPOSITORIES 中已配置的服务名称，不能传任意仓库
+        service: ServiceRegistry 中已配置的服务名称，不能传任意仓库
         commit_sha: 值得调查的 Git commit SHA，7 到 40 位十六进制
     """
     repository,error=repository_for(service)
@@ -187,7 +185,7 @@ def get_source_file(service:str,path:str,ref:str)->dict:
     """只读读取配置仓库指定 ref 的有界 UTF-8 文本；确认当前逻辑时 ref 使用 running commit。
 
     Args:
-        service: CODE_REPOSITORIES 中已配置的服务名称
+        service: ServiceRegistry 中已配置的服务名称
         path: 仓库内相对文件路径，不允许目录穿越、绝对路径或 URL
         ref: 指定 commit SHA 或 Git ref；调查当前版本时用 get_running_version 的完整 SHA
     """
