@@ -136,8 +136,19 @@ class RemediationStore:
     def create(self, proposal):
         if proposal.status.value != "pending":
             raise StoreError("new_proposal_must_be_pending")
+        expected_started_at = proposal.model_dump(mode="json")[
+            "expected_process_started_at"
+        ]
         with self.transaction() as data:
             for old in data["proposals"].values():
+                if (
+                    old["service"] == proposal.service
+                    and old["action_type"] == proposal.action_type
+                    and old["parameters"] == proposal.parameters
+                    and old["expected_commit_sha"] == proposal.expected_commit_sha
+                    and old["expected_process_started_at"] == expected_started_at
+                ):
+                    return RemediationProposal.model_validate(old)
                 if (old["incident_id"], old["action_type"], old["expected_commit_sha"]) == (
                         proposal.incident_id, proposal.action_type, proposal.expected_commit_sha):
                     return RemediationProposal.model_validate(old)

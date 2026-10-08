@@ -3,3 +3,4 @@ python-dotenv
 pydantic>=2,<3
 requests
 psycopg[binary]
+PyYAML>=6,<7

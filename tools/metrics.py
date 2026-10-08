@@ -13,13 +13,79 @@ prometheus_client=PrometheusClient(
 
 
 @tool
+def check_scrape_target(service: str) -> dict:
+    """读取 Prometheus 实际采集目标状态和 lastError，不能据此证明进程已退出。
+
+    Args:
+        service: 已登记监控能力的服务或数据库名称
+    """
+    try:
+        settings = registry.require_capability(service, "metrics")
+        response = prometheus_client.get_targets()
+        if (
+            not isinstance(response, dict)
+            or response.get("status") != "success"
+            or response.get("warnings")
+        ):
+            raise ValueError("invalid_target_response")
+        expected = {"job": settings.job} if settings.profile == "postgresql" else (
+            settings.labels or {"service": service}
+        )
+        targets = [
+            target for target in response["data"]["activeTargets"]
+            if all(target.get("labels", {}).get(k) == v for k, v in expected.items())
+        ]
+        for target in targets:
+            if (
+                not isinstance(target.get("labels"), dict)
+                or any(not isinstance(value, str) for value in target["labels"].values())
+                or target.get("health") not in {"up", "down", "unknown"}
+                or not isinstance(target.get("lastError", ""), str)
+            ):
+                raise ValueError("invalid_target_fields")
+        if not targets:
+            return {
+                "status": "no_data",
+                "service": service,
+                "reason": "target_not_found",
+            }
+        return {
+            "status": "ok",
+            "service": service,
+            "targets": [
+                {
+                    "labels": target["labels"],
+                    "health": target["health"],
+                    "last_error": target.get("lastError", ""),
+                    "last_scrape": target.get("lastScrape"),
+                    "scrape_duration_seconds": target.get("lastScrapeDuration"),
+                }
+                for target in targets
+            ],
+        }
+    except (
+        CapabilityUnavailable,
+        requests.RequestException,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+    ):
+        return {
+            "status": "no_data",
+            "service": service,
+            "reason": "targets_unavailable_or_invalid",
+        }
+
+
+@tool
 def query_metrics(service: str, metric: str) -> dict:
     """
     查询指定服务的 HTTP 或 PostgreSQL 监控指标，返回单个数值。
 
     Args:
         service: 需要查询指标的服务或依赖名称，指标能力从 ServiceRegistry 读取
-        metric: HTTP 支持 http_requests_total、http_request_rate、http_5xx_rate；PostgreSQL 支持 postgres_up、postgres_connections、postgres_max_connections、postgres_connection_usage、postgres_active_sessions、postgres_idle_sessions、postgres_idle_in_transaction、postgres_lock_waits
+        metric: HTTP 支持 http_requests_total、http_request_rate、http_5xx_rate、http_latency_p95_seconds、service_scrape_up；PostgreSQL 支持 postgres_up、exporter_scrape_up、postgres_connections、postgres_max_connections、postgres_connection_usage、postgres_active_sessions、postgres_idle_sessions、postgres_idle_in_transaction、postgres_lock_waits。P95 单位秒，5xx 单位比例，窗口 1m，至少 20 个请求；不足或缺失返回 no_data。
     """
 
     try:
@@ -56,6 +122,8 @@ def query_metrics(service: str, metric: str) -> dict:
         }
     if (
         not isinstance(response, dict)
+        or response.get("status") != "success"
+        or bool(response.get("warnings"))
         or not isinstance(response.get("data"), dict)
     ):
         return {
@@ -99,8 +167,11 @@ def query_metrics(service: str, metric: str) -> dict:
         }
 
     try:
-        value = float(results[0]["value"][1])
-    except (ValueError, TypeError, IndexError, KeyError):
+        raw_value = results[0]["value"][1]
+        if isinstance(raw_value, bool):
+            raise ValueError("invalid_boolean_measurement")
+        value = float(raw_value)
+    except (ValueError, TypeError, IndexError, KeyError, OverflowError):
         return {
             "status": "no_data",
             "service": service,
@@ -114,6 +185,23 @@ def query_metrics(service: str, metric: str) -> dict:
             "service": service,
             "metric": metric,
             "message": "Prometheus 返回的指标值不是有限数值",
+        }
+
+    if (
+        metric in {"service_scrape_up", "exporter_scrape_up", "postgres_up"}
+        and value not in {0, 1}
+    ) or (
+        metric == "http_5xx_rate"
+        and not 0 <= value <= 1
+    ) or (
+        metric == "http_latency_p95_seconds"
+        and value < 0
+    ):
+        return {
+            "status": "no_data",
+            "service": service,
+            "metric": metric,
+            "reason": "metric_value_outside_semantic_domain",
         }
 
     return {

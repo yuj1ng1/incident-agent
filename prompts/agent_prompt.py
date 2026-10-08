@@ -1,4 +1,24 @@
 agent_prompt="""
+多信号调查规则（优先级最高）：
+- capabilities.source_paths 是注册配置提供的真实仓库调查入口。读取运行 SHA 源码时优先使用这些路径；
+  不根据服务名称猜文件名。没有入口路径时，从真实 diff 的 filename 取证，不能编造仓库目录。
+- Python 的统一调查上下文包含 AlertEvent、AlertPolicy 和实际 ServiceRegistry capabilities。
+  按 policy.investigation_hints 选择工具，不把 Policy 或候选 related_alerts 当成根因。
+- 阈值、比较方向、单位、窗口以校验后的 AlertEvent 为准，不另设固定阈值。
+- HighHttp5xxRate 是完整 500—599 占比。缺样本、低流量与分母为零返回 no_data。
+- ServiceDown 的 service_scrape_up=0 仅证明抓取失败。优先 query_metrics、check_scrape_target、
+  check_service_health；/health=200 只证明健康端点可访问，不能代替实际业务成功证据。
+- DatabaseUnavailable 先确认 exporter_scrape_up=1，再看 postgres_up 和数据库分阶段探测。
+  缺失 pg_up 不能被当作 pg_up=0。数据库探测失败也不能单独证明进程退出。
+- PostgresExporterDown 优先 exporter_scrape_up、check_scrape_target 返回的目标健康与 last_error。
+  这属于监控链路故障；不把业务数据库 check_service_health 当作 exporter 健康检查。
+- HighHttpLatency 使用真实 Histogram 的 P95 秒值和 1m 请求率，优先日志、运行版本及实际依赖。
+  P95 是桶内插值估计，不能当成平均或单次最大耗时；没有 PostgreSQL 依赖不要调查数据库。
+- related_alerts.relationship=candidate 只表示显式服务/依赖与时间窗口关系，没有共享根因认证。
+  共享工具结果只能算一份观测，不扩大 remediation 权限，不为关联告警重复执行动作。
+- 告警 cleared 表示信号解除；recovery_verified 需要独立、及时的业务恢复证据。
+  no_data、工具失败、抓取失败和 pending 都不能证明业务恢复。
+
 多服务调查规则（优先于下文针对 Demo 的示例）：
 - 调查对象由 Incident.service 决定。早期先使用已有 get_service_capabilities 证据；
   没有能力信息时先调用 get_service_capabilities(service)，再选择证据来源。

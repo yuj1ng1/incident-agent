@@ -43,6 +43,12 @@ class RemediationPlanner:
         self.store = store
 
     def plan(self, incident, result, evidence=None):
+        # Other monitoring signals/candidate relations cannot authorize this action.
+        if (
+            incident.alerts
+            and incident.alerts[-1].alertname not in {"legacy", "HighHttp5xxRate"}
+        ):
+            return None
         if not result.success or result.status.value != "completed" or incident.service != "order-service":
             return None
         grouped = {}

@@ -9,7 +9,13 @@ def selector(labels):
     )
 
 
-HTTP_METRICS = ("http_requests_total", "http_request_rate", "http_5xx_rate")
+HTTP_METRICS = (
+    "http_requests_total",
+    "http_request_rate",
+    "http_5xx_rate",
+    "http_latency_p95_seconds",
+    "service_scrape_up",
+)
 POSTGRES_METRICS = (
     "postgres_up",
     "postgres_connections",
@@ -19,6 +25,7 @@ POSTGRES_METRICS = (
     "postgres_idle_sessions",
     "postgres_idle_in_transaction",
     "postgres_lock_waits",
+    "exporter_scrape_up",
 )
 METRIC_PROFILES = {
     "http_service": HTTP_METRICS,
@@ -33,15 +40,26 @@ def build_promql(service, settings, metric):
         labels = settings.labels or {"service": service}
         selected = selector(labels)
         all_requests = f"demo_http_requests_total{{{selected}}}"
-        error_labels = {
-            **labels,
-            "status": "500",
-        }
-        errors = f"demo_http_requests_total{{{selector(error_labels)}}}"
+        errors = f'demo_http_requests_total{{{selected},status=~"5[0-9][0-9]"}}'
+        total_rate = f"sum(rate({all_requests}[1m]))"
+        # Missing error series is a measured zero only with valid total samples.
+        error_rate = f"(sum(rate({errors}[1m])) or (0 * {total_rate}))"
+        enough_requests = f"sum(increase({all_requests}[1m])) >= 20"
+        histogram = f"demo_http_request_duration_seconds_bucket{{{selected}}}"
+        histogram_count = f"demo_http_request_duration_seconds_count{{{selected}}}"
         return {
             "http_requests_total": f"sum({all_requests})",
-            "http_request_rate": f"sum(rate({all_requests}[1m]))",
-            "http_5xx_rate": f"sum(rate({errors}[1m]))/sum(rate({all_requests}[1m]))",
+            "http_request_rate": total_rate,
+            "http_5xx_rate": (
+                f"({error_rate} / {total_rate}) and ({enough_requests})"
+                f" and (min(up{{{selected}}}) == 1)"
+            ),
+            "http_latency_p95_seconds": (
+                f"histogram_quantile(0.95, sum by (le) (rate({histogram}[1m])))"
+                f" and (sum(increase({histogram_count}[1m])) >= 20)"
+                f" and (min(up{{{selected}}}) == 1)"
+            ),
+            "service_scrape_up": f"up{{{selected}}}",
         }[metric]
     job_filter = selector({"job": settings.job})
     database_filter = selector(
@@ -51,7 +69,10 @@ def build_promql(service, settings, metric):
         }
     )
     return {
-        "postgres_up": f"pg_up{{{job_filter}}}",
+        "postgres_up": (
+            f"pg_up{{{job_filter}}} and on (job, instance) (up{{{job_filter}}} == 1)"
+        ),
+        "exporter_scrape_up": f"up{{{job_filter}}}",
         "postgres_connections": f"sum(pg_stat_database_numbackends{{{database_filter}}})",
         "postgres_max_connections": f"pg_settings_max_connections{{{job_filter}}}",
         "postgres_connection_usage": (

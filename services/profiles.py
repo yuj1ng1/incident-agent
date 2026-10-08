@@ -117,6 +117,26 @@ class SourceSettings(Configuration):
     provider: Literal["github"]
     repo: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     branch: str = Field(min_length=1, max_length=200)
+    investigation_paths: tuple[str, ...] = ()
+
+    @field_validator("investigation_paths", mode="before")
+    @classmethod
+    def source_path_tuple(cls, value):
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("investigation_paths")
+    @classmethod
+    def safe_source_paths(cls, value):
+        if any(
+            not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or any(ord(char) < 33 for char in path)
+            for path in value
+        ):
+            raise ValueError("source investigation paths must be repository-relative")
+        return value
 
     @field_validator("repo", "branch")
     @classmethod

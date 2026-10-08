@@ -110,6 +110,8 @@ class ServiceRegistry:
                 metric_profile=profile.metrics.profile,
                 supported_metrics=list(METRIC_PROFILES[profile.metrics.profile]),
             )
+        if profile.source and profile.source.investigation_paths:
+            result["source_paths"] = list(profile.source.investigation_paths)
         return result
 
 

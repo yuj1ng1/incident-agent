@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 from datetime import datetime
 
@@ -11,9 +11,15 @@ class InvestigationResult(BaseModel):
     success:bool
     status:InvestigationStatus
     answer:str
+    model_rounds: int = 0
+    tool_calls: int = 0
+    tool_trace: list[dict] = Field(default_factory=list)
 
 class InvestigationRecord(BaseModel):
     investigated_at:datetime
     status:InvestigationStatus
-    alert_value:float
+    alert_value:float | None = None
     answer:str
+    model_rounds: int = 0
+    tool_calls: int = 0
+    tool_trace: list[dict] = Field(default_factory=list)

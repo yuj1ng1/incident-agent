@@ -44,9 +44,16 @@ def source(data=b"print('hello')\n", path="app.py"):
 
 class VersionTests(unittest.TestCase):
     def setUp(self):
-        self.body = {"service": "order-service", "commit_sha": SHA, "short_sha": SHA[:7],
-                     "process_started_at": "2026-10-07T08:21:30Z",
-                     "runtime_flags": {"simulate_code_regression": True}}
+        self.body = {
+            "service": "order-service",
+            "commit_sha": SHA,
+            "short_sha": SHA[:7],
+            "process_started_at": "2026-10-07T08:21:30Z",
+            "runtime_flags": {
+                "simulate_code_regression": True,
+                "simulate_slow_request": False,
+            },
+        }
         self.version_patch = patch("tools.version.ServiceClient.version", return_value={
             "http_status": 200, "body": self.body})
         self.mock = self.version_patch.start()
@@ -74,7 +81,13 @@ class VersionTests(unittest.TestCase):
         self.body["runtime_flags"]["GITHUB_TOKEN"] = "must not escape"
         self.body["environment"] = {"password": "must not escape"}
         result = get_running_version("order-service")
-        self.assertEqual(result["runtime_flags"], {"simulate_code_regression": True})
+        self.assertEqual(
+            result["runtime_flags"],
+            {
+                "simulate_code_regression": True,
+                "simulate_slow_request": False,
+            },
+        )
         self.assertNotIn("must not escape", json.dumps(result))
         self.body["runtime_flags"]["simulate_code_regression"] = False
         self.assertFalse(get_running_version("order-service")["runtime_flags"]["simulate_code_regression"])

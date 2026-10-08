@@ -18,6 +18,7 @@ class Agent:
         self.max_loop_round=MAX_AGENT_LOOPS
         self.max_tool_calls=MAX_TOOL_CALLS
         self.model_retries=MODEL_RETRIES
+        self.poll_tool_cache = None
         self.model_client=ModelClient(
             client=client,
             model_name=MODEL_NAME,
@@ -26,7 +27,8 @@ class Agent:
 
     def investigate(self,incident):
         self.history=[]
-        tool_cache={}
+        tool_cache = self.poll_tool_cache if self.poll_tool_cache is not None else {}
+        tool_trace = []
         tool_call_count=0
         incident_prompt=self.build_incident_prompt(incident)
         self.history.append(
@@ -76,12 +78,19 @@ class Agent:
                 return InvestigationResult(
                     success=False,
                     status=InvestigationStatus.MODEL_INCOMPLETE,
-                    answer=f"模型响应未正常完成，status={response_status}"
+                    answer=f"模型响应未正常完成，status={response_status}",
+                    model_rounds=loop_num,
+                    tool_calls=tool_call_count,
+                    tool_trace=tool_trace,
                 )
 
             function_calls=self.get_function_calls(response)
             if not function_calls:
-                return self.handle_final_answer(response,loop_num)
+                result = self.handle_final_answer(response,loop_num)
+                result.model_rounds = loop_num
+                result.tool_calls = tool_call_count
+                result.tool_trace = tool_trace
+                return result
             logger.info(
                 f"模型请求调用工具 "
                 f"round={loop_num} "
@@ -108,6 +117,18 @@ class Agent:
                         tool_call_count=tool_call_count
                         )
                 self.history.append(output_item)
+                tool_trace.append(
+                    {
+                        "name": item.name,
+                        "arguments": json.loads(item.arguments) if success else {},
+                        "status": (
+                            result.get("status")
+                            if isinstance(result, dict)
+                            else "unknown"
+                        ),
+                        "from_cache": from_cache,
+                    }
+                )
                 self.add_evidence(
                     incident=incident,
                     item=item,
@@ -130,12 +151,31 @@ class Agent:
         return InvestigationResult(
                 success=False,
                 status=InvestigationStatus.MAX_ROUND_REACHED,
-                answer="Agent已达到最大调查轮数，未正常完成调查"
+                answer="Agent已达到最大调查轮数，未正常完成调查",
+                model_rounds=self.max_loop_round,
+                tool_calls=tool_call_count,
+                tool_trace=tool_trace,
             )
 
 
     def build_incident_prompt(self,incident):
+        from dataclasses import asdict
+        from alert_policy import policy_for
+        from services.registry import registry
+        policy = policy_for(incident.alerts[-1]) if incident.alerts else None
+        context = {
+            "alert_event": (
+                incident.alerts[-1].model_dump(mode="json")
+                if incident.alerts
+                else None
+            ),
+            "policy": asdict(policy) if policy else None,
+            "capabilities": registry.describe(incident.service),
+            "related_alerts": incident.related_alerts,
+        }
         return f"""
+    统一调查上下文（Python 校验；Policy 提示和候选关联不是根因）：
+    {json.dumps(context, ensure_ascii=False)}
     当前故障：
 
     Incident ID：{incident.incident_id}
@@ -270,9 +310,6 @@ class Agent:
         from_cache
         ):
         if not success:
-            return
-
-        if from_cache:
             return
 
         if not isinstance(result,dict):

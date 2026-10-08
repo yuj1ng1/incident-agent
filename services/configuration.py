@@ -19,12 +19,13 @@ SERVICES = [
         "runtime": {
             "provider": "http_version",
             "base_url": "http://localhost:8001",
-            "allowed_flags": ("simulate_code_regression",),
+            "allowed_flags": ("simulate_code_regression", "simulate_slow_request"),
         },
         "source": {
             "provider": "github",
             "repo": "yuj1ng1/prometheus-demo",
             "branch": "codex/postgres-monitoring",
+            "investigation_paths": ("app.py", "http_observability.py"),
         },
         "dependencies": ("order-db",),
         "remediation": ("disable_demo_regression",),
@@ -65,12 +66,13 @@ SERVICES = [
         "runtime": {
             "provider": "http_version",
             "base_url": "http://localhost:8002",
-            "allowed_flags": ("simulate_inventory_error",),
+            "allowed_flags": ("simulate_inventory_error", "simulate_slow_request"),
         },
         "source": {
             "provider": "github",
             "repo": "yuj1ng1/prometheus-demo",
             "branch": "codex/postgres-monitoring",
+            "investigation_paths": ("inventory_app.py", "http_observability.py"),
         },
     },
 ]

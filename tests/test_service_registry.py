@@ -323,7 +323,12 @@ class ObservationTests(unittest.TestCase):
         self.prom = self.enterContext(
             patch(
                 "tools.metrics.prometheus_client.query",
-                return_value={"data": {"result": [{"value": [0, "1"]}]}},
+                return_value={
+                    "status": "success",
+                    "data": {
+                        "result": [{"value": [0, "1"]}],
+                    },
+                },
             )
         )
         self.github = self.enterContext(
@@ -579,6 +584,7 @@ class ObservationTests(unittest.TestCase):
                 "process_started_at": "2026-10-08T00:00:00Z",
                 "runtime_flags": {
                     flag: True,
+                    "simulate_slow_request": False,
                     "GITHUB_TOKEN": "secret",
                 },
             },
@@ -597,7 +603,10 @@ class ObservationTests(unittest.TestCase):
         with patch("tools.version.ServiceClient.version", return_value=response):
             self.assertEqual(
                 get_running_version("inventory-service")["runtime_flags"],
-                {"simulate_inventory_error": True},
+                {
+                    "simulate_inventory_error": True,
+                    "simulate_slow_request": False,
+                },
             )
 
     def test_missing_runtime_no_request(self):
@@ -687,6 +696,7 @@ class ToolBoundaryTests(unittest.TestCase):
         expected = {
             "query_logs",
             "query_metrics",
+            "check_scrape_target",
             "check_service_health",
             "get_service_dependencies",
             "check_dependency_health",

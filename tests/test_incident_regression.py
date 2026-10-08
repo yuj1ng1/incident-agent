@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import runpy
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -51,20 +51,33 @@ with patch("logging.FileHandler", side_effect=isolated_log_handler):
     import reinvestigation
 
 
-NOW = datetime(2026, 10, 6, 14, 30, 0)
+NOW = datetime(2026, 10, 6, 14, 30, 0, tzinfo=timezone(timedelta(hours=8)))
 
 
 class FixedDatetime(datetime):
     @classmethod
     def now(cls, tz=None):
-        return NOW if tz is None else NOW.replace(tzinfo=tz)
+        return NOW if tz is None else NOW.astimezone(tz)
 
 
 def raw_alert(value=0.27, service="order-service", metric="http_5xx_rate", state="firing"):
     return {
         "state": state,
-        "labels": {"service": service, "metric": metric, "severity": "critical"},
-        "annotations": {"threshold": "0.20"},
+        "labels": {
+            "alertname": "HighHttp5xxRate",
+            "service": service,
+            "metric": metric,
+            "signal_type": "numeric",
+            "severity": "critical",
+        },
+        "annotations": {
+            "threshold": "0.20",
+            "unit": "ratio",
+            "direction": "higher_is_worse",
+            "window": "1m",
+            "minimum_requests": "20",
+        },
+        "activeAt": "2026-10-06T06:30:00Z",
         "value": str(value),
     }
 
@@ -117,6 +130,42 @@ class IncidentRegressionTests(unittest.TestCase):
         self.prometheus.get_alerts = Mock()
         self.monitor = IncidentMonitor(self.prometheus, self.agent, self.store, poll_interval=0)
         self.fp = generate_alert_fingerprint(parse_prometheus_alert(raw_alert()))
+        self.prometheus.get_rules = Mock(
+            return_value={
+                "status": "success",
+                "data": {
+                    "groups": [
+                        {
+                            "rules": [
+                                {
+                                    "name": "HighHttp5xxRate",
+                                    "type": "alerting",
+                                    "health": "ok",
+                                    "lastEvaluation": NOW.isoformat(),
+                                    "annotations": raw_alert()["annotations"],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+        self.prometheus.query = Mock(
+            side_effect=lambda expression: {
+                "status": "success",
+                "data": {
+                    "result": [
+                        {
+                            "value": [
+                                NOW.timestamp(),
+                                "1" if expression.startswith("min(up{") else "0",
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+        self.enterContext(patch("alert_recovery.datetime", FixedDatetime))
         self.enterContext(patch("monitor.incident_monitor.datetime", FixedDatetime))
         self.enterContext(patch("reinvestigation.datetime", FixedDatetime))
 
@@ -126,7 +175,7 @@ class IncidentRegressionTests(unittest.TestCase):
 
     def seed(self, value=0.27, last_at=NOW, last_value=None):
         incident = create_incident_from_alert(
-            parse_prometheus_alert(raw_alert(value)), self.fp
+            parse_prometheus_alert(raw_alert(max(value, 0.21))).model_copy(update={"value": value}), self.fp
         )
         incident.last_investigated_at = last_at
         incident.last_investigated_value = value if last_value is None else last_value
@@ -186,11 +235,11 @@ class IncidentRegressionTests(unittest.TestCase):
         changed["labels"]["severity"] = "warning"
         changed["annotations"]["threshold"] = "0.10"
         self.assertEqual(generate_alert_fingerprint(parse_prometheus_alert(changed)), self.fp)
-        self.assertEqual(self.fp, hashlib.sha256(b"order-service|http_5xx_rate").hexdigest())
+        self.assertNotEqual(self.fp, hashlib.sha256(b"order-service|http_5xx_rate").hexdigest())
 
     def test_fingerprint_separates_different_services_and_metrics(self):
-        self.assertNotEqual(generate_alert_fingerprint(parse_prometheus_alert(raw_alert(service="other"))), self.fp)
-        self.assertNotEqual(generate_alert_fingerprint(parse_prometheus_alert(raw_alert(metric="http_request_rate"))), self.fp)
+        self.assertNotEqual(generate_alert_fingerprint(parse_prometheus_alert(raw_alert(service="inventory-service"))), self.fp)
+        self.assertNotEqual(generate_alert_fingerprint(parse_prometheus_alert(raw_alert()).model_copy(update={"alertname": "HighHttpLatency"})), self.fp)
 
     def test_new_incident_is_saved_before_real_agent_starts(self):
         seen = []
@@ -272,7 +321,7 @@ class IncidentRegressionTests(unittest.TestCase):
 
     def test_other_metrics_use_cooldown_instead_of_http_5xx_threshold(self):
         incident = self.seed(value=0.27, last_at=NOW)
-        alert = parse_prometheus_alert(raw_alert(value=50, metric="http_request_rate"))
+        alert = Alert(service="order-service", metric="http_request_rate", value=50, threshold=10, severity="critical")
         self.assertFalse(reinvestigation.should_reinvestigate(incident, alert))
 
     def test_missing_firing_alert_resolves_incident(self):
@@ -285,13 +334,13 @@ class IncidentRegressionTests(unittest.TestCase):
         self.assertNotIn(self.fp, data["active_by_fingerprint"])
         self.assertIsNone(self.store.get_active_incident(self.fp))
 
-    def test_pending_alert_resolves_previously_firing_incident(self):
+    def test_pending_alert_keeps_previously_firing_incident_active(self):
         incident = self.seed()
         self.poll(raw_alert(state="pending"))
-        data = self.store.load()
-        self.assertEqual(data["incidents"][incident.incident_id]["status"], "resolved")
-        self.assertNotIn(self.fp, data["active_by_fingerprint"])
-        self.assertIsNone(self.store.get_active_incident(self.fp))
+        row = self.store.load()["incidents"][incident.incident_id]
+        self.assertEqual(row["status"], "investigating")
+        self.assertEqual(row["alert_state"], "pending")
+        self.sdk.responses.create.assert_not_called()
 
     def test_refiring_after_resolution_preserves_old_incident_history(self):
         self.poll(raw_alert())
@@ -425,7 +474,7 @@ class IncidentRegressionTests(unittest.TestCase):
         self.assertIn("test Prometheus unavailable", "\n".join(captured.output))
         self.assertEqual(self.store.get_active_incident(self.fp).incident_id, incident.incident_id)
 
-    def test_agent_exception_is_logged_and_next_poll_retries_same_incident(self):
+    def test_agent_exception_is_logged_and_next_poll_obeys_retry_delay(self):
         self.prometheus.get_alerts.return_value = {"status": "success", "data": {"alerts": [raw_alert()]}}
         self.sdk.responses.create.side_effect = [RuntimeError("test investigation failed"), model_response()]
         with self.assertLogs("agent", level="ERROR") as captured, patch(
@@ -433,15 +482,15 @@ class IncidentRegressionTests(unittest.TestCase):
         ):
             self.monitor.run()
         self.assertEqual(self.prometheus.get_alerts.call_count, 2)
-        self.assertEqual(self.sdk.responses.create.call_count, 2)
+        self.assertEqual(self.sdk.responses.create.call_count, 1)
         self.assertEqual(len(self.store.load()["incidents"]), 1)
-        self.assertEqual(len(self.store.get_active_incident(self.fp).investigations), 1)
+        self.assertEqual(len(self.store.get_active_incident(self.fp).investigations), 0)
         self.assertIn("test investigation failed", "\n".join(captured.output))
 
     def test_one_agent_exception_does_not_block_other_alerts(self):
         self.sdk.responses.create.side_effect = [RuntimeError("test first investigation failed"), model_response()]
         with self.assertLogs("agent", level="ERROR"):
-            self.poll(raw_alert(), raw_alert(service="second-service"))
+            self.poll(raw_alert(), raw_alert(service="inventory-service"))
         rows = list(self.store.load()["incidents"].values())
         self.assertEqual(len(rows), 2)
         self.assertEqual([len(row["investigations"]) for row in rows], [0, 1])
@@ -547,8 +596,11 @@ class MetricsRegressionTests(unittest.TestCase):
             "http_requests_total": 'sum(demo_http_requests_total{service="order-service"})',
             "http_request_rate": 'sum(rate(demo_http_requests_total{service="order-service"}[1m]))',
             "http_5xx_rate": (
-                'sum(rate(demo_http_requests_total{service="order-service",status="500"}[1m]))/'
-                'sum(rate(demo_http_requests_total{service="order-service"}[1m]))'
+                '((sum(rate(demo_http_requests_total{service="order-service",status=~"5[0-9][0-9]"}[1m])) '
+                'or (0 * sum(rate(demo_http_requests_total{service="order-service"}[1m])))) / '
+                'sum(rate(demo_http_requests_total{service="order-service"}[1m]))) '
+                'and (sum(increase(demo_http_requests_total{service="order-service"}[1m])) >= 20)'
+                ' and (min(up{service="order-service"}) == 1)'
             ),
         }
         for metric, promql in expected.items():
@@ -557,7 +609,7 @@ class MetricsRegressionTests(unittest.TestCase):
                 self.assert_query(metric, promql, service="order-service")
 
     def test_postgres_up_uses_configured_job(self):
-        self.assert_query("postgres_up", 'pg_up{job="postgres"}')
+        self.assert_query("postgres_up", 'pg_up{job="postgres"} and on (job, instance) (up{job="postgres"} == 1)')
 
     def test_postgres_connections_use_configured_database(self):
         self.assert_query(

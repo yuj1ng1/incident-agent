@@ -83,3 +83,8 @@ Prompt 区分提交存在、实例版本自报、进程启动、代码修改、�
 代码引入条件与运行时触发条件必须分开；13 次工具预算、7 轮和每轮剩余次数提示保留。
 
 回归测试：`& 'D:\conda\envs\agentlearn\python.exe' -B -m unittest discover -s tests -v`。
+
+## 多信号告警升级
+
+- [架构、规则与扩展指南](docs/MULTI_SIGNAL_ALERTS_GUIDE_2026-10-08_18-17-52.md)
+- [单元、规则及真实集成验证](docs/MULTI_SIGNAL_ALERTS_VALIDATION_2026-10-08_18-24-41.md)
