@@ -1,6 +1,7 @@
 """Code evidence contracts; GitHub, service and Loki HTTP responses are isolated."""
 import base64
 import json
+import tempfile
 import unittest
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -114,7 +115,7 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(get_running_version("order-service")["http_status"], 404)
         self.mock.side_effect = requests.Timeout("sensitive transport detail")
         result = get_running_version("order-service")
-        self.assertEqual(result["reason"], "version_unreachable")
+        self.assertEqual(result["reason"], "version_timeout")
         self.assertNotIn("sensitive", json.dumps(result))
         self.mock.side_effect = ValueError()
         self.assertEqual(get_running_version("order-service")["reason"], "invalid_version_response")
@@ -335,21 +336,20 @@ class ClientAndLogTests(unittest.TestCase):
         incident = Incident(incident_id="test-budget", service="order-service", severity="critical",
                             status="investigating", alerts=[Alert(service="order-service",
                             metric="http_5xx_rate", value=1, threshold=.2, severity="critical")])
-        call = SimpleNamespace(type="function_call", name="get_running_version", call_id="one",
-                               arguments='{"service":"order-service"}')
-        model = Mock()
-        model.call_model.side_effect = [SimpleNamespace(status="completed", output=[call]),
-                                       SimpleNamespace(status="completed", output=[], output_text="done")]
-        agent = Agent(Mock(), "investigate")
-        agent.model_client = model
-        with patch.object(agent.tool_manager, "run_tool", return_value=(
-                True, {"type":"function_call_output", "call_id":"one", "output":"{}"},
-                {"status":"ok", "commit_sha":SHA})):
-            self.assertTrue(agent.investigate(incident).success)
-        instructions = [item.kwargs["instructions"] for item in model.call_model.call_args_list]
-        self.assertIn("剩余工具调用次数：13", instructions[0])
-        self.assertIn("剩余工具调用次数：12", instructions[1])
-        self.assertIn("剩余模型响应轮数（含本轮）：6", instructions[1])
+        from runtime_support import FixtureAgent, call, create_runtime, create_session, response
+        from investigation.worker import Worker
+        with tempfile.TemporaryDirectory() as directory:
+            manager = create_runtime(directory)
+            create_session(manager)
+            fixture = FixtureAgent()
+            agent = Agent(Mock(), "investigate")
+            agent.tool_manager.run_tool = fixture.run_fixture_tool
+            agent.model_client.call_once = Mock(side_effect=[response(answer="", calls=[call()]), response()])
+            self.assertEqual(Worker(manager, agent).run_once().status.value, "COMPLETED")
+        instructions = [item.args[1] for item in agent.model_client.call_once.call_args_list]
+        self.assertIn("剩余工具执行次数 12", instructions[0])
+        self.assertIn("剩余工具执行次数 11", instructions[1])
+        self.assertIn("剩余模型响应轮数（含本轮） 6", instructions[1])
 
     def test_local_budget_is_retained(self):
         self.assertEqual(MAX_TOOL_CALLS, 13)

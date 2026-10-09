@@ -377,25 +377,34 @@ class StoreMonitorTests(unittest.TestCase):
             get_rules=Mock(return_value={}),
             query=Mock(return_value={}),
         )
-        self.agent = SimpleNamespace(
-            investigate=Mock(return_value=completed()), poll_tool_cache=None
-        )
-        self.monitor = IncidentMonitor(self.client, self.agent, self.store, 0)
+        from runtime_support import FixtureAgent, create_runtime, response
+        from investigation.worker import Worker
+        self.now = datetime.now(timezone.utc)
+        self.manager = create_runtime(temp, clock=lambda: self.now)
+        self.store = self.manager.incident_store
+        self.agent = FixtureAgent()
+        self.agent.request_durable_response.side_effect = None
+        self.agent.request_durable_response.return_value = response()
+        self.monitor = IncidentMonitor(self.client, self.store, 0, self.manager)
 
     def poll(self, *entries):
         self.client.get_alerts.return_value = envelope(*entries)
-        return self.monitor.process_alerts_once()
+        snapshot = self.monitor.process_alerts_once()
+        from investigation.worker import Worker
+        while Worker(self.manager, self.agent).run_once() is not None:
+            pass
+        return snapshot
 
     def test_five_alerts_remain_independent(self):
         self.poll(*(raw(name) for name in ALERT_POLICIES))
         self.assertEqual(len(self.store.load()["incidents"]), 5)
-        self.assertEqual(self.agent.investigate.call_count, 5)
+        self.assertEqual(self.agent.request_durable_response.call_count, 5)
 
     def test_duplicate_identity_is_investigated_once(self):
         self.poll(raw(), raw())
         self.poll(raw())
         self.assertEqual(len(self.store.load()["incidents"]), 1)
-        self.agent.investigate.assert_called_once()
+        self.agent.request_durable_response.assert_called_once()
 
     def test_invalid_alert_does_not_clear_previous_incident(self):
         self.poll(raw())
@@ -428,97 +437,45 @@ class StoreMonitorTests(unittest.TestCase):
             all(incident.related_alerts for incident in self.store.active_incidents())
         )
 
-    def poll_with_shared_readonly_tool(self):
-        from agent.agent import Agent
-        from prompts.agent_prompt import agent_prompt
-        from tests.test_incident_regression import model_response, tool_call
-        from tools.tool_registry import tool_registry
-
-        sdk = SimpleNamespace(
-            responses=SimpleNamespace(
-                create=Mock(
-                    side_effect=[
-                        model_response(answer="", calls=[tool_call()]),
-                        model_response(),
-                        model_response(answer="", calls=[tool_call()]),
-                        model_response(),
-                    ],
-                ),
-            ),
-        )
-        self.monitor.agent = Agent(sdk, agent_prompt)
-        probe = Mock(
-            return_value={
-                "status": "ok",
-                "service": "order-service",
-                "metric": "http_5xx_rate",
-                "value": 0.8,
-            },
-        )
-        with patch.dict(tool_registry["query_metrics"], {"func": probe}):
-            self.poll(raw(), raw("HighHttpLatency"))
-        return probe
-
-    def test_related_incidents_share_one_observation_and_keep_evidence(self):
-        probe = self.poll_with_shared_readonly_tool()
+    def test_related_incidents_keep_independent_runtime_observations(self):
+        from runtime_support import FixtureAgent, call, response
+        probe = Mock(return_value={"status": "ok", "value": 0.8, "service": "order-service"})
+        def result(item):
+            return probe() if item.name == "query_metrics" else {"status": "no_data", "reason": "commit_unknown"}
+        self.agent = FixtureAgent([response(answer="", calls=[call()]), response(),
+                                   response(answer="", calls=[call()]), response()], result)
+        self.poll(raw(), raw("HighHttpLatency"))
         incidents = self.store.active_incidents()
-        self.assertEqual(probe.call_count, 1)
-        self.assertEqual(len(incidents), 2)
-        self.assertTrue(all(len(incident.evidence) == 1 for incident in incidents))
-        self.assertEqual(
-            sorted(incident.investigations[0].tool_calls for incident in incidents),
-            [0, 1],
-        )
-        self.assertTrue(incidents[1].investigations[0].tool_trace[0]["from_cache"])
-        self.assertIsNone(self.monitor.agent.poll_tool_cache)
-
-    def test_long_poll_discards_old_shared_observation(self):
-        with patch(
-            "monitor.incident_monitor.time.monotonic",
-            side_effect=[0, 0, 31, 32],
-        ):
-            probe = self.poll_with_shared_readonly_tool()
         self.assertEqual(probe.call_count, 2)
-        self.assertTrue(
-            all(
-                not incident.investigations[0].tool_trace[0]["from_cache"]
-                for incident in self.store.active_incidents()
-            )
-        )
+        self.assertEqual(len(incidents), 2)
+        self.assertTrue(all(len(i.evidence) == 1 for i in incidents))
+        self.assertEqual({i.investigations[0].tool_calls for i in incidents}, {2})
+        self.assertNotEqual(incidents[0].evidence[0].observation_id, incidents[1].evidence[0].observation_id)
 
-    def test_failure_retains_evidence_and_has_retry_delay(self):
-        def fail(incident):
-            incident.evidence.append(
-                Evidence(source="probe", summary="real probe", detail="{}")
-            )
-            raise RuntimeError("external failure")
-
-        self.agent.investigate.side_effect = fail
+    def test_failure_retains_evidence_and_runtime_retry_delay(self):
+        from runtime_support import call, response
+        self.agent.request_durable_response.side_effect = [response(answer="", calls=[call()]), TimeoutError("temporary"), response()]
         self.poll(raw())
         self.poll(raw())
-        self.agent.investigate.assert_called_once()
+        self.assertEqual(self.agent.request_durable_response.call_count, 2)
         saved = self.store.active_incidents()[0]
-        self.assertEqual(len(saved.evidence), 1)
-        saved.last_attempted_at -= timedelta(seconds=61)
-        self.store.save_incident(saved.fingerprint, saved)
+        self.assertTrue(any(e.source == "query_metrics" for e in saved.evidence))
+        self.now += timedelta(seconds=6)
         self.poll(raw())
-        self.assertEqual(self.agent.investigate.call_count, 2)
+        self.assertEqual(self.agent.request_durable_response.call_count, 3)
+        self.assertEqual(self.manager.store.list_sessions()[0].attempt_count, 2)
 
     def test_api_balance_error_stops_other_model_attempts(self):
         class BalanceError(Exception):
             status_code = 402
-
-        self.agent.investigate.side_effect = BalanceError("not retained")
-        with self.assertLogs("agent", level="ERROR"):
-            self.poll(raw(), raw(service="inventory-service"))
-        self.agent.investigate.assert_called_once()
-        self.assertEqual(self.monitor.model_blocked_reason, "model_api_http_402")
-        self.assertTrue(
-            all(
-                item.investigation_suspended_reason == "model_api_http_402"
-                for item in self.store.active_incidents()
-            )
-        )
+        self.agent.request_durable_response.side_effect = BalanceError("not retained")
+        self.poll(raw(), raw(service="inventory-service"))
+        self.agent.request_durable_response.assert_called_once()
+        sessions = self.manager.store.list_sessions()
+        self.assertEqual(sorted(s.status.value for s in sessions), ["PAUSED", "QUEUED"])
+        self.assertEqual(next(s for s in sessions if s.status.value == "PAUSED").last_error_category, "model_http_402")
+        with self.manager.store.transaction() as db:
+            self.assertEqual(self.manager.store.metadata(db, "model_blocked"), "model_http_402")
 
     def test_operator_resume_preserves_alert_and_evidence(self):
         self.poll(raw())

@@ -587,45 +587,45 @@ class ProcessTests(unittest.TestCase):
         handle.kernel.TerminateProcess.assert_called_once_with("held-native-handle", 0)
 
 
-class MonitorIntegrationTests(unittest.TestCase):
+class RuntimePlannerIntegrationTests(unittest.TestCase):
     def setUp(self):
+        from runtime_support import create_runtime, create_session, remediation_agent
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        from incident_store import IncidentStore
-        from monitor.incident_monitor import IncidentMonitor
-        self.incident_store = IncidentStore(Path(self.temp.name) / "incidents.json")
+        self.manager = create_runtime(self.temp.name)
+        self.session = create_session(self.manager)
+        self.agent = remediation_agent(self.manager.store.clock)
         self.planner = Mock()
+        self.planner.plan.return_value = None
         self.planner.propose.return_value = None
-        self.agent = Mock()
-        self.result = InvestigationResult(success=True, status=InvestigationStatus.COMPLETED, answer="Diagnosed")
-        self.alert = Alert(service="order-service", metric="http_5xx_rate", value=1, threshold=.2, severity="critical")
-        self.incident = Incident(incident_id="inc-test", service="order-service", severity="critical",
-            status="investigating", alerts=[self.alert], evidence=[Evidence(source="old", summary="old", detail="{}")])
-        self.agent.investigate.return_value = self.result
-        self.monitor = IncidentMonitor(Mock(), self.agent, self.incident_store, 30, self.planner)
+        self.manager.remediation_planner = self.planner
+        incident = self.manager.incident_store.get_incident(self.session.incident_id)
+        incident.evidence.append(Evidence(source="old", summary="old", detail="{}"))
+        self.manager.incident_store.save_incident(incident.fingerprint, incident)
 
-    def test_planner_receives_only_current_round_evidence(self):
-        new = Evidence(source="new", summary="new", detail="{}")
-        def investigate(incident):
-            incident.evidence.append(new)
-            return self.result
-        self.agent.investigate.side_effect = investigate
-        with redirect_stdout(io.StringIO()):
-            self.monitor.investigate_incident(self.incident, self.alert, "fp")
-        self.assertEqual(self.planner.propose.call_args.args[2], [new])
-        self.assertEqual(len(self.incident_store.get_active_incident("fp").investigations), 1)
+    def test_planner_receives_only_current_runtime_evidence(self):
+        from investigation.worker import Worker
+        result = Worker(self.manager, self.agent).run_once()
+        sources = {e.source for e in self.planner.propose.call_args.args[2]}
+        self.assertNotIn("old", sources)
+        self.assertEqual(sources, {"get_running_version", "query_logs", "get_source_file", "check_dependency_health"})
+        self.assertEqual(len(self.manager.incident_store.get_incident(result.incident_id).investigations), 1)
 
-    def test_planner_store_error_does_not_crash_monitor(self):
-        self.planner.propose.side_effect = StoreError("corrupt")
-        with redirect_stdout(io.StringIO()):
-            self.monitor.investigate_incident(self.incident, self.alert, "fp")
-        self.assertEqual(len(self.incident_store.get_active_incident("fp").investigations), 1)
+    def test_planner_store_error_keeps_completed_answer_pending_projection(self):
+        from investigation.worker import Worker
+        self.planner.propose.side_effect = StoreError("store_busy")
+        result = Worker(self.manager, self.agent).run_once()
+        checkpoint = self.manager.store.load_checkpoint(result)
+        self.assertEqual(result.status.value, "COMPLETED")
+        self.assertTrue(checkpoint["result"]["success"])
+        self.assertTrue(checkpoint["remediation_pending"])
+        self.assertEqual(len(self.manager.incident_store.get_incident(result.incident_id).investigations), 1)
 
     def test_failed_investigation_does_not_plan(self):
-        self.agent.investigate.return_value = InvestigationResult(success=False,
-            status=InvestigationStatus.MODEL_INCOMPLETE, answer="incomplete")
-        with redirect_stdout(io.StringIO()):
-            self.monitor.investigate_incident(self.incident, self.alert, "fp")
+        from investigation.worker import Worker
+        self.agent.request_durable_response.side_effect = [ValueError("invalid model response")]
+        result = Worker(self.manager, self.agent).run_once()
+        self.assertEqual(result.status.value, "FAILED")
         self.planner.propose.assert_not_called()
 
 

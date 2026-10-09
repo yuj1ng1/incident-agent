@@ -161,7 +161,7 @@ def main():
             manager = InvestigationManager(RuntimeStore(directory / "runtime.sqlite3"), store,
                                            RemediationPlanner(RemediationStore(directory / "remediation.json")))
             agent = Agent(client, prompt)
-            monitor = IncidentMonitor(prometheus, agent, store, 30, investigation_manager=manager)
+            monitor = IncidentMonitor(prometheus, store, 30, manager)
             monitor.process_alerts_once()
             return manager, agent
         def compact(manager):

@@ -49,6 +49,10 @@ with patch("logging.FileHandler", side_effect=isolated_log_handler):
     from tools.metrics import query_metrics
     from tools.tool_registry import tool_registry
     import reinvestigation
+    from investigation.store import RuntimeStore
+    from investigation.worker import Worker
+    from models.investigation import InvestigationResult
+    from runtime_support import create_runtime
 
 
 NOW = datetime(2026, 10, 6, 14, 30, 0, tzinfo=timezone(timedelta(hours=8)))
@@ -123,12 +127,17 @@ class IncidentRegressionTests(unittest.TestCase):
         work = tempfile.TemporaryDirectory(prefix="incident-agent-regression-data-")
         self.addCleanup(work.cleanup)
         self.work = Path(work.name)
-        self.store = IncidentStore(self.work / "data" / "incidents.json")
-        self.sdk = SimpleNamespace(responses=SimpleNamespace(create=Mock(return_value=model_response())))
+        self.manager = create_runtime(self.work / "data", clock=lambda: NOW.astimezone(timezone.utc))
+        self.store = self.manager.incident_store
+        self.sdk = Mock()
+        self.sdk.with_options.return_value = self.sdk
+        self.sdk.responses.create.return_value = model_response()
         self.agent = Agent(self.sdk, agent_prompt)
         self.prometheus = PrometheusClient("http://localhost:9090")
         self.prometheus.get_alerts = Mock()
-        self.monitor = IncidentMonitor(self.prometheus, self.agent, self.store, poll_interval=0)
+        self.worker = Worker(self.manager, self.agent)
+        self.monitor = IncidentMonitor(self.prometheus, self.store, 0, self.manager)
+        self.enterContext(patch.dict(tool_registry["get_running_version"], {"func": Mock(return_value={"status": "no_data", "reason": "commit_unknown"})}))
         self.fp = generate_alert_fingerprint(parse_prometheus_alert(raw_alert()))
         self.prometheus.get_rules = Mock(
             return_value={
@@ -166,12 +175,27 @@ class IncidentRegressionTests(unittest.TestCase):
             },
         )
         self.enterContext(patch("alert_recovery.datetime", FixedDatetime))
-        self.enterContext(patch("monitor.incident_monitor.datetime", FixedDatetime))
         self.enterContext(patch("reinvestigation.datetime", FixedDatetime))
 
     def poll(self, *alerts):
         self.prometheus.get_alerts.return_value = {"status": "success", "data": {"alerts": list(alerts)}}
         self.monitor.process_alerts_once()
+        while self.worker.run_once() is not None:
+            pass
+
+    def run_investigation(self, incident):
+        self.store.save_incident(incident.fingerprint, incident)
+        session = self.manager.enqueue(incident, reinvestigate=True)
+        self.worker.run_once()
+        session = self.manager.store.get(session.session_id)
+        checkpoint = self.manager.store.load_checkpoint(session)
+        latest = self.store.get_incident(incident.incident_id)
+        incident.evidence = latest.evidence
+        return InvestigationResult.model_validate(checkpoint["result"]).model_copy(update={
+            "model_rounds": session.total_model_requests,
+            "tool_calls": session.total_tool_executions,
+            "tool_trace": checkpoint["trace"],
+        })
 
     def seed(self, value=0.27, last_at=NOW, last_value=None):
         incident = create_incident_from_alert(
@@ -191,7 +215,7 @@ class IncidentRegressionTests(unittest.TestCase):
         with patch("tools.metrics.prometheus_client.query", return_value={
             "status": "success", "data": {"resultType": "vector", "result": result}
         }) as query:
-            investigated = self.agent.investigate(incident)
+            investigated = self.run_investigation(incident)
         return investigated, query
 
     def test_main_constructs_real_objects_and_enters_two_poll_cycles(self):
@@ -201,12 +225,19 @@ class IncidentRegressionTests(unittest.TestCase):
             with patch.object(PrometheusClient, "get_alerts", return_value={
                 "status": "success", "data": {"alerts": []}
             }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]), \
-                    patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}):
+                    patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}), \
+                    patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(self.work / "assembly.sqlite3")), \
+                    patch("investigation.scheduler.Scheduler.start") as start, \
+                    patch("investigation.scheduler.Scheduler.stop"):
                 namespace = runpy.run_path(str(ROOT / "main.py"), run_name="__main__")
             self.assertIsInstance(namespace["agent"], Agent)
             self.assertIsInstance(namespace["prometheus_client"], PrometheusClient)
             self.assertIsInstance(namespace["incident_store"], IncidentStore)
             self.assertIsInstance(namespace["monitor"], IncidentMonitor)
+            self.assertIs(namespace["monitor"].investigation_manager, namespace["runtime_manager"])
+            self.assertIs(namespace["scheduler"].worker.manager, namespace["runtime_manager"])
+            self.assertFalse(hasattr(namespace["agent"], "investigate"))
+            start.assert_called_once()
             self.assertEqual(get_alerts.call_count, 2)
             self.assertEqual(json.loads((self.work / "data" / "incidents.json").read_text()), {
                 "version": 2, "incidents": {}, "active_by_fingerprint": {}
@@ -252,7 +283,7 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertEqual(incident.alerts[0].value, 0.27)
             self.assertEqual(incident.fingerprint, self.fp)
             self.assertEqual({t["name"] for t in kwargs["tools"]},
-                             set(tool_registry))
+                             set(tool_registry) | {"request_human_input"})
             return model_response()
 
         self.sdk.responses.create.side_effect = model_call
@@ -376,7 +407,7 @@ class IncidentRegressionTests(unittest.TestCase):
 
     def test_completed_result_is_successful(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
-        result = self.agent.investigate(incident)
+        result = self.run_investigation(incident)
         self.assertTrue(result.success)
         self.assertEqual(result.status, InvestigationStatus.COMPLETED)
         self.assertEqual(result.answer, "Test investigation completed.")
@@ -417,18 +448,21 @@ class IncidentRegressionTests(unittest.TestCase):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, empty=True)
         self.assertEqual(incident.evidence, [])
-        outputs = [i for i in self.agent.history if isinstance(i, dict) and i.get("type") == "function_call_output"]
-        self.assertEqual(json.loads(outputs[0]["output"])["status"], "no_data")
+        session = self.manager.store.list_sessions()[-1]
+        checkpoint = self.manager.store.load_checkpoint(session)
+        self.assertEqual([r for r in checkpoint["records"] if r["name"] == "query_metrics"][0]["result"]["status"], "no_data")
 
     def test_undefined_metric_does_not_become_valid_evidence(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, value="NaN")
         self.assertEqual(incident.evidence, [], "An undefined 0/0 rate must not be stored as successful metric evidence")
 
-    def test_identical_evidence_across_investigations_is_not_duplicated(self):
+    def test_reprojecting_same_observation_is_not_duplicated(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident)
-        self.investigate_with_metrics(incident)
+        self.manager.recover()
+        latest = self.store.get_incident(incident.incident_id)
+        self.assertEqual(len(latest.evidence), 1)
         self.assertEqual(len(incident.evidence), 1)
 
     def test_changed_evidence_across_investigations_is_added(self):
@@ -440,16 +474,20 @@ class IncidentRegressionTests(unittest.TestCase):
 
     def test_evidence_key_order_does_not_defeat_deduplication(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
-        item = SimpleNamespace(name="query_metrics")
-        self.agent.add_evidence(incident, item, {"status": "ok", "value": 0.27}, True, False)
-        self.agent.add_evidence(incident, item, {"value": 0.27, "status": "ok"}, True, False)
+        self.sdk.responses.create.side_effect = [model_response(answer=None, calls=[
+            tool_call(call_id="first"),
+            tool_call(call_id="second", arguments={"metric": "http_5xx_rate", "service": "order-service"}),
+        ]), model_response()]
+        with patch.dict(tool_registry["query_metrics"], {"func": Mock(return_value={"status": "ok", "value": 0.27})}):
+            self.run_investigation(incident)
+        self.assertEqual(self.manager.store.list_sessions()[-1].cache_hits, 1)
         self.assertEqual(len(incident.evidence), 1)
 
     def test_failed_tools_do_not_become_evidence(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.sdk.responses.create.side_effect = [model_response(answer=None, calls=[tool_call()]), model_response()]
         with patch("tools.metrics.prometheus_client.query", side_effect=RuntimeError("test tool unavailable")):
-            self.agent.investigate(incident)
+            self.run_investigation(incident)
         self.assertEqual(incident.evidence, [])
 
     def test_prometheus_request_failure_is_logged_and_polling_recovers(self):
@@ -478,14 +516,15 @@ class IncidentRegressionTests(unittest.TestCase):
         self.prometheus.get_alerts.return_value = {"status": "success", "data": {"alerts": [raw_alert()]}}
         self.sdk.responses.create.side_effect = [RuntimeError("test investigation failed"), model_response()]
         with self.assertLogs("agent", level="ERROR") as captured, patch(
-            "monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]
+            "monitor.incident_monitor.time.sleep", side_effect=[lambda: None, KeyboardInterrupt]
         ):
-            self.monitor.run()
+            self.poll(raw_alert())
+            self.poll(raw_alert())
         self.assertEqual(self.prometheus.get_alerts.call_count, 2)
         self.assertEqual(self.sdk.responses.create.call_count, 1)
         self.assertEqual(len(self.store.load()["incidents"]), 1)
-        self.assertEqual(len(self.store.get_active_incident(self.fp).investigations), 0)
-        self.assertIn("test investigation failed", "\n".join(captured.output))
+        self.assertEqual(len(self.store.get_active_incident(self.fp).investigations), 1)
+        self.assertIn("reason=RuntimeError", "\n".join(captured.output))
 
     def test_one_agent_exception_does_not_block_other_alerts(self):
         self.sdk.responses.create.side_effect = [RuntimeError("test first investigation failed"), model_response()]
@@ -493,7 +532,8 @@ class IncidentRegressionTests(unittest.TestCase):
             self.poll(raw_alert(), raw_alert(service="inventory-service"))
         rows = list(self.store.load()["incidents"].values())
         self.assertEqual(len(rows), 2)
-        self.assertEqual([len(row["investigations"]) for row in rows], [0, 1])
+        self.assertEqual([len(row["investigations"]) for row in rows], [1, 1])
+        self.assertEqual(sum(row["investigations"][0]["status"] == "completed" for row in rows), 1)
 
     def test_agent_exception_preserves_previous_success_timestamp(self):
         previous = NOW - timedelta(minutes=REINVESTIGATE_COOLDOWN_MINUTES)
@@ -520,7 +560,10 @@ class IncidentRegressionTests(unittest.TestCase):
         self.poll(raw_alert())
         incident = self.store.get_active_incident(self.fp)
         self.assertIsNone(incident.last_investigated_at, "An incomplete model response must not update success timestamp")
-        self.assertNotEqual(incident.investigations[0].status, InvestigationStatus.COMPLETED)
+        self.assertEqual(incident.investigations, [])
+        session = self.manager.store.list_sessions()[0]
+        self.assertEqual(session.status.value, "WAITING_RETRY")
+        self.assertEqual(session.last_error_category, "model_incomplete")
 
     def test_invalid_alert_snapshot_does_not_falsely_resolve_active_incident(self):
         self.seed()

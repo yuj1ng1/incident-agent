@@ -9,6 +9,10 @@ class LostClaim(RuntimeErrorBase):
     pass
 
 
+class AttemptToolBudgetExhausted(RuntimeErrorBase):
+    """A soft per-attempt limit; session limits and fencing are separate."""
+
+
 TERMINAL = {S.COMPLETED, S.EXHAUSTED, S.FAILED, S.CANCELLED}
 TRANSITIONS = {
     S.CREATED: {S.QUEUED, S.CANCELLED, S.FAILED},

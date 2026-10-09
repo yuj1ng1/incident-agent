@@ -56,10 +56,8 @@ scheduler = Scheduler(Worker(runtime_manager, agent))
 
 monitor=IncidentMonitor(
     prometheus_client=prometheus_client,
-    agent=agent,
     incident_store=incident_store,
     poll_interval=ALERT_POLL_INTERVAL_SECONDS,
-    remediation_planner=runtime_manager.remediation_planner,
     investigation_manager=runtime_manager,
 )
 

@@ -8,6 +8,26 @@ from services.registry import registry, CapabilityUnavailable
 from tools.tool_registry import tool
 
 
+def version_transport_reason(exc):
+    if isinstance(exc, requests.Timeout):
+        return "version_timeout"
+    if isinstance(exc, requests.ConnectionError):
+        pending = [exc]
+        seen = set()
+        while pending and len(seen) < 20:
+            error = pending.pop()
+            if id(error) in seen:
+                continue
+            seen.add(id(error))
+            if isinstance(error, OSError) and (isinstance(error, ConnectionRefusedError)
+                                               or error.errno in {111, 10061} or getattr(error, "winerror", None) == 10061):
+                return "version_connection_refused"
+            pending.extend(item for item in (error.__cause__, error.__context__, getattr(error, "reason", None), *error.args)
+                           if isinstance(item, BaseException))
+        return "version_connection_error"
+    return "version_request_error"
+
+
 @tool
 def get_running_version(service: str) -> dict:
     """读取配置服务 /version 报告的运行 commit、UTC 进程启动时间和允许公开的开关。
@@ -28,28 +48,32 @@ def get_running_version(service: str) -> dict:
         }
     try:
         response = ServiceClient(settings.base_url).version(endpoint=settings.endpoint)
-    except requests.RequestException:
+    except requests.RequestException as exc:
         return {
             **result,
-            "reason": "version_unreachable",
+            "reason": version_transport_reason(exc),
         }
     except ValueError:
         return {
             **result,
             "reason": "invalid_version_response",
         }
+    if not isinstance(response, dict) or type(response.get("http_status")) is not int:
+        return {**result, "reason": "invalid_version_response"}
     if response["http_status"] != 200:
         return {
             **result,
             "reason": "version_http_error",
             "http_status": response["http_status"],
         }
-    body = response["body"]
-    if not isinstance(body, dict) or body.get("service") != service:
+    body = response.get("body")
+    if not isinstance(body, dict):
         return {
             **result,
             "reason": "invalid_version_response",
         }
+    if body.get("service") != service:
+        return {**result, "reason": "version_service_identity_unconfirmed"}
     flags = body.get("runtime_flags")
     started = body.get("process_started_at")
     try:
@@ -85,6 +109,8 @@ def get_running_version(service: str) -> dict:
         }
     )
     sha = body.get("commit_sha")
+    if "commit_sha" not in body:
+        return {**result, "reason": "commit_field_missing"}
     if (
         sha is None
         or sha == ""

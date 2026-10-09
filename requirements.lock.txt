@@ -1,0 +1,31 @@
+# Project dependency closure verified on Python 3.12.14 / Windows.
+# Includes pytest; generated from project roots, not a Conda environment export.
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+charset-normalizer==3.5.1
+colorama==0.4.6
+h11==0.16.0
+httpcore2==2.13.0
+httpx2==2.13.0
+idna==3.19
+iniconfig==2.3.0
+jiter==0.17.0
+openai==3.14.0
+packaging==26.3
+pluggy==1.6.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pydantic==2.13.5
+pydantic-core==2.46.5
+pygments==2.21.0
+pytest==9.1.1
+python-dotenv==1.2.3
+pyyaml==6.0.3
+requests==2.34.2
+sniffio==1.3.1
+truststore==0.10.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+tzdata==2026.4
+urllib3==2.7.0

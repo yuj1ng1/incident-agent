@@ -1,6 +1,13 @@
 """One background Worker leaves monitoring free while a session waits for humans."""
 import logging
 import threading
+import sqlite3
+
+from pydantic import ValidationError
+
+from investigation.checkpoint import protect
+from investigation.models import InvestigationSession, SessionStatus as S
+from investigation.state import RuntimeErrorBase, TERMINAL
 
 
 class Scheduler:
@@ -12,12 +19,63 @@ class Scheduler:
         self.thread = None
 
     def tick(self):
-        return self.worker.run_once()
+        result = self.worker.run_once()
+        self._notify_states()
+        return result
+
+    def _notify_states(self):
+        manager = self.worker.manager
+        for session in manager.store.list_sessions():
+            if session.status not in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
+                continue
+            workflow = manager.workflow(session.session_id, include_remediations=False)
+            session = InvestigationSession.model_validate(workflow["session"])
+            if session.status not in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
+                continue
+            pending = [r for r in workflow["human_requests"] if r["status"] == "pending"]
+            signature = ":".join((session.status.value, session.last_error_category or "",
+                                  pending[0]["request_id"] if pending else ""))
+            key = "terminal_notification:" + session.session_id
+            with manager.store.transaction() as db:
+                if manager.store.metadata(db, key) == signature:
+                    continue
+            lines = [
+                "[Investigation Completed]" if session.status == S.COMPLETED else (
+                    "[Human Input Required]" if session.status == S.WAITING_HUMAN else "[Investigation Status]"
+                ),
+                "", f"Incident: {session.incident_id}", f"Session: {session.session_id}",
+                f"Service: {session.service}", f"Status: {session.status.value}",
+                f"Model rounds: {session.total_model_requests}", f"Tool calls: {session.total_tool_executions}",
+            ]
+            if session.last_error_category:
+                lines.append("Last error: " + session.last_error_category)
+            if pending:
+                lines.extend(["Request: " + pending[0]["request_id"], "", "问题：", pending[0]["question"]])
+            result = workflow["investigation_result"]
+            if result and result.get("answer"):
+                lines.extend(["", "调查结论：", result["answer"]])
+            if workflow["proposal_evidence_gap"]:
+                lines.append("修复补证缺口：" + workflow["proposal_evidence_gap"])
+            if workflow["projection_error_category"]:
+                lines.append("Incident 投影待重试：" + workflow["projection_error_category"])
+            try:
+                # The displayed snapshot is already committed; stdout holds no DB lock.
+                print(protect("\n".join(lines)) + "\n", flush=True)
+            except (OSError, UnicodeError) as exc:
+                logging.getLogger(__name__).warning("Runtime display unavailable category=%s", type(exc).__name__)
+                continue
+            with manager.store.transaction() as db:
+                manager.store.metadata(db, key, signature, write=True)
+                manager.store.event(db, session.session_id, "operator_status_displayed", status=session.status.value)
 
     def run(self):
         while not self.stop_requested.is_set():
             try:
                 result = self.tick()
+            except (sqlite3.DatabaseError, RuntimeErrorBase, ValidationError, ValueError) as exc:
+                logging.getLogger(__name__).error("Runtime stopped; store consistency failure category=%s", type(exc).__name__)
+                self.stop_requested.set()
+                break
             except Exception:
                 logging.getLogger(__name__).exception("Runtime scheduler failed; durable state retained")
                 result = None

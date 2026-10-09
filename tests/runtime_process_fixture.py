@@ -1,24 +1,72 @@
 """Only this dedicated child exits abruptly; never terminates another process."""
 import os
+import json
+from datetime import datetime
 from pathlib import Path
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime_support import FixtureAgent, call, create_runtime, response
+from runtime_support import FixtureAgent, SHA, call, create_runtime, response
+from investigation.state import LostClaim
 from investigation.worker import Worker
 
 
 if __name__ == "__main__":
     manager = create_runtime(sys.argv[1])
     phase = sys.argv[2]
+    if phase == "claim-contender":
+        owner = sys.argv[3]
+        directory = Path(sys.argv[1])
+        (directory / ("ready-" + owner)).write_text("ready")
+        deadline = time.monotonic() + 30
+        while not (directory / "claim-release").exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("claim_barrier_timeout")
+            time.sleep(0.02)
+        claim = manager.store.claim(owner, manager.limits)
+        (directory / ("claim-" + owner + ".json")).write_text(json.dumps(
+            None if claim is None else {"session_id": claim.session_id, "fence": claim.fencing_token}
+        ))
+        if claim is not None:
+            deadline = time.monotonic() + 30
+            while not (directory / "fence-release").exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("fence_barrier_timeout")
+                time.sleep(0.02)
+            manager.store.clock = lambda: datetime.fromisoformat((directory / "clock.txt").read_text())
+            try:
+                with manager.store.transaction() as db:
+                    session = manager.store.guard(db, claim.session_id, owner, claim.fencing_token)
+                    manager.store.save(session, db)
+            except LostClaim:
+                result = "old_owner_fenced"
+            else:
+                result = "unsafe_stale_write"
+            (directory / "fence-result").write_text(result)
+        raise SystemExit(0)
+
+    source_call = call("get_source_file", {"service": "order-service", "path": "app.py", "ref": SHA})
+    agent = FixtureAgent([response(answer="", calls=[source_call]), response()])
+    original = agent.run_fixture_tool
+    def recorded_tool(item, **kwargs):
+        result = original(item, **kwargs)
+        with (Path(sys.argv[1]) / "tool-io.jsonl").open("a", encoding="utf-8") as output:
+            output.write(json.dumps({"name": item.name, "call_id": item.call_id}) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        return result
+    agent.tool_manager.run_tool = recorded_tool
     def boundary(name, session_id):
         if name == phase:
+            if phase == "tool_before_io" and len(agent.executions) < 1:
+                return
+            if phase in {"tool_after_io", "tool_checkpoint_committed"} and len(agent.executions) < 2:
+                return
             os._exit(23)
-    agent = FixtureAgent([response(answer="", calls=[call()]), response()])
     if phase == "wait-model":
         count = 0
-        def waiting_response(*args):
+        def waiting_response(*args, **kwargs):
             global count
             count += 1
             if count > 1:

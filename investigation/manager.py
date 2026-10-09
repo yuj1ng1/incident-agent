@@ -1,11 +1,12 @@
 """Application service shared by local CLI, Monitor and future authenticated Web."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 
 from config import RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
 from investigation.models import HumanCommand, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
 from investigation.state import RuntimeErrorBase, TERMINAL, exhausted, transition
+from storage_lock import FileLockError
 
 
 class InvestigationManager:
@@ -113,6 +114,22 @@ class InvestigationManager:
             sessions = [self.store.get(session_id, db)] if session_id else self.store.list_sessions(db)
             return [r for s in sessions for r in self._requests(db, s.session_id)]
 
+    def unblock_model(self, actor):
+        """Explicit local operator action; cancellation never implies authentication recovery."""
+        if not isinstance(actor, str) or not actor.strip() or len(actor) > 100:
+            raise RuntimeErrorBase("actor_required_max_100")
+        with self.store.transaction() as db:
+            category = self.store.metadata(db, "model_blocked")
+            self.store.metadata(db, "model_blocked", None, write=True)
+            self.store.metadata(db, "last_model_unblock", {
+                "actor": protect(actor), "at": self.store.clock().isoformat(), "previous_reason": category,
+            }, write=True)
+            if category:
+                for session in self.store.list_sessions(db):
+                    if session.last_error_category == category:
+                        self.store.event(db, session.session_id, "model_unblocked", protect(actor), category=category)
+        return {"model_blocked": None, "previous_reason": category}
+
     def process_commands(self, session_id, claim=None, payload=None):
         with self.store.transaction() as db:
             session = self.store.get(session_id, db)
@@ -219,6 +236,7 @@ class InvestigationManager:
                     or session.resume_count > self.limits.max_resumes
                 ) and not checkpoint.get("result", {}).get("success"):
                     transition(session, S.EXHAUSTED)
+                    session.last_error_category = "session_duration_or_resume_budget_exhausted"
                     session.completed_at = self.store.clock()
                     changed = True
                 elif any(r.status == "pending" for r in self._requests(db, session_id)):
@@ -300,10 +318,12 @@ class InvestigationManager:
                             and not self.store.load_checkpoint(session, db).get("result", {}).get("success")
                         ):
                             transition(session, S.EXHAUSTED)
+                            session.last_error_category = "session_budget_exhausted"
                             changed = True
                         elif session.status == S.RUNNING:
                             if session.resume_count >= self.limits.max_resumes:
                                 transition(session, S.EXHAUSTED)
+                                session.last_error_category = "session_resume_budget_exhausted"
                             else:
                                 session.resume_count += 1
                                 transition(session, S.QUEUED)
@@ -346,57 +366,86 @@ class InvestigationManager:
         with self.store.transaction() as db:
             session = self.store.get(session_id, db)
             checkpoint = self.store.load_checkpoint(session, db)
-            if checkpoint.get("projected") and not checkpoint.get("remediation_pending"):
+        if checkpoint.get("projected") and not checkpoint.get("remediation_pending"):
+            return
+        for field in ("projection_retry_at", "remediation_retry_at"):
+            retry_at = checkpoint.get(field)
+            if retry_at and datetime.fromisoformat(retry_at.replace("Z", "+00:00")) > self.store.clock():
                 return
-            retry_at = checkpoint.get("remediation_retry_at")
-            if retry_at:
-                from datetime import datetime
-                if datetime.fromisoformat(retry_at.replace("Z", "+00:00")) > self.store.clock():
-                    return
-            if not checkpoint.get("projected"):
+        events = []
+        if not checkpoint.get("projected"):
+            try:
+                # File I/O is outside SQLite. Malformed data/schema errors propagate;
+                # only a write/lock failure of this projection is isolated.
                 self.incident_store.apply_runtime_projection(session, checkpoint)
-            if session.status in TERMINAL:
-                checkpoint["remediation_pending"] = False
-                if session.status == S.COMPLETED and self.remediation_planner is not None:
-                    from investigation.evidence_policy import effective_records
-                    from models.incident import Evidence
-                    from models.investigation import InvestigationResult
-                    records = effective_records(checkpoint.get("records", []), checkpoint.get("identity"), self.store.clock())
-                    versions = [r for r in records if r["name"] == "get_running_version"]
-                    if versions and checkpoint.get("result", {}).get("success"):
-                        from remediation.state import RemediationError
-                        try:
-                            proposal = self.remediation_planner.propose(
-                                self.incident_store.get_incident(session.incident_id),
-                                InvestigationResult.model_validate(checkpoint["result"]),
-                                [Evidence(source=r["name"], summary="Runtime 有效观测",
-                                          detail=json.dumps(r["result"], ensure_ascii=False)) for r in records],
-                            )
-                            if proposal is not None:
-                                self.store.event(db, session_id, "remediation_proposed",
-                                                 proposal_id=proposal.proposal_id, status=proposal.status.value)
-                        except (RemediationError, OSError, ValueError) as exc:
-                            checkpoint["remediation_pending"] = True
-                            checkpoint["remediation_retry_at"] = (self.store.clock() + timedelta(seconds=30)).isoformat()
-                            self.store.event(db, session_id, "remediation_projection_failed", category=type(exc).__name__)
-                checkpoint["projected"] = True
+            except (OSError, FileLockError) as exc:
+                attempts = checkpoint.get("projection_attempts", 0) + 1
+                checkpoint["projection_attempts"] = attempts
+                checkpoint["projection_error_category"] = type(exc).__name__
+                delay = min(300, self.limits.retry_base_seconds * 2 ** min(attempts - 1, 8))
+                checkpoint["projection_retry_at"] = (self.store.clock() + timedelta(seconds=delay)).isoformat()
+                events.append(("incident_projection_failed", {"category": type(exc).__name__, "retry_seconds": delay}))
+            else:
+                checkpoint["projection_retry_at"] = None
+                checkpoint["projection_error_category"] = None
+        if not checkpoint.get("projection_error_category") and session.status in TERMINAL:
+            checkpoint["remediation_pending"] = False
+            checkpoint["remediation_retry_at"] = None
+            if session.status == S.COMPLETED and self.remediation_planner is not None and not checkpoint.get("proposal_evidence_gap"):
+                from investigation.evidence_policy import effective_records
+                from models.incident import Evidence
+                from models.investigation import InvestigationResult
+                records = effective_records(checkpoint.get("records", []), checkpoint.get("identity"),
+                                            self.store.clock(), session.service)
+                versions = [r for r in records if r["name"] == "get_running_version"]
+                if versions and checkpoint.get("result", {}).get("success"):
+                    from remediation.state import RemediationError
+                    try:
+                        proposal = self.remediation_planner.propose(
+                            self.incident_store.get_incident(session.incident_id),
+                            InvestigationResult.model_validate(checkpoint["result"]),
+                            [Evidence(source=r["name"], summary="Runtime 有效观测",
+                                      detail=json.dumps(r["result"], ensure_ascii=False)) for r in records],
+                        )
+                        if proposal is not None:
+                            events.append(("remediation_proposed", {"proposal_id": proposal.proposal_id, "status": proposal.status.value}))
+                    except (RemediationError, OSError, FileLockError, ValueError) as exc:
+                        checkpoint["remediation_pending"] = True
+                        checkpoint["remediation_retry_at"] = (self.store.clock() + timedelta(seconds=30)).isoformat()
+                        events.append(("remediation_projection_failed", {"category": type(exc).__name__}))
+            checkpoint["projected"] = True
+        # A concurrent Worker may have saved a newer checkpoint during file I/O.
+        # Acknowledge only the snapshot actually projected; newer work stays pending.
+        with self.store.transaction() as db:
+            latest = self.store.get(session_id, db)
+            if latest.state_version != session.state_version:
+                return
+            if session.status in TERMINAL or events or checkpoint.get("projection_attempts"):
                 self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep)
                 self.store.save(session, db)
+            for name, metadata in events:
+                self.store.event(db, session_id, name, **metadata)
 
-    def workflow(self, session_id):
-        session = self.store.get(session_id)
-        checkpoint = self.store.load_checkpoint(session)
+    def workflow(self, session_id, include_remediations=True):
         with self.store.transaction() as db:
+            session = self.store.get(session_id, db)
+            checkpoint = self.store.load_checkpoint(session, db)
+            requests = self._requests(db, session_id)
             messages = db.execute(
                 "SELECT data,consumed_at FROM human_messages WHERE session_id=? ORDER BY sequence", (session_id,)
             ).fetchall()
-        proposals = [] if self.remediation_planner is None else [
+        proposals = [] if self.remediation_planner is None or not include_remediations else [
             p.model_dump(mode="json") for p in self.remediation_planner.store.list()
             if p.incident_id == session.incident_id
         ]
         return {
             "session": session.model_dump(mode="json"),
-            "human_requests": [r.model_dump(mode="json") for r in self.requests(session_id)],
+            "investigation_result": checkpoint.get("result"),
+            "limits": self.limits.model_dump(mode="json"),
+            "proposal_evidence_gap": checkpoint.get("proposal_evidence_gap"),
+            "projection_error_category": checkpoint.get("projection_error_category"),
+            "projection_retry_at": checkpoint.get("projection_retry_at"),
+            "human_requests": [r.model_dump(mode="json") for r in requests],
             "human_messages": [json.loads(r["data"]) | {"consumed_at": r["consumed_at"]} for r in messages],
             "checkpoint_summary": {
                 "phase": checkpoint["phase"],

@@ -1,16 +1,17 @@
 """Single synchronous Worker: durable I/O boundaries and cooperative interruption."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import openai
+from agent_logger.logger_config import logger
 
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import protect, restore_context, valid_chain
-from investigation.evidence_policy import cache_key, effective_records, fresh, stable
+from investigation.evidence_policy import TTL, cache_key, effective_records, fresh
 from investigation.models import SessionStatus as S
-from investigation.state import LostClaim, RuntimeErrorBase, exhausted, transition
+from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, exhausted, transition
 from models.incident import Evidence
 from models.investigation import InvestigationResult, InvestigationStatus
 from services.registry import registry
@@ -31,6 +32,8 @@ HUMAN_TOOL = {
 
 class Worker:
     def __init__(self, manager, agent, boundary_hook=None, provider_verified=False):
+        if set(tool_registry) - set(TTL):
+            raise RuntimeErrorBase("tool_evidence_policy_missing")
         self.manager = manager
         self.store = manager.store
         self.agent = agent
@@ -102,12 +105,12 @@ class Worker:
     def _reserve(self, session_id, claim, checkpoint, kind):
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
-            if (
-                (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds
-                or (kind == "model" and session.total_model_requests >= self.manager.limits.max_model_requests)
-                or (kind == "tool" and session.total_tool_executions >= self.manager.limits.max_tool_executions)
-            ):
-                raise RuntimeErrorBase("session_budget_exhausted")
+            if (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds:
+                raise RuntimeErrorBase("session_duration_exhausted")
+            if kind == "model" and session.total_model_requests >= self.manager.limits.max_model_requests:
+                raise RuntimeErrorBase("session_model_budget_exhausted")
+            if kind == "tool" and session.total_tool_executions >= self.manager.limits.max_tool_executions:
+                raise RuntimeErrorBase("session_tool_budget_exhausted")
             if kind == "model":
                 if session.current_attempt_rounds >= MAX_AGENT_LOOPS:
                     raise RuntimeErrorBase("attempt_budget_exhausted")
@@ -115,7 +118,7 @@ class Worker:
                 session.total_model_requests += 1
             else:
                 if session.current_attempt_tool_calls >= MAX_TOOL_CALLS:
-                    raise RuntimeErrorBase("attempt_tool_budget_exhausted")
+                    raise AttemptToolBudgetExhausted("attempt_tool_budget_exhausted")
                 session.current_attempt_tool_calls += 1
                 session.total_tool_executions += 1
             checkpoint["phase"] = kind + "_started"
@@ -153,7 +156,9 @@ class Worker:
         checkpoint["investigated_value"] = incident.alerts[-1].value
         checkpoint["investigated_state"] = incident.alerts[-1].state
         # Historical dynamic observations remain persisted but are not current facts.
-        records = effective_records(checkpoint["records"], checkpoint.get("identity"), self.store.clock())
+        now = self.store.clock()
+        current = effective_records(checkpoint["records"], checkpoint.get("identity"), now, session.service)
+        records = current
         bounded = []
         context_bytes = 0
         keys = set()
@@ -168,29 +173,83 @@ class Worker:
                                    for r in incident.investigations[-3:]]
         incident.evidence = [Evidence(
             source=r["name"],
-            summary="当前有效的工具观测",
-            detail=json.dumps(r["result"], ensure_ascii=False),
+            summary="当前有效的工具观测（截至本轮上下文采集时间）",
+            observation_id=r["observation_id"],
+            collected_at=r["collected_at"],
+            detail=json.dumps(self._observation_summary(r["result"]) if r["name"] == "query_logs" else r["result"], ensure_ascii=False),
         ) for r in records]
+        historical = []
+        missing = []
+        summary_bytes = 0
+        seen = set()
+        for record in reversed(checkpoint["records"]):
+            if record in records or record["cache_key"] in seen:
+                continue
+            seen.add(record["cache_key"])
+            observation = {
+                "observation_id": record["observation_id"],
+                "name": record["name"],
+                "target": record["arguments"].get("service", record["arguments"].get("dependency", session.service)),
+                "arguments": record["arguments"],
+                "collected_at": record["collected_at"],
+                "status": record["result"].get("status"),
+                "expired": not fresh(record, now),
+                "use_for_current_state": False,
+                "result": self._observation_summary(record["result"]),
+            }
+            if record in current:
+                observation["context_note"] = "current_observation_omitted_by_size_limit"
+            elif fresh(record, now):
+                observation["context_note"] = "reference_only_or_runtime_identity_changed"
+            size = len(json.dumps(observation, ensure_ascii=False).encode("utf-8"))
+            if summary_bytes + size > 20000:
+                continue
+            summary_bytes += size
+            (historical if record["success"] and record["result"].get("status") == "ok" else missing).append(observation)
+        # B still delivers call/result identities explicitly. It does not fabricate a
+        # Responses chain for an unverified provider or replay unsaved tool outputs.
+        outputs = {i["call_id"]: i["output"] for i in checkpoint.get("history", [])
+                   if i.get("type") == "function_call_output"}
+        call_results = []
+        call_summary_bytes = 0
+        for item in checkpoint.get("history", []):
+            if item.get("type") != "function_call" or item.get("call_id") not in outputs:
+                continue
+            cached_reference = next((t.get("observation_id") for t in reversed(checkpoint["trace"])
+                                     if t.get("call_id") == item["call_id"] and t.get("from_cache")), None)
+            output = json.loads(outputs[item["call_id"]])
+            observation = next((r for r in reversed(checkpoint["records"])
+                                if (r["call_id"] == item["call_id"] or r["observation_id"] == cached_reference)
+                                and r["name"] == item["name"] and r["result"] == output), None)
+            summary = self._observation_summary(output)
+            size = len(json.dumps(summary, ensure_ascii=False).encode("utf-8"))
+            if call_summary_bytes + size > 16000:
+                summary = {key: summary[key] for key in ("status", "reason") if key in summary} | {"summary_truncated": True}
+            else:
+                call_summary_bytes += size
+            call_results.append({
+                "call_id": item["call_id"],
+                "name": item["name"],
+                "result": summary,
+                "observation_id": observation["observation_id"] if observation else None,
+                "collected_at": observation["collected_at"] if observation else None,
+                "use_for_current_state": observation in current if observation else False,
+            })
         rebuilt = self.agent.build_incident_prompt(incident) + "\n" + json.dumps({
             "recovery": "基于结构化证据重建上下文，不是原模型推理的精确继续",
             "human_provided_unverified_context": checkpoint.get("messages", []),
-            "tool_failures_and_historical_observations": [
-                {
-                    "name": r["name"],
-                    "status": r["result"].get("status"),
-                    "collected_at": r["collected_at"],
-                    "current": fresh(r, self.store.clock()),
-                }
-                for r in checkpoint["records"] if r not in records
-            ],
+            "historical_observations": list(reversed(historical)),
+            "failed_or_missing_observations": list(reversed(missing)),
+            "recent_function_call_results": call_results,
+            "evidence_usage": "只有当前有效证据用于当前状态判断；历史观测只说明采集时的状态，固定 SHA 是版本参考。人类线索尚未验证。",
+            "context_collected_at": now.isoformat(),
             "remaining_session_budget": {
                 "models": self.manager.limits.max_model_requests - session.total_model_requests,
                 "tools": self.manager.limits.max_tool_executions - session.total_tool_executions,
             },
         }, ensure_ascii=False)
         chain_fresh = all(
-            stable(r["name"], r["arguments"])
-            or (fresh(r, self.store.clock()) and r.get("identity") == checkpoint.get("identity"))
+            r in current
             for r in checkpoint["records"] if r.get("result", {}).get("status") == "ok"
         )
         return restore_context(
@@ -198,6 +257,32 @@ class Worker:
             rebuilt,
             provider_verified=self.provider_verified and chain_fresh,
         )[0]
+
+    @staticmethod
+    def _observation_summary(result):
+        """Bound summaries, including logs/source, without dropping useful scalar fields."""
+        truncated = False
+        def bounded(value, depth=0):
+            nonlocal truncated
+            if isinstance(value, dict):
+                if depth >= 4:
+                    truncated = True
+                    return "[summary truncated]"
+                truncated |= len(value) > 24
+                return {key: bounded(item, depth + 1) for key, item in list(value.items())[:24]}
+            if isinstance(value, list):
+                truncated |= len(value) > 3
+                return [bounded(item, depth + 1) for item in value[-3:]]
+            if isinstance(value, str):
+                truncated |= len(value) > 1000
+                return value[:1000] + (" [summary truncated]" if len(value) > 1000 else "")
+            return value
+        summary = bounded(protect(result))
+        if truncated:
+            summary["summary_truncated"] = True
+        if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
+            return {key: summary[key] for key in ("status", "reason", "service", "dependency", "value", "reachable", "ref", "commit_sha") if key in summary} | {"summary_truncated": True}
+        return summary
 
     def _validate_tool(self, name, arguments, service):
         entry = tool_registry.get(name)
@@ -222,30 +307,65 @@ class Worker:
             raise RuntimeErrorBase("tool_target_outside_session")
 
     def _tool(self, session_id, claim, checkpoint, item, force=False):
-        session = self.store.get(session_id)
+        with self.store.transaction() as db:
+            session = self.store.guard(db, session_id, *claim)
+            if (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds:
+                raise RuntimeErrorBase("session_duration_exhausted")
         try:
             arguments = json.loads(item.arguments)
             if not isinstance(arguments, dict):
                 raise RuntimeErrorBase("invalid_tool_arguments")
             self._validate_tool(item.name, arguments, session.service)
+        except LostClaim:
+            raise
         except (ValueError, TypeError, RuntimeErrorBase):
             with self.store.transaction() as db:
                 self.store.guard(db, session_id, *claim)
                 self.store.event(db, session_id, "tool_rejected", tool=item.name)
+            self.agent.tool_manager.log_result(item.name, session.service, "invalid_or_unallowed_tool_call", session_id=session_id)
             return {"status": "invalid_or_unallowed_tool_call"}, False
         key = cache_key(session.service, item.name, arguments, checkpoint.get("identity"))
+        target = arguments.get("service", arguments.get("dependency", session.service))
         cached = next((r for r in reversed(checkpoint["records"])
                        if r["cache_key"] == key and fresh(r, self.store.clock())), None)
+        if cached is None and item.name == "get_running_version":
+            # A short negative cache describes a failed probe, never successful evidence.
+            cached = next((r for r in reversed(checkpoint["records"])
+                           if r["cache_key"] == key and r["result"].get("status") in {"no_data", "tool_error"}
+                           and 0 <= (self.store.clock() - datetime.fromisoformat(r["collected_at"])).total_seconds() < 5), None)
         if cached and not force:
             with self.store.transaction() as db:
                 current = self.store.guard(db, session_id, *claim)
                 current.cache_hits += 1
                 self.store.save(current, db)
                 self.store.event(db, session_id, "tool_cache_hit", tool=item.name)
+            checkpoint["trace"].append({
+                "name": item.name, "call_id": item.call_id, "from_cache": True,
+                "status": cached["result"].get("status"), "observation_id": cached["observation_id"],
+            })
+            self.agent.tool_manager.log_result(item.name, target, cached["result"].get("status"),
+                                               cached["result"].get("reason"), cached=True, session_id=session_id)
             return cached["result"], True
-        self._reserve(session_id, claim, checkpoint, "tool")
+        try:
+            self._reserve(session_id, claim, checkpoint, "tool")
+        except AttemptToolBudgetExhausted:
+            # No observation or execution counter for a call that never ran.
+            with self.store.transaction() as db:
+                self.store.guard(db, session_id, *claim)
+                self.store.event(db, session_id, "tool_budget_rejected", tool=item.name,
+                                 call_id=item.call_id, reason="attempt_tool_budget_exhausted")
+            checkpoint["trace"].append({
+                "name": item.name,
+                "call_id": item.call_id,
+                "status": "tool_limit_reached",
+                "executed": False,
+                "from_cache": False,
+            })
+            self.agent.tool_manager.log_result(item.name, target, "tool_limit_reached",
+                                               "attempt_tool_budget_exhausted", session_id=session_id)
+            return {"status": "tool_limit_reached", "reason": "attempt_tool_budget_exhausted"}, False
         self._boundary("tool_before_io", session_id)
-        success, _, raw = self.agent.tool_manager.run_tool(item)
+        success, _, raw = self.agent.tool_manager.run_tool(item, session_id=session_id)
         self._boundary("tool_after_io", session_id)
         result = protect(raw) if isinstance(raw, dict) else {"status": "invalid_tool_result"}
         if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 65536:
@@ -266,6 +386,7 @@ class Worker:
         elif item.name == "get_running_version":
             checkpoint["identity"] = {"unverified_instance": uuid4().hex}
             checkpoint["history"] = []
+            key = cache_key(session.service, item.name, arguments, checkpoint["identity"])
         record = {
             "observation_id": "obs-" + uuid4().hex,
             "name": item.name,
@@ -312,7 +433,6 @@ class Worker:
                 arguments=json.dumps({"service": session.service}),
                 call_id="runtime-probe-" + uuid4().hex,
             ), force=True)
-        history = self._context(session_id, checkpoint)
         while True:
             alive, changed = self._safe(session_id, claim, checkpoint)
             if not alive:
@@ -328,6 +448,8 @@ class Worker:
                 session.current_attempt_tool_calls,
                 [HUMAN_TOOL] if session.human_request_count < self.manager.limits.max_human_requests else [],
                 self.manager.limits.model_timeout_seconds,
+                remaining_tools=max(0, self.manager.limits.max_tool_executions - session.total_tool_executions),
+                remaining_rounds=max(0, self.manager.limits.max_model_requests - session.total_model_requests + 1),
             )
             self._boundary("model_after_io", session_id)
             if getattr(response, "status", None) != "completed":
@@ -382,13 +504,7 @@ class Worker:
                     checkpoint["phase"] = "waiting_human"
                     self.manager.request_human(session_id, claim, arguments["question"], checkpoint)
                     return
-                result, cached = self._tool(session_id, claim, checkpoint, call)
-                if cached:
-                    checkpoint["trace"].append({
-                        "name": call.name,
-                        "from_cache": True,
-                        "status": result.get("status"),
-                    })
+                result, _ = self._tool(session_id, claim, checkpoint, call)
                 history.append(self.agent.tool_manager.build_output_item(call, result))
                 checkpoint["pending"] = [p for p in checkpoint["pending"] if p["call_id"] != call.call_id]
                 checkpoint["history"] = history
@@ -422,13 +538,20 @@ class Worker:
             return True
         session = self.store.get(session_id)
         if (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds:
+            checkpoint["proposal_evidence_gap"] = "session_duration_exhausted"
             return True
         incident = self.manager.incident_store.get_incident(session.incident_id)
         # A historical candidate is only a reason to collect more evidence; never an approval.
         observations = [r for r in checkpoint["records"] if r["result"].get("status") == "ok"]
         evidence = [Evidence(source=r["name"], summary="历史候选观测",
                              detail=json.dumps(r["result"], ensure_ascii=False)) for r in observations]
-        candidate = planner.plan(incident, InvestigationResult.model_validate(checkpoint["result"]), evidence)
+        from remediation.state import RemediationError
+        try:
+            candidate = planner.plan(incident, InvestigationResult.model_validate(checkpoint["result"]), evidence)
+        except (RemediationError, OSError, ValueError) as exc:
+            checkpoint["proposal_evidence_gap"] = "proposal_planning_" + type(exc).__name__
+            self._save(session_id, claim, checkpoint, "proposal_refresh_failed")
+            return True
         if candidate is None:
             return True
         names = ("get_running_version", "query_logs", "check_dependency_health")
@@ -440,6 +563,7 @@ class Worker:
         available = min(MAX_TOOL_CALLS - session.current_attempt_tool_calls,
                         self.manager.limits.max_tool_executions - session.total_tool_executions)
         if len(required) > available:
+            checkpoint["proposal_evidence_gap"] = "proposal_refresh_budget_unavailable"
             with self.store.transaction() as db:
                 self.store.guard(db, session_id, *claim)
                 self.store.event(db, session_id, "proposal_refresh_budget_unavailable")
@@ -452,10 +576,24 @@ class Worker:
                 checkpoint.pop("result", None)
                 self._yield(session_id, claim, checkpoint, "human_context_changed_before_completion")
                 return False
-            self._tool(session_id, claim, checkpoint, SimpleNamespace(
-                name=record["name"], arguments=json.dumps(record["arguments"]),
-                call_id="proposal-refresh-" + uuid4().hex,
-            ), force=True)
+            try:
+                result, _ = self._tool(session_id, claim, checkpoint, SimpleNamespace(
+                    name=record["name"], arguments=json.dumps(record["arguments"]),
+                    call_id="proposal-refresh-" + uuid4().hex,
+                ), force=True)
+            except LostClaim:
+                raise
+            except RuntimeErrorBase as exc:
+                if str(exc) not in {"session_duration_exhausted", "session_tool_budget_exhausted",
+                                    "attempt_tool_budget_exhausted"}:
+                    raise
+                checkpoint["proposal_evidence_gap"] = str(exc)
+                self._save(session_id, claim, checkpoint, "proposal_refresh_failed")
+                return True
+            if result.get("status") != "ok":
+                checkpoint["proposal_evidence_gap"] = "proposal_refresh_missing_observation"
+                self._save(session_id, claim, checkpoint, "proposal_refresh_failed")
+                return True
         alive, changed = self._safe(session_id, claim, checkpoint)
         if alive and changed:
             checkpoint.pop("result", None)
@@ -481,7 +619,7 @@ class Worker:
         )
         transient = status == 429 or (status is not None and status >= 500) or isinstance(
             exc, (openai.APIConnectionError, TimeoutError)
-        ) or category in {"model_incomplete", "attempt_budget_exhausted", "attempt_tool_budget_exhausted"}
+        ) or category == "model_incomplete"
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
             session.last_error_category = category
@@ -489,7 +627,11 @@ class Worker:
                 target = S.PAUSED
                 self.store.metadata(db, "model_blocked", category, write=True)
                 event = "model_blocked"
-            elif category == "session_budget_exhausted" or exhausted(session, self.manager.limits, self.store.clock()):
+            elif category in {
+                "session_budget_exhausted", "session_duration_exhausted",
+                "session_model_budget_exhausted", "session_tool_budget_exhausted",
+                "attempt_budget_exhausted",
+            } or exhausted(session, self.manager.limits, self.store.clock()):
                 target = S.EXHAUSTED
                 event = "budget_exhausted"
             elif transient and session.attempt_count < self.manager.limits.max_attempts:
@@ -507,11 +649,14 @@ class Worker:
             session.lease_until = None
             if target in {S.EXHAUSTED, S.FAILED}:
                 session.completed_at = self.store.clock()
-                checkpoint["result"] = {
-                    "success": False,
-                    "status": InvestigationStatus.MODEL_INCOMPLETE.value,
-                    "answer": "调查停止：" + category,
-                }
+                if not checkpoint.get("result"):
+                    checkpoint["result"] = {
+                        "success": False,
+                        "status": (InvestigationStatus.MAX_ROUND_REACHED.value
+                                   if category == "attempt_budget_exhausted" else InvestigationStatus.MODEL_INCOMPLETE.value),
+                        "answer": "调查停止：" + category,
+                    }
             self.store.checkpoint(session, checkpoint, db, self.manager.limits.checkpoints_to_keep)
             self.store.save(session, db)
             self.store.event(db, session_id, event, category=category)
+        logger.error("调查状态更新 session=%s status=%s reason=%s", session_id, target.value, category)

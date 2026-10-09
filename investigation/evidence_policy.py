@@ -11,11 +11,15 @@ TTL = {
     "query_metrics": 15,
     "check_service_health": 15,
     "check_dependency_health": 15,
+    "check_scrape_target": 15,
     "get_running_version": 15,
     "query_logs": 30,
     "get_recent_code_changes": 60,
     "get_service_dependencies": 300,
     "get_service_capabilities": 300,
+    # Mutable refs (including short SHAs) expire; full SHAs are handled by stable().
+    "get_source_file": 60,
+    "get_commit_diff": 60,
 }
 
 
@@ -28,10 +32,13 @@ def stable(name, arguments):
 
 def cache_key(service, name, arguments, identity=None):
     profile = registry.get(service)
-    dependency = registry.get(arguments.get("dependency"))
+    target_name = arguments.get("dependency")
+    if target_name is None and arguments.get("service", service) != service:
+        target_name = arguments["service"]
+    target = registry.get(target_name)
     config = [
         profile.model_dump(mode="json") if profile else None,
-        dependency.model_dump(mode="json") if dependency else None,
+        target.model_dump(mode="json") if target else None,
     ]
     content = [service, name, arguments, config, None if stable(name, arguments) else identity]
     return hashlib.sha256(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
@@ -39,7 +46,11 @@ def cache_key(service, name, arguments, identity=None):
 
 def fresh(record, now=None):
     now = now or utc_now()
-    if record.get("result", {}).get("status") != "ok" or not record.get("success"):
+    if (
+        record.get("name") not in TTL
+        or record.get("result", {}).get("status") != "ok"
+        or not record.get("success")
+    ):
         return False
     try:
         collected = datetime.fromisoformat(record["collected_at"].replace("Z", "+00:00"))
@@ -48,15 +59,28 @@ def fresh(record, now=None):
         return False
     if age < 0:
         return False
-    return stable(record["name"], record["arguments"]) or age <= TTL.get(record["name"], 0)
+    return stable(record["name"], record["arguments"]) or age <= TTL[record["name"]]
 
 
-def effective_records(records, identity=None, now=None):
+def effective_records(records, identity=None, now=None, service=None):
+    """Current-state evidence, distinct from cacheable immutable reference material."""
     return [
         record for record in records
         if fresh(record, now)
         and (
-            stable(record["name"], record["arguments"])
-            or record.get("identity") == identity
+            (
+                stable(record["name"], record["arguments"])
+                and ((identity or {}).get("commit_sha") or "").lower() == (
+                    record["arguments"].get("ref") if record["name"] == "get_source_file"
+                    else record["arguments"].get("commit_sha")
+                ).lower()
+            )
+            or (
+                record["name"] not in {"get_source_file", "get_commit_diff"}
+                and record.get("identity") == identity
+            )
         )
+        and (service is None or record.get("cache_key") == cache_key(
+            service, record["name"], record["arguments"], record.get("identity")
+        ))
     ]

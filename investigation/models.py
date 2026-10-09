@@ -134,3 +134,7 @@ class Checkpoint(Record):
     projected: bool = False
     remediation_pending: bool = False
     remediation_retry_at: datetime | None = None
+    proposal_evidence_gap: str | None = None
+    projection_attempts: int = Field(default=0, ge=0)
+    projection_retry_at: datetime | None = None
+    projection_error_category: str | None = None

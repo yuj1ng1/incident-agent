@@ -624,7 +624,7 @@ class ObservationTests(unittest.TestCase):
         ):
             self.assertEqual(
                 get_running_version("inventory-service")["reason"],
-                "invalid_version_response",
+                "version_service_identity_unconfirmed",
             )
 
     def test_custom_runtime_endpoint(self):

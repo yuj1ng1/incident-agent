@@ -4,16 +4,57 @@
 
 当前版本：完成告警生命周期监控、Incident 持久化和回归问题修复。
 
+调查统一由 `IncidentMonitor → InvestigationManager → Scheduler/Worker → Agent → ToolManager` 执行。
+Agent 保留 Prompt、FunctionCall 解析与回答解释；旧同步 `Agent.investigate()` 已移除。
+
+## 运行环境与结果查询
+
+项目要求 Pydantic 2；默认 Conda base 的 Pydantic 1 无法导入 `field_validator`。
+已验证环境为 `agentlearn`：Python 3.12.14、Pydantic 2.13.5、OpenAI SDK 3.14.0。
+在 PowerShell 中先进入项目目录，再显式选择解释器：
+
+```powershell
+Set-Location 'D:\Incident Agent'
+& 'D:\conda\envs\agentlearn\python.exe' -B main.py
+& 'D:\conda\envs\agentlearn\python.exe' -B -m pytest tests -q --disable-warnings
+```
+
+也可先 `conda activate agentlearn`。在新的 Python 3.12 环境中使用
+`python -m pip install -r requirements.lock.txt` 安装本项目及 pytest 的固定依赖；
+该文件只包含项目依赖闭包，没有导出 Conda 中的无关包。一般依赖声明仍在 `requirements.txt`。
+`.github/workflows/runtime-tests.yml` 在 Windows/Python 3.12 运行隔离回归，测试不需要真实密钥。
+
+Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回答；
+等待人类时显示 `[Human Input Required]`、Request ID 和问题。
+通知使用 SQLite 中的简单标记避免每次轮询或重启重复展示。
+终端故障不影响结果保存，CLI 可随时主动查询历史结果：
+
+```powershell
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-sessions
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-session ses-替换为真实ID
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-human-requests
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py answer-human-request ses-替换为真实ID --request-id req-替换为真实ID --actor 本地操作员 --text '回答内容'
+```
+
+`show-session` 包含 `investigation_result.answer`、Session 计数、限制、HumanRequest、
+错误类别及投影重试信息。自定义 `--store`、`--incidents`、`--remediations` 参数放在子命令之前。
+模型认证/余额错误会全局阻塞请求；取消 Session 不代表问题已修复。
+修正认证/余额后，可显式运行 `runtime_cli.py unblock-model --actor 本地操作员`；
+暂停的 Session 仍需 `resume`，已取消的 Session 不会复活。修复批准与执行继续使用独立 `remediation_cli.py`。
+
+本次问题核实、预算规则、测试结果和未验证范围见 [Runtime 质量修复验证记录](docs/RUNTIME_QUALITY_FIX_VALIDATION_2026-10-09_19-01-18.md)。
+
 ## 当前内容
 
 - `main.py`：创建对象、组装依赖并启动 Monitor。
 - `monitor/incident_monitor.py`：轮询告警，调度调查、重新调查和恢复判断，并隔离单轮异常。
-- `agent/agent.py`：执行调查，管理工具调用上限与缓存，收集和去重证据，返回结构化调查结果。
+- `investigation/`：管理调查生命周期、权威预算、Checkpoint、缓存、HITL 和恢复对账。
+- `agent/agent.py`：构建 Prompt、发起单轮模型请求、解析 FunctionCall 和最终回答。
 - `incident_store.py`：将 Incident、证据和调查记录保存到 `data/incidents.json`。
 - `clients/`、`tools/`：查询真实 Prometheus 指标、Loki 日志和服务健康状态。
 - `models/`：Alert、Evidence、Incident、InvestigationResult 和 InvestigationRecord。
-- `model_client/`：模型调用及连接、限流和服务错误的重试。
-- `tests/`：35 项隔离回归测试，覆盖生命周期、证据、调查结果和异常处理。
+- `model_client/`：单次模型请求；重试及累计预算由 Runtime 控制。
+- `tests/`：隔离回归测试，覆盖生命周期、证据、预算、HITL、审批和跨进程恢复。
 
 ## 环境配置
 
@@ -35,10 +76,10 @@ Incident 数据文件在首次启动时自动创建。真实 `.env`、运行数�
 ## 回归验证
 
 ```powershell
-python -B -m unittest discover -s tests -v
+python -B -m pytest tests -q --disable-warnings
 ```
 
-现有 35 项测试全部通过，不调用外部模型或监控服务，数据与日志写入临时目录。main.py 的对象组装测试仍需非空 DEEPSEEK_API_KEY，但不需要真实密钥；可通过本地 `.env` 提供测试占位值。
+2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，数据与日志写入临时目录；生产装配测试提供占位密钥，不需要真实密钥。最新结果见本次 Runtime 质量验证记录。
 
 2026-10-06 还验证了真实启动、两轮告警查询及一次使用合成告警的真实模型调查。详细验证记录及修复说明见 [REGRESSION_REPORT.md](REGRESSION_REPORT.md)。真实服务当时没有 firing 告警，生命周期变化由可控响应覆盖。
 
@@ -46,7 +87,7 @@ python -B -m unittest discover -s tests -v
 
 ## 已知限制
 
-Store 仍按 fingerprint 保存单个 Incident：恢复后再次 firing 会创建新 ID，但覆盖同 fingerprint 的旧记录。后续需要决定是否保留历史 Incident；本次未修改该业务设计。
+IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。SQLite Runtime、Incident JSON 和 Remediation JSON 分别承担调查状态、告警历史和修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
 
 默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。Agent 最多调查 7 轮、执行工具 13 次，每轮提示剩余预算。
 

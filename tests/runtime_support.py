@@ -49,7 +49,7 @@ class FixtureAgent(Agent):
         self.tool_result = tool_result
         self.tool_manager.run_tool = self.run_fixture_tool
 
-    def run_fixture_tool(self, item):
+    def run_fixture_tool(self, item, *, session_id=None):
         self.executions.append(item.name)
         if self.tool_result is not None:
             result = self.tool_result(item)
@@ -78,3 +78,30 @@ def create_session(manager, service="order-service", severity="critical", suffix
     incident = create_incident_from_alert(alert, fp)
     manager.incident_store.save_incident(fp, incident)
     return manager.enqueue(incident)
+
+
+def remediation_agent(clock):
+    """Real planner gates receive deterministic version/source/log/database observations."""
+    from datetime import timedelta
+    from remediation.planner import ERROR
+    def result(item):
+        now = clock()
+        if item.name == "get_running_version":
+            return {"status": "ok", "service": "order-service", "commit_sha": SHA,
+                    "process_started_at": (now - timedelta(minutes=1)).isoformat(),
+                    "runtime_flags": {"simulate_code_regression": True}}
+        if item.name == "query_logs":
+            return {"status": "ok", "service": "order-service", "logs": [{
+                "timestamp_utc": now.isoformat(),
+                "line": f'error_type=application_error exception_type=RuntimeError error_message="{ERROR}"',
+            }]}
+        if item.name == "get_source_file":
+            return {"status": "ok", "service": "order-service", "repository": "yuj1ng1/prometheus-demo",
+                    "path": "app.py", "ref": SHA, "truncated": False,
+                    "content": 'def order():\n    if SIMULATE_CODE_REGRESSION:\n        raise RuntimeError("' + ERROR + '")\n'}
+        return {"status": "ok", "dependency": "order-db", "reachable": True,
+                "database_connected": True, "query_ok": True}
+    calls = [call("query_logs", {"service": "order-service"}, "log"),
+             call("get_source_file", {"service": "order-service", "path": "app.py", "ref": SHA}, "source"),
+             call("check_dependency_health", {"dependency": "order-db"}, "dependency")]
+    return FixtureAgent([response(answer="", calls=calls), response()], result)

@@ -241,19 +241,13 @@ def main():
             agent_prompt,
         )
     else:
-        from models.investigation import InvestigationResult, InvestigationStatus
-
-        class Observer:
-            def investigate(self, incident):
-                return InvestigationResult(
-                    success=True,
-                    status=InvestigationStatus.COMPLETED,
-                    answer="Lifecycle only; model NOT run",
-                )
-
-        agent = Observer()
+        agent = None
+    from investigation.manager import InvestigationManager
+    from investigation.store import RuntimeStore
+    from investigation.worker import Worker
     store = IncidentStore(output / "incidents.json")
-    monitor = IncidentMonitor(client, agent, store, 5)
+    manager = InvestigationManager(RuntimeStore(output / "runtime.sqlite3"), store)
+    monitor = IncidentMonitor(client, store, 5, manager)
     scenarios = [
         ("order-500", "HighHttp5xxRate", "order-service"),
         ("inventory-500", "HighHttp5xxRate", "inventory-service"),
@@ -376,6 +370,10 @@ def main():
                 flush=True,
             )
             monitor.process_alerts_once()
+            if agent is not None:
+                worker = Worker(manager, agent)
+                while worker.run_once() is not None:
+                    pass
             incidents = [
                 incident
                 for incident in store.active_incidents()
@@ -413,6 +411,7 @@ def main():
 
             def incident_cleared():
                 monitor.process_alerts_once()
+                manager.recover()
                 return store.get_active_incident(incident.fingerprint) is None
 
             wait_until(incident_cleared, 60, "Incident signal cleared")

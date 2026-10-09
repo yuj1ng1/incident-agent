@@ -355,9 +355,10 @@ class RuntimeTests(unittest.TestCase):
             if session.status == S.COMPLETED:
                 raise OSError("crash after JSON commit before SQLite ack")
         with patch.object(self.manager.incident_store, "apply_runtime_projection", side_effect=fail_after_json):
-            with self.assertRaises(OSError):
-                Worker(self.manager, FixtureAgent()).run_once()
+            Worker(self.manager, FixtureAgent()).run_once()
         self.assertEqual(self.get().status, S.COMPLETED)
+        self.assertFalse(self.store.load_checkpoint(self.get()).get("projected", False))
+        self.now += timedelta(seconds=6)
         self.manager.recover()
         self.assertEqual(len(self.manager.incident_store.get_incident(self.session.incident_id).investigations), 1)
 
@@ -502,27 +503,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.manager.workflow(self.session.session_id)["remediations"], [])
 
     def _remediation_agent(self):
-        from remediation.planner import ERROR
-        def tool_result(item):
-            if item.name == "get_running_version":
-                return {"status": "ok", "service": "order-service", "commit_sha": SHA,
-                        "process_started_at": (self.now - timedelta(minutes=1)).isoformat(),
-                        "runtime_flags": {"simulate_code_regression": True}}
-            if item.name == "query_logs":
-                return {"status": "ok", "service": "order-service", "logs": [{
-                    "timestamp_utc": self.now.isoformat(),
-                    "line": f'error_type=application_error exception_type=RuntimeError error_message="{ERROR}"',
-                }]}
-            if item.name == "get_source_file":
-                return {"status": "ok", "service": "order-service", "repository": "yuj1ng1/prometheus-demo",
-                        "path": "app.py", "ref": SHA, "truncated": False,
-                        "content": 'def order():\n    if SIMULATE_CODE_REGRESSION:\n        raise RuntimeError("' + ERROR + '")\n'}
-            return {"status": "ok", "dependency": "order-db", "reachable": True,
-                    "database_connected": True, "query_ok": True}
-        calls = [call("query_logs", {"service": "order-service"}, "log"),
-                 call("get_source_file", {"service": "order-service", "path": "app.py", "ref": SHA}, "source"),
-                 call("check_dependency_health", {"dependency": "order-db"}, "dependency")]
-        return FixtureAgent([response(answer="", calls=calls), response()], tool_result)
+        from runtime_support import remediation_agent
+        return remediation_agent(lambda: self.now)
 
     def test_runtime_creates_independent_pending_remediation(self):
         from remediation.planner import RemediationPlanner
@@ -551,7 +533,7 @@ class RuntimeTests(unittest.TestCase):
     def test_monitor_enqueues_and_does_not_call_model(self):
         from monitor.incident_monitor import IncidentMonitor
         agent = FixtureAgent()
-        monitor = IncidentMonitor(Mock(), agent, self.manager.incident_store, 30, investigation_manager=self.manager)
+        monitor = IncidentMonitor(Mock(), self.manager.incident_store, 30, self.manager)
         incident = self.manager.incident_store.get_incident(self.session.incident_id)
         monitor.handle_alert(incident.alerts[-1], incident.fingerprint)
         agent.request_durable_response.assert_not_called()
@@ -574,7 +556,7 @@ class RuntimeTests(unittest.TestCase):
         from model_client.model_client import ModelClient
         sdk = Mock()
         sdk.with_options.return_value.responses.create.return_value = response()
-        client = ModelClient(sdk, "fixture", retries=3)
+        client = ModelClient(sdk, "fixture")
         client.call_once([{"role": "user", "content": "context"}], "system", [], timeout=15)
         sdk.with_options.assert_called_once_with(max_retries=0, timeout=15)
         sdk.with_options.return_value.responses.create.assert_called_once()
@@ -726,13 +708,25 @@ class ProcessRecoveryTests(unittest.TestCase):
                 old = manager.store.get(session.session_id)
                 checkpoint = manager.store.load_checkpoint(old)
                 if phase in {"tool_before_io", "tool_after_io"}:
-                    self.assertEqual(checkpoint["records"], [])
+                    self.assertEqual([r["name"] for r in checkpoint["records"]], ["get_running_version"])
+                child_tools = [json.loads(line)["name"] for line in (Path(directory) / "tool-io.jsonl").read_text().splitlines()]
+                self.assertEqual(child_tools.count("get_source_file"), 1 if phase in {"tool_after_io", "tool_checkpoint_committed"} else 0)
                 later = old.lease_until + timedelta(seconds=1)
                 manager.store.clock = lambda: later
-                recovered = Worker(manager, FixtureAgent()).run_once()
+                source = call("get_source_file", {"service": "order-service", "path": "app.py", "ref": SHA})
+                agent = FixtureAgent([response(answer="", calls=[source]), response()])
+                recovered = Worker(manager, agent).run_once()
                 self.assertEqual(recovered.status, S.COMPLETED)
-                self.assertGreaterEqual(recovered.total_model_requests, old.total_model_requests)
-                self.assertGreaterEqual(recovered.total_tool_executions, old.total_tool_executions)
+                self.assertEqual(recovered.total_model_requests, old.total_model_requests + 2)
+                self.assertEqual(agent.executions.count("get_source_file"), 0 if phase == "tool_checkpoint_committed" else 1)
+                self.assertEqual(recovered.total_tool_executions, old.total_tool_executions + (1 if phase == "tool_checkpoint_committed" else 2))
+                checkpoint = manager.store.load_checkpoint(recovered)
+                observations = [r for r in checkpoint["records"] if r["name"] == "get_source_file"]
+                self.assertEqual(len(observations), 1)
+                self.assertEqual(observations[0]["result"]["value"], 0.3)
+                self.assertEqual(checkpoint["result"]["answer"], "证据不足，尚未确认根因。")
+                context = agent.request_durable_response.call_args_list[-1].args[0][0]["content"]
+                self.assertIn(observations[0]["observation_id"], context)
 
 
 if __name__ == "__main__":

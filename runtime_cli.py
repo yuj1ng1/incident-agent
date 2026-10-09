@@ -22,6 +22,8 @@ def main(argv=None):
     parser.add_argument("--incidents", default=str(Path(__file__).resolve().parent / "data" / "incidents.json"))
     parser.add_argument("--remediations", default=str(Path(__file__).resolve().parent / "data" / "remediation.json"))
     commands = parser.add_subparsers(dest="operation", required=True)
+    unblock = commands.add_parser("unblock-model", help="修正认证/余额问题后显式解除全局模型阻塞；不恢复已取消 Session")
+    unblock.add_argument("--actor", required=True)
     for name in ("list-sessions", "list-human-requests", "list-pending-remediations"):
         commands.add_parser(name)
     for name in ("show-session", "show-events", "send-message", "pause", "resume", "cancel", "answer-human-request"):
@@ -46,6 +48,8 @@ def main(argv=None):
             output = [s.model_dump(mode="json") for s in runtime.list_sessions()]
         elif operation == "show-session":
             output = manager.workflow(args.session_id)
+        elif operation == "unblock-model":
+            output = manager.unblock_model(args.actor)
         elif operation == "show-events":
             output = runtime.events(args.session_id, args.limit)
         elif operation == "list-human-requests":
