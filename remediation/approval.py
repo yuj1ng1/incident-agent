@@ -19,6 +19,9 @@ def approval_digest(proposal):
         "proposal_id", "incident_id", "service", "action_type", "parameters",
         "summary", "reason", "risk", "expected_commit_sha", "expected_process_started_at",
     })
+    # Preserve v1 approval hashes; new retry lineage is covered when present.
+    if proposal.retry_of is not None:
+        payload["retry_of"] = proposal.retry_of
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

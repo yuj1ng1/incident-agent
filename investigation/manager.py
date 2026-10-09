@@ -1,6 +1,7 @@
 """Application service shared by local CLI, Monitor and future authenticated Web."""
 from datetime import datetime, timedelta
 import json
+from uuid import uuid4
 
 from config import RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
@@ -116,19 +117,26 @@ class InvestigationManager:
 
     def unblock_model(self, actor):
         """Explicit local operator action; cancellation never implies authentication recovery."""
-        if not isinstance(actor, str) or not actor.strip() or len(actor) > 100:
+        if (not isinstance(actor, str) or not actor.strip() or len(actor) > 100
+                or any(ord(c) < 32 for c in actor)):
             raise RuntimeErrorBase("actor_required_max_100")
         with self.store.transaction() as db:
             category = self.store.metadata(db, "model_blocked")
             self.store.metadata(db, "model_blocked", None, write=True)
-            self.store.metadata(db, "last_model_unblock", {
+            operation = {
+                "operation_id": "unblock-" + uuid4().hex,
                 "actor": protect(actor), "at": self.store.clock().isoformat(), "previous_reason": category,
-            }, write=True)
+                "result": "unblocked" if category else "already_unblocked",
+            }
+            self.store.metadata(db, "last_model_unblock", operation, write=True)
+            self.store.metadata(db, operation["operation_id"], operation, write=True)
             if category:
                 for session in self.store.list_sessions(db):
                     if session.last_error_category == category:
-                        self.store.event(db, session.session_id, "model_unblocked", protect(actor), category=category)
-        return {"model_blocked": None, "previous_reason": category}
+                        self.store.event(db, session.session_id, "model_unblocked", protect(actor),
+                                         operation_id=operation["operation_id"], at=operation["at"],
+                                         previous_reason=category, result=operation["result"])
+        return {"model_blocked": None, **operation}
 
     def process_commands(self, session_id, claim=None, payload=None):
         with self.store.transaction() as db:
@@ -190,8 +198,6 @@ class InvestigationManager:
                         if session.status != S.PAUSED:
                             raise RuntimeErrorBase("resume_requires_paused_session")
                         self._resume(session, checkpoint)
-                        if session.last_error_category in {"model_http_401", "model_http_402", "model_http_403"}:
-                            self.store.metadata(db, "model_blocked", None, write=True)
                         self.store.event(db, session_id, "resumed", command.actor)
                     elif kind == "cancel":
                         transition(session, S.CANCELLED)

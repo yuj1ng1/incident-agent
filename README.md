@@ -20,8 +20,9 @@ Set-Location 'D:\Incident Agent'
 ```
 
 也可先 `conda activate agentlearn`。在新的 Python 3.12 环境中使用
-`python -m pip install -r requirements.lock.txt` 安装本项目及 pytest 的固定依赖；
-该文件只包含项目依赖闭包，没有导出 Conda 中的无关包。一般依赖声明仍在 `requirements.txt`。
+`python -m pip install -r requirements.lock.txt` 安装生产固定依赖；测试环境使用
+`python -m pip install -r requirements-test.lock.txt`，其中包含生产依赖及 pytest。
+锁文件不导出 Conda 中的无关包。一般生产依赖声明仍在 `requirements.txt`。
 `.github/workflows/runtime-tests.yml` 在 Windows/Python 3.12 运行隔离回归，测试不需要真实密钥。
 
 Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回答；

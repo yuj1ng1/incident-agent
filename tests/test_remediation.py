@@ -110,7 +110,7 @@ class ModelAndStateTests(unittest.TestCase):
         for source in S:
             for target in S:
                 allowed = {S.PENDING: {S.APPROVED, S.REJECTED}, S.APPROVED: {S.EXECUTING},
-                    S.EXECUTING: {S.SUCCEEDED, S.FAILED, S.VERIFICATION_FAILED}}
+                    S.EXECUTING: {S.SUCCEEDED, S.FAILED, S.VERIFICATION_FAILED, S.CLOSED}}
                 if target not in allowed.get(source, set()):
                     with self.subTest(source=source, target=target), self.assertRaises(RemediationError):
                         transition(proposal(status=source), target)
@@ -315,6 +315,8 @@ class ExecutorTests(unittest.TestCase):
         self.executor.execute(self.p.proposal_id, "human")
         again = self.executor.execute(self.p.proposal_id, "human")
         self.assertEqual(again.status, "already_completed")
+        self.assertFalse(again.success)
+        self.assertFalse(again.details["verification_performed"])
         self.runtime.stop.assert_called_once()
         self.verifier.verify.assert_called_once()
 
@@ -522,9 +524,11 @@ class ProcessTests(unittest.TestCase):
             handle.assert_not_called()
 
     def test_clean_repository_same_head(self):
-        with patch("remediation.demo_action.subprocess.run", side_effect=[SimpleNamespace(stdout=SHA), SimpleNamespace(stdout="")]), \
+        with patch("remediation.demo_action.subprocess.run", side_effect=[SimpleNamespace(stdout=SHA), SimpleNamespace(stdout=""), SimpleNamespace(returncode=0)]) as run, \
                 patch("pathlib.Path.is_file", return_value=True):
             DemoRuntime().repository_ready(SHA)
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(run.call_args.args[0][1:3], ["-I", "-c"])
 
     def test_local_head_changed_refused(self):
         with patch("remediation.demo_action.subprocess.run", side_effect=[SimpleNamespace(stdout="b" * 40), SimpleNamespace(stdout="")]):

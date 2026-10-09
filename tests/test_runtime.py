@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 from pydantic import ValidationError
 
@@ -287,6 +287,53 @@ class RuntimeTests(unittest.TestCase):
         second = FixtureAgent()
         self.assertIsNone(Worker(self.manager, second).run_once())
         second.request_durable_response.assert_not_called()
+
+    def test_resume_never_clears_global_block_or_changes_other_sessions(self):
+        for status in (401, 402, 403):
+            with self.subTest(status=status), tempfile.TemporaryDirectory(prefix="global-block-") as directory:
+                manager = create_runtime(directory, clock=lambda: self.now)
+                first = create_session(manager)
+                other = create_session(manager, service="inventory-service", severity="warning")
+                error = openai.APIStatusError("blocked", response=httpx.Response(
+                    status, request=httpx.Request("POST", "https://example.test")), body=None)
+                paused = Worker(manager, FixtureAgent([error])).run_once()
+                self.assertEqual(paused.session_id, first.session_id)
+                self.assertEqual(paused.status, S.PAUSED)
+                other_before = manager.store.get(other.session_id)
+                resume = manager.submit(HumanCommand(session_id=first.session_id, actor="session-operator", command_type="resume"))
+                self.assertEqual(resume.processing_status, "applied")
+                self.assertEqual(manager.store.get(first.session_id).status, S.QUEUED)
+                self.assertEqual(manager.store.get(other.session_id), other_before)
+                agent = FixtureAgent()
+                self.assertIsNone(Worker(manager, agent).run_once())
+                self.assertEqual(agent.executions, [])
+                agent.request_durable_response.assert_not_called()
+                with manager.store.transaction() as db:
+                    self.assertEqual(manager.store.metadata(db, "model_blocked"), "model_http_" + str(status))
+                operation = manager.unblock_model("global-operator")
+                self.assertEqual(operation["previous_reason"], "model_http_" + str(status))
+                self.assertEqual(operation["result"], "unblocked")
+                self.assertEqual(operation["actor"], "global-operator")
+                self.assertEqual(operation["at"], self.now.isoformat())
+                repeated = manager.unblock_model("global-operator")
+                self.assertEqual(repeated["result"], "already_unblocked")
+                with manager.store.transaction() as db:
+                    for audit in (operation, repeated):
+                        persisted = manager.store.metadata(db, audit["operation_id"])
+                        self.assertEqual(persisted["result"], audit["result"])
+                        self.assertEqual(persisted["actor"], "global-operator")
+                    self.assertIsNone(manager.store.metadata(db, "model_blocked"))
+                self.assertEqual(Worker(manager, agent).run_once().status, S.COMPLETED)
+                self.assertEqual(Worker(manager, FixtureAgent()).run_once().status, S.COMPLETED)
+
+    def test_invalid_unblock_actor_keeps_global_block(self):
+        with self.store.transaction() as db:
+            self.store.metadata(db, "model_blocked", "model_http_402", write=True)
+        for actor in ("", " ", "operator\nforged", "a" * 101):
+            with self.subTest(actor=actor), self.assertRaises(RuntimeErrorBase):
+                self.manager.unblock_model(actor)
+        with self.store.transaction() as db:
+            self.assertEqual(self.store.metadata(db, "model_blocked"), "model_http_402")
 
     def test_model_transient_retry_is_finite_and_counted(self):
         error = openai.APIStatusError("temporary", response=httpx.Response(429, request=httpx.Request("POST", "https://example.test")), body=None)

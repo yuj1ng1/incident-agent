@@ -18,7 +18,7 @@ from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import valid_chain
 from investigation.evidence_policy import TTL, cache_key, effective_records, fresh, stable
 from investigation.models import HumanCommand, SessionStatus as S
-from investigation.state import LostClaim, RuntimeErrorBase
+from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase
 from investigation.worker import Worker
 from runtime_support import FixtureAgent, SHA, call, create_runtime, create_session, response
 from tools.tool_registry import tool_registry
@@ -134,6 +134,52 @@ class RuntimeQualityTests(unittest.TestCase):
                 self.assertEqual(agent.request_durable_response.call_args_list[0].args[2], 1)
                 self.assertEqual(agent.request_durable_response.call_args_list[1].args[2], 13)
                 self.assertEqual(len([e for e in manager.store.events(result.session_id) if e["event_type"] == "tool_reserved"]), 13)
+
+    def test_real_agent_prompt_reports_twelve_two_and_zero_remaining(self):
+        agent = Agent(Mock(), "只读")
+        agent.model_client.call_once = Mock(return_value=response())
+        for consumed, remaining in ((1, 12), (11, 2), (13, 0)):
+            with self.subTest(consumed=consumed):
+                agent.request_durable_response([], 1, consumed, [], 1)
+                request = agent.model_client.call_once.call_args
+                self.assertIn(f"剩余工具执行次数 {remaining}；", request.args[1])
+                self.assertEqual(bool(request.args[2]), remaining > 0)
+        self.assertEqual(agent.model_client.call_once.call_count, 3)
+
+    def test_thirteenth_reservation_succeeds_and_fourteenth_does_not_mutate_budget(self):
+        self.seed_budget(tools=12)
+        claimed = self.store.claim("boundary-test", self.manager.limits)
+        checkpoint = self.store.load_checkpoint(claimed)
+        claim = ("boundary-test", claimed.fencing_token)
+        worker = Worker(self.manager, FixtureAgent())
+        reserved = worker._reserve(claimed.session_id, claim, checkpoint, "tool")
+        self.assertEqual(reserved.current_attempt_tool_calls, 13)
+        self.assertEqual(reserved.total_tool_executions, 13)
+        with self.assertRaises(AttemptToolBudgetExhausted):
+            worker._reserve(claimed.session_id, claim, checkpoint, "tool")
+        saved = self.store.get(claimed.session_id)
+        self.assertEqual(saved.current_attempt_tool_calls, 13)
+        self.assertEqual(saved.total_tool_executions, 13)
+        self.assertEqual(len([e for e in self.store.events(saved.session_id) if e["event_type"] == "tool_reserved"]), 1)
+
+    def test_real_agent_prompt_and_thirteen_distinct_calls_share_same_budget(self):
+        fixture = FixtureAgent()
+        agent = Agent(Mock(), "只读")
+        agent.tool_manager.run_tool = fixture.run_fixture_tool
+        calls = [call(arguments={"service": "order-service", "metric": f"metric-{i}"}, call_id=f"call-{i}") for i in range(13)]
+        agent.model_client.call_once = Mock(side_effect=[response(answer="", calls=calls), response()])
+        result = Worker(self.manager, agent, provider_verified=True).run_once()
+        requests = agent.model_client.call_once.call_args_list
+        self.assertEqual(len(requests), 2)
+        self.assertIn("剩余工具执行次数 12；", requests[0].args[1])
+        self.assertIn("剩余工具执行次数 0；", requests[1].args[1])
+        self.assertEqual(requests[1].args[2], [])
+        self.assertEqual(result.total_tool_executions, 13)
+        self.assertEqual(fixture.executions.count("query_metrics"), 12)
+        outputs = {item["call_id"]: json.loads(item["output"]) for item in requests[1].args[0]
+                   if item.get("type") == "function_call_output"}
+        self.assertEqual(len(outputs), 13)
+        self.assertEqual(outputs["call-12"]["status"], "tool_limit_reached")
 
     def test_session_tool_budget_and_lost_claim_are_not_soft_limits(self):
         self.manager.limits.max_tool_executions = 1
@@ -462,7 +508,7 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertEqual(view["human_requests"][0]["status"], "consumed")
 
     def test_auth_block_cancel_requires_explicit_operator_unblock(self):
-        import httpx
+        import httpx2 as httpx
         import openai
         error = openai.APIStatusError("sensitive", response=httpx.Response(401, request=httpx.Request("POST", "https://example.test")), body=None)
         blocked = Worker(self.manager, FixtureAgent([error])).run_once()

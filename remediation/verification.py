@@ -13,10 +13,13 @@ class DemoClient:
         if endpoint not in {"/version", "/order", "/health"}:
             raise RemediationError("endpoint_not_allowed")
         try:
-            response = requests.get(DEMO_URL + endpoint, timeout=2, allow_redirects=False)
-            # Never retain error body, response headers, or raw output.
-            body = response.json() if endpoint == "/version" and response.status_code == 200 else None
-            return response.status_code, body
+            with requests.Session() as session:
+                # This fixed loopback target must not inherit proxies or netrc credentials.
+                session.trust_env = False
+                response = session.get(DEMO_URL + endpoint, timeout=2, allow_redirects=False)
+                # Never retain error body, response headers, or raw output.
+                body = response.json() if endpoint == "/version" and response.status_code == 200 else None
+                return response.status_code, body
         except (requests.RequestException, ValueError):
             return None, None
 

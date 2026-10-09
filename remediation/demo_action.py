@@ -1,11 +1,12 @@
 """One fixed runtime operation. No model-controlled command/path/env/PID."""
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
 import time
 
-from models.remediation import ActionResult, utc_now
+from models.remediation import ActionResult, ExecutionOutcome, utc_now
 from remediation.approval import approval_digest
 from remediation.planner import parse_time
 from remediation.state import RemediationError
@@ -23,6 +24,19 @@ SYSTEM_ENVIRONMENT_KEYS = (
     "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATHEXT", "COMSPEC",
     "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
 )
+logger = logging.getLogger(__name__)
+VENV_CHECK = """
+import sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+if Path(sys.prefix).resolve() != root or sys.prefix == sys.base_prefix:
+    raise RuntimeError('isolated_venv_required')
+import flask, prometheus_client, requests, psycopg
+from psycopg.rows import dict_row
+for module in (flask, prometheus_client, requests, psycopg):
+    if not Path(module.__file__).resolve().is_relative_to(root):
+        raise RuntimeError('dependency_outside_venv')
+"""
 
 
 def validate_parameters(proposal):
@@ -66,6 +80,12 @@ class DemoRuntime:
                 raise RemediationError("demo_runtime_code_dirty")
             if not (DEMO_ROOT / "start_demo.ps1").is_file() or not (DEMO_ROOT / ".venv/Scripts/python.exe").is_file():
                 raise RemediationError("demo_startup_unavailable")
+            try:
+                subprocess.run([str(DEMO_ROOT / ".venv/Scripts/python.exe"), "-I", "-c", VENV_CHECK,
+                                str(DEMO_ROOT / ".venv")], cwd=DEMO_ROOT, check=True,
+                               capture_output=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                raise RemediationError("demo_startup_environment_unverified") from None
         except (OSError, subprocess.SubprocessError):
             raise RemediationError("demo_repository_unconfirmed") from None
 
@@ -105,6 +125,7 @@ def disable_demo_regression(proposal, runtime=None):
     started = utc_now()
     runtime = runtime or DemoRuntime()
     stopped = False
+    stop_attempted = False
     details = {}
     try:
         if (proposal.status.value != "executing" or not proposal.approved_by or not proposal.approved_at
@@ -117,7 +138,8 @@ def disable_demo_regression(proposal, runtime=None):
         if version["runtime_flags"]["simulate_code_regression"] is False:
             return ActionResult(proposal_id=proposal.proposal_id, action_type=proposal.action_type,
                 started_at=started, success=True, status="already_remediated",
-                summary="运行开关已经关闭，未停止或重启进程。")
+                summary="运行开关已经关闭，未停止或重启进程。",
+                execution_outcome=ExecutionOutcome.NOT_EXECUTED)
         if parse_time(version["process_started_at"]) != proposal.expected_process_started_at:
             raise RemediationError("runtime_changed_since_proposal")
         runtime.repository_ready(proposal.expected_commit_sha)
@@ -128,6 +150,7 @@ def disable_demo_regression(proposal, runtime=None):
         runtime.repository_ready(proposal.expected_commit_sha)
         details = {"old_pid": identity["pid"], "process_identity_confirmed": True,
                    "commit_sha": proposal.expected_commit_sha}
+        stop_attempted = True
         runtime.stop(identity)
         stopped = True
         runtime.start()
@@ -135,13 +158,21 @@ def disable_demo_regression(proposal, runtime=None):
         details.update(new_pid=new_identity["pid"], old_demo_stopped=True)
         return ActionResult(proposal_id=proposal.proposal_id, action_type=proposal.action_type,
             started_at=started, success=True, status="action_completed",
-            summary="已用原 start_demo.ps1 正常模式重新启动 Demo，等待独立恢复验证。", details=details)
+            summary="已用原 start_demo.ps1 正常模式重新启动 Demo，等待独立恢复验证。", details=details,
+            execution_outcome=ExecutionOutcome.EXECUTED)
     except RemediationError as exc:
         details["old_demo_stopped"] = stopped
         return ActionResult(proposal_id=proposal.proposal_id, action_type=proposal.action_type,
             started_at=started, success=False, status=str(exc),
-            summary="固定动作失败；若旧 Demo 已停止，需要人工检查启动。", details=details)
-    except Exception:
+            summary="固定动作失败；若旧 Demo 已停止，需要人工检查启动。", details=details,
+            execution_outcome=(ExecutionOutcome.EXECUTED if stopped else
+                               ExecutionOutcome.UNKNOWN if stop_attempted else ExecutionOutcome.NOT_EXECUTED))
+    except Exception as exc:
+        logger.error("demo_action_internal_error proposal=%s exception_type=%s",
+                     proposal.proposal_id, type(exc).__name__)
         return ActionResult(proposal_id=proposal.proposal_id, action_type=proposal.action_type,
             started_at=started, success=False, status="action_internal_error",
-            summary="执行失败，需要人工检查。", details={"old_demo_stopped": stopped})
+            summary="执行失败，需要人工检查。",
+            details={"old_demo_stopped": stopped, "exception_type": type(exc).__name__},
+            execution_outcome=(ExecutionOutcome.EXECUTED if stopped else
+                               ExecutionOutcome.UNKNOWN if stop_attempted else ExecutionOutcome.NOT_EXECUTED))
