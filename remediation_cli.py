@@ -10,7 +10,7 @@ def main(argv=None):
     from remediation.executor import ActionExecutor
     from remediation.state import RemediationError
     from remediation.store import DEFAULT_STORE, RemediationStore
-    from models.remediation import RemediationStatus
+    from models.remediation import ExecutionOutcome, RemediationStatus
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Human-approved local Demo remediation")
@@ -55,10 +55,32 @@ def main(argv=None):
         else:
             action = ActionExecutor(store).execute(args.proposal_id, getpass.getuser())
             proposal = store.get(args.proposal_id)
-            output = {"action": action.model_dump(mode="json"), "proposal_status": proposal.status.value}
-            output["verification_performed"] = action.status != "already_completed" and action.success
+            verification_performed = action.details.get("verification_performed", False)
+            verification = None
+            if verification_performed:
+                verification = next((item for item in store.load()["verifications"]
+                                     if item["verification_id"] == action.details.get("verification_id")
+                                     and item["proposal_id"] == args.proposal_id), None)
+                if verification is None:
+                    raise RemediationError("current_verification_record_missing")
+            historical = action.status == "already_completed" and proposal.status == RemediationStatus.SUCCEEDED
+            output = {
+                "action": action.model_dump(mode="json"), "proposal_status": proposal.status.value,
+                "execution_outcome": action.execution_outcome.value,
+                "action_performed": (None if action.execution_outcome == ExecutionOutcome.UNKNOWN else
+                                     action.execution_outcome == ExecutionOutcome.EXECUTED),
+                "verification_performed": verification_performed,
+                "verification": verification,
+                "historical_proposal_succeeded": historical,
+                "current_target_verified": verification["success"] if verification else None,
+                "target_already_remediated": bool(action.status == "already_remediated" and verification and verification["success"]),
+            }
             print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0 if proposal.status.value == "succeeded" and (action.success or action.status == "already_completed") else 1
+            # Zero means the approved workflow is fulfilled, including a historical idempotent skip.
+            fulfilled = proposal.status == RemediationStatus.SUCCEEDED and (
+                historical or (action.success and verification is not None and verification["success"])
+            )
+            return 0 if fulfilled else 1
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
     except RemediationError as exc:

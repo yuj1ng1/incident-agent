@@ -12,6 +12,22 @@ from incident_store import RuntimeProjectionResult
 from reinvestigation import reinvestigation_reason, utc_timestamp
 from storage_lock import FileLockError
 
+REMEDIATION_MAX_ATTEMPTS = 6
+REMEDIATION_RETRY_MAX_SECONDS = 300
+
+
+def _remediation_failure(exc):
+    """Persist controlled codes/classes only, never exception text or user data."""
+    from remediation.store import StoreError
+    if isinstance(exc, StoreError):
+        code = str(exc)
+        if code in {"store_busy", "remediation_store_write_failed", "remediation_store_corrupt_or_unreadable"}:
+            return code, code != "remediation_store_corrupt_or_unreadable"
+        return "StoreError", False
+    if isinstance(exc, PermissionError):
+        return "PermissionError", False
+    return type(exc).__name__, isinstance(exc, (OSError, FileLockError))
+
 
 def live_alert_for_incident(prometheus_client, incident):
     from alert_parser import normalize_snapshot
@@ -542,7 +558,9 @@ class InvestigationManager:
             checkpoint = self.store.load_checkpoint(session, db)
         if checkpoint.get("projection_blocked"):
             return
-        if checkpoint.get("projected") and not checkpoint.get("remediation_pending"):
+        if checkpoint.get("projected") and (
+            not checkpoint.get("remediation_pending") or checkpoint.get("remediation_blocked")
+        ):
             return
         for field in ("projection_retry_at", "remediation_retry_at"):
             retry_at = checkpoint.get(field)
@@ -589,6 +607,7 @@ class InvestigationManager:
                     checkpoint["projection_retry_at"] = None
                     checkpoint["projection_error_category"] = None
         if not checkpoint.get("projection_error_category") and session.status in TERMINAL:
+            was_pending = checkpoint.get("remediation_pending", False)
             checkpoint["remediation_pending"] = False
             checkpoint["remediation_retry_at"] = None
             if session.status == S.COMPLETED and self.remediation_planner is not None and not checkpoint.get("proposal_evidence_gap"):
@@ -598,8 +617,16 @@ class InvestigationManager:
                 records = effective_records(checkpoint.get("records", []), checkpoint.get("identity"),
                                             self.store.clock(), session.service)
                 versions = [r for r in records if r["name"] == "get_running_version"]
-                if versions and checkpoint.get("result", {}).get("success"):
+                if was_pending and not versions:
+                    # Backoff cannot extend evidence TTL or silently erase a failed proposal.
+                    checkpoint["remediation_pending"] = True
+                    checkpoint["remediation_blocked"] = True
+                    checkpoint["remediation_blocked_reason"] = "evidence_expired"
+                    events.append(("remediation_attention_required", {"reason": "evidence_expired"}))
+                elif versions and checkpoint.get("result", {}).get("success"):
                     from remediation.state import RemediationError
+                    attempts = checkpoint.get("remediation_attempts", 0) + 1
+                    checkpoint["remediation_attempts"] = attempts
                     try:
                         proposal = self.remediation_planner.propose(
                             self.incident_store.get_incident(session.incident_id),
@@ -610,9 +637,41 @@ class InvestigationManager:
                         if proposal is not None:
                             events.append(("remediation_proposed", {"proposal_id": proposal.proposal_id, "status": proposal.status.value}))
                     except (RemediationError, OSError, FileLockError, ValueError) as exc:
+                        category, retryable = _remediation_failure(exc)
                         checkpoint["remediation_pending"] = True
-                        checkpoint["remediation_retry_at"] = (self.store.clock() + timedelta(seconds=30)).isoformat()
-                        events.append(("remediation_projection_failed", {"category": type(exc).__name__}))
+                        checkpoint["remediation_error_category"] = category
+                        blocked = not retryable or attempts >= REMEDIATION_MAX_ATTEMPTS
+                        checkpoint["remediation_blocked"] = blocked
+                        checkpoint["remediation_blocked_reason"] = None
+                        if not retryable:
+                            checkpoint["remediation_blocked_reason"] = "non_retryable_error"
+                        elif blocked:
+                            checkpoint["remediation_blocked_reason"] = "attempt_limit"
+                        delay = min(REMEDIATION_RETRY_MAX_SECONDS,
+                                    self.limits.retry_base_seconds * 2 ** min(attempts - 1, 8))
+                        if not blocked:
+                            checkpoint["remediation_retry_at"] = (self.store.clock() + timedelta(seconds=delay)).isoformat()
+                        events.append(("remediation_projection_failed", {
+                            "category": category, "attempts": attempts,
+                            "retry_seconds": None if blocked else delay, "blocked": blocked,
+                        }))
+                        if blocked or attempts == 3:
+                            events.append(("remediation_attention_required", {
+                                "category": category, "attempts": attempts,
+                                "reason": checkpoint["remediation_blocked_reason"] or "persistent_failure",
+                            }))
+                    else:
+                        if was_pending and proposal is None:
+                            checkpoint["remediation_pending"] = True
+                            checkpoint["remediation_blocked"] = True
+                            checkpoint["remediation_blocked_reason"] = "evidence_no_longer_eligible"
+                            events.append(("remediation_attention_required", {"reason": "evidence_no_longer_eligible"}))
+                        else:
+                            checkpoint["remediation_error_category"] = None
+                            checkpoint["remediation_blocked"] = False
+                            checkpoint["remediation_blocked_reason"] = None
+                            if was_pending:
+                                events.append(("remediation_projection_recovered", {"proposal_created": True}))
         if not checkpoint.get("projection_error_category"):
             checkpoint["projected"] = True
         # A concurrent Worker may have saved a newer checkpoint during file I/O.
@@ -626,7 +685,8 @@ class InvestigationManager:
             self.store.save(session, db)
             for name, metadata in events:
                 self.store.event(db, session_id, name, **metadata)
-                if name == "incident_projection_blocked":
+                if name in {"incident_projection_blocked", "remediation_projection_failed",
+                            "remediation_attention_required", "remediation_projection_recovered"}:
                     self.store.metadata(db, "pending_notification:" + session_id, True, write=True)
 
     def workflow(self, session_id, include_remediations=True):
@@ -640,10 +700,17 @@ class InvestigationManager:
             usage = self.store.budget_usage(session, db)
             usage["started_at"] = usage["started_at"].isoformat()
             refusal = self.store.metadata(db, "reinvestigation_refusal:" + session.incident_id)
-        proposals = [] if self.remediation_planner is None or not include_remediations else [
-            p.model_dump(mode="json") for p in self.remediation_planner.store.list()
-            if p.incident_id == session.incident_id
-        ]
+        proposals = []
+        remediation_store_error = None
+        if self.remediation_planner is not None and include_remediations:
+            from remediation.state import RemediationError
+            try:
+                proposals = [p.model_dump(mode="json") for p in self.remediation_planner.store.list()
+                             if p.incident_id == session.incident_id]
+            except (RemediationError, OSError, FileLockError, ValueError) as exc:
+                remediation_store_error = _remediation_failure(exc)[0]
+        remediation_status = ("blocked" if checkpoint.get("remediation_blocked") else
+                              "waiting_retry" if checkpoint.get("remediation_pending") else "not_pending")
         return {
             "session": session.model_dump(mode="json"),
             "investigation_result": checkpoint.get("result"),
@@ -654,6 +721,14 @@ class InvestigationManager:
             "projection_error_category": checkpoint.get("projection_error_category"),
             "projection_retry_at": checkpoint.get("projection_retry_at"),
             "projection_blocked": checkpoint.get("projection_blocked", False),
+            "remediation_status": remediation_status,
+            "remediation_pending": checkpoint.get("remediation_pending", False),
+            "remediation_attempts": checkpoint.get("remediation_attempts", 0),
+            "remediation_error_category": checkpoint.get("remediation_error_category"),
+            "remediation_retry_at": checkpoint.get("remediation_retry_at"),
+            "remediation_blocked": checkpoint.get("remediation_blocked", False),
+            "remediation_blocked_reason": checkpoint.get("remediation_blocked_reason"),
+            "remediation_store_error_category": remediation_store_error,
             "human_requests": [r.model_dump(mode="json") for r in requests],
             "human_messages": [json.loads(r["data"]) | {"consumed_at": r["consumed_at"]} for r in messages],
             "checkpoint_summary": {

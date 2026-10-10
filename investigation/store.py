@@ -87,7 +87,9 @@ class RuntimeStore:
                     checkpoint = self.load_checkpoint(session, db)
                     if checkpoint.get("projection_blocked"):
                         self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
-                    elif not checkpoint.get("projected") or checkpoint.get("remediation_pending"):
+                    elif not checkpoint.get("projected") or (
+                        checkpoint.get("remediation_pending") and not checkpoint.get("remediation_blocked")
+                    ):
                         self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
                     if session.status in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
                         self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
@@ -284,7 +286,9 @@ class RuntimeStore:
         if payload.get("projection_blocked"):
             self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
             self.acknowledge_work(db, "projection", session.session_id)
-        elif payload.get("projected") and not payload.get("remediation_pending"):
+        elif payload.get("projected") and (
+            not payload.get("remediation_pending") or payload.get("remediation_blocked")
+        ):
             db.execute("DELETE FROM runtime_metadata WHERE key=?", ("blocked_projection:" + session.session_id,))
             self.acknowledge_work(db, "projection", session.session_id)
         else:

@@ -36,7 +36,11 @@ class Scheduler:
             signature = ":".join((session.status.value, session.last_error_category or "",
                                   pending[0]["request_id"] if pending else "",
                                   workflow["projection_error_category"] or "",
-                                  "blocked" if workflow["projection_blocked"] else ""))
+                                  "blocked" if workflow["projection_blocked"] else "",
+                                  workflow["remediation_status"],
+                                  workflow["remediation_error_category"] or "",
+                                  workflow["remediation_blocked_reason"] or "",
+                                  "persistent" if workflow["remediation_attempts"] >= 3 else ""))
             key = "terminal_notification:" + session.session_id
             with manager.store.read() as db:
                 if manager.store.metadata(db, key) == signature:
@@ -50,8 +54,10 @@ class Scheduler:
                         manager.store.acknowledge_work(db, "notification", session.session_id)
                 continue
             lines = [
-                "[Investigation Completed]" if session.status == S.COMPLETED else (
-                    "[Human Input Required]" if session.status == S.WAITING_HUMAN else "[Investigation Status]"
+                "[Remediation Proposal Status]" if workflow["remediation_pending"] else (
+                    "[Investigation Completed]" if session.status == S.COMPLETED else (
+                        "[Human Input Required]" if session.status == S.WAITING_HUMAN else "[Investigation Status]"
+                    )
                 ),
                 "", f"Incident: {session.incident_id}", f"Session: {session.session_id}",
                 f"Service: {session.service}", f"Status: {session.status.value}",
@@ -69,6 +75,17 @@ class Scheduler:
             if workflow["projection_error_category"]:
                 prefix = "Incident 投影已隔离，需人工核查：" if workflow["projection_blocked"] else "Incident 投影待重试："
                 lines.append(prefix + workflow["projection_error_category"])
+            if workflow["remediation_pending"]:
+                lines.extend([
+                    "修复提案生成状态：" + workflow["remediation_status"],
+                    "提案累计尝试：" + str(workflow["remediation_attempts"]),
+                    "提案错误类别：" + (workflow["remediation_error_category"] or "unknown"),
+                    "提案下次重试：" + (workflow["remediation_retry_at"] or "none"),
+                ])
+                if workflow["remediation_blocked"]:
+                    lines.append("提案需人工处理：" + workflow["remediation_blocked_reason"])
+                elif workflow["remediation_attempts"] >= 3:
+                    lines.append("提案持续失败，需操作员核查；调查结论已保存。")
             try:
                 # The displayed snapshot is already committed; stdout holds no DB lock.
                 print(protect("\n".join(lines)) + "\n", flush=True)

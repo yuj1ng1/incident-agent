@@ -31,7 +31,9 @@ def main(argv=None):
     incident_view = commands.add_parser("show-incident", help="查询完整调查与 Evidence 历史，包括已归档内容")
     incident_view.add_argument("incident_id")
     for name in ("show-session", "show-events", "send-message", "pause", "resume", "cancel", "answer-human-request", "reopen"):
-        sub = commands.add_parser(name)
+        sub = commands.add_parser(name, help=(
+            "查询已保存调查结论及独立的提案失败、重试、待处理状态" if name == "show-session" else None
+        ))
         sub.add_argument("session_id")
         if name == "show-events":
             sub.add_argument("--limit", type=int, default=100)
@@ -56,7 +58,12 @@ def main(argv=None):
         )
         operation = args.operation
         if operation == "list-sessions":
-            output = [s.model_dump(mode="json") for s in runtime.list_sessions()]
+            output = []
+            for session in runtime.list_sessions():
+                workflow = manager.workflow(session.session_id, include_remediations=False)
+                output.append(workflow["session"] | {"remediation": {
+                    key: value for key, value in workflow.items() if key.startswith("remediation_")
+                }})
         elif operation == "show-session":
             output = manager.workflow(args.session_id)
         elif operation == "show-incident":

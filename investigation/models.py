@@ -146,6 +146,12 @@ class Checkpoint(Record):
     projection_blocked: bool = False
     remediation_pending: bool = False
     remediation_retry_at: datetime | None = None
+    remediation_attempts: int = Field(default=0, ge=0)
+    remediation_error_category: str | None = None
+    remediation_blocked: bool = False
+    remediation_blocked_reason: Literal[
+        "non_retryable_error", "attempt_limit", "evidence_expired", "evidence_no_longer_eligible",
+    ] | None = None
     proposal_evidence_gap: str | None = None
     projection_attempts: int = Field(default=0, ge=0)
     projection_retry_at: datetime | None = None

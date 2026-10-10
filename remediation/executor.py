@@ -86,7 +86,7 @@ class ActionExecutor:
                     self.store.put(data, transition(proposal, S.FAILED))
             self._boundary("action_committed", proposal_id)
             if not action.success:
-                return action
+                return action.model_copy(update={"details": action.details | {"verification_performed": False}})
             try:
                 verification = self.verifier.verify(proposal)
             except Exception as exc:
@@ -101,7 +101,10 @@ class ActionExecutor:
                 final = transition(proposal, S.SUCCEEDED if verification.success else S.VERIFICATION_FAILED)
                 self.store.put(data, final)
                 self.store.event(data, final, "remediation_" + final.status.value, actor)
-            return action
+            # Invocation-specific reference; the persisted verification remains authoritative.
+            return action.model_copy(update={"details": action.details | {
+                "verification_performed": True, "verification_id": verification.verification_id,
+            }})
 
     def _review_target(self, proposal_id, actor):
         proposal = self.store.get(proposal_id)
