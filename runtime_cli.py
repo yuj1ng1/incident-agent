@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import sqlite3
+import sys
 
 from pydantic import ValidationError
 
@@ -17,6 +18,8 @@ from storage_lock import FileLockError
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="本地持久化调查管理；修复审批继续使用 remediation_cli.py")
     parser.add_argument("--store", default=str(DEFAULT_STORE))
     parser.add_argument("--incidents", default=str(Path(__file__).resolve().parent / "data" / "incidents.json"))

@@ -2,6 +2,7 @@
 import argparse
 import getpass
 import json
+import sys
 
 from remediation.executor import ActionExecutor
 from remediation.state import RemediationError
@@ -10,6 +11,8 @@ from models.remediation import RemediationStatus
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Human-approved local Demo remediation")
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="Local operator-selected JSON store")
     commands = parser.add_subparsers(dest="command", required=True)

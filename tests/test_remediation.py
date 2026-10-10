@@ -185,7 +185,7 @@ class StoreTests(unittest.TestCase):
         self.path.write_text("{broken", encoding="utf-8")
         with self.assertRaisesRegex(StoreError, "corrupt"):
             self.store.approve(self.p.proposal_id, "human")
-        self.assertEqual(self.path.read_text(), "{broken")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "{broken")
 
     def test_wrong_schema_fails_closed(self):
         self.path.write_text('{"version":1}', encoding="utf-8")
@@ -300,7 +300,7 @@ class ExecutorTests(unittest.TestCase):
         self.verifier.verify.side_effect = RuntimeError("secret")
         self.executor.execute(self.p.proposal_id, "human")
         self.assertEqual(self.store.get(self.p.proposal_id).status, S.VERIFICATION_FAILED)
-        self.assertNotIn("secret", self.path.read_text())
+        self.assertNotIn("secret", self.path.read_text(encoding="utf-8"))
 
     def test_action_failure_no_verification(self):
         self.store.approve(self.p.proposal_id, "human")

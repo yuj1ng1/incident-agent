@@ -288,6 +288,24 @@ class RecoveryTests(unittest.TestCase):
 class ProcessRecoveryTests(unittest.TestCase):
     fixture = Path(__file__).with_name("remediation_process_fixture.py")
 
+    def test_cli_chinese_output_is_utf8_on_legacy_windows_console(self):
+        with tempfile.TemporaryDirectory(prefix="remediation-cli-encoding-") as directory:
+            store = RemediationStore(Path(directory) / "remediation.json")
+            p = store.create(proposal())
+            command = subprocess.run(
+                [sys.executable, "-B", "remediation_cli.py", "--store", str(store.file_path),
+                 "reject", p.proposal_id, "--by", "测试操作者", "--reason", "需补充可信证据"],
+                cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15,
+                env=dict(os.environ, PYTHONIOENCODING="cp1252"),
+            )
+            self.assertEqual(command.returncode, 0, (command.stdout + command.stderr).decode("utf-8", errors="replace"))
+            output = json.loads(command.stdout.decode("utf-8"))
+            self.assertEqual(output["status"], "rejected")
+            self.assertEqual(output["rejected_by"], "测试操作者")
+            self.assertEqual(output["rejection_reason"], "需补充可信证据")
+            self.assertEqual(store.get(p.proposal_id).rejection_reason, output["rejection_reason"])
+            self.assertEqual(store.load()["actions"], [])
+
     def test_real_crashes_at_three_boundaries_never_replay_actions(self):
         for phase in ("executing_committed", "action_returned", "action_committed"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="remediation-child-") as directory:

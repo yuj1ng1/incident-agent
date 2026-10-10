@@ -3,6 +3,7 @@ from contextlib import closing, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -728,13 +729,18 @@ class ProcessRecoveryTests(unittest.TestCase):
                      "--incidents", str(Path(directory) / "incidents.json"), "send-message", session.session_id,
                      "--actor", "process-operator", "--command-id", "cross-process-message", "--text", "先检查数据库连接情况。"],
                     cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15,
+                    env=dict(os.environ, PYTHONIOENCODING="cp1252"),
                 )
-                self.assertEqual(command.returncode, 0, command.stderr.decode(errors="replace"))
+                self.assertEqual(command.returncode, 0, (command.stdout + command.stderr).decode("utf-8", errors="replace"))
+                submitted = json.loads(command.stdout.decode("utf-8"))
+                self.assertEqual(submitted["payload"]["text"], "先检查数据库连接情况。")
+                self.assertEqual(submitted["processing_status"], "pending")
                 (Path(directory) / "release").write_text("continue")
                 _, errors = child.communicate(timeout=30)
                 self.assertEqual(child.returncode, 0, errors.decode(errors="replace"))
                 checkpoint = manager.store.load_checkpoint(manager.store.get(session.session_id))
                 self.assertEqual(len(checkpoint["messages"]), 1)
+                self.assertEqual(checkpoint["messages"][0]["text"], "先检查数据库连接情况。")
                 self.assertFalse(any(r["name"] == "query_metrics" for r in checkpoint["records"]))
             finally:
                 if child.poll() is None:
