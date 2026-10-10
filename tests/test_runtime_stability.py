@@ -475,7 +475,8 @@ class HistoryRetentionTests(unittest.TestCase):
         old = InvestigationSession(session_id="history-session-0", incident_id=incident.incident_id,
                                    alert_fingerprint=incident.fingerprint, service=incident.service, status=S.COMPLETED)
         before = self.store.file_path.read_bytes()
-        self.store.apply_runtime_projection(old, {"records": [], "result": {"success": True, "status": "completed", "answer": "duplicate"}})
+        with self.assertRaisesRegex(ValueError, "archive_projection_mismatch"):
+            self.store.apply_runtime_projection(old, {"records": [], "result": {"success": True, "status": "completed", "answer": "duplicate"}})
         self.assertEqual(self.store.file_path.read_bytes(), before)
         self.assertEqual(len(self.store.get_incident(incident.incident_id).investigations), 13)
 

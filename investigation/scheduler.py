@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from investigation.checkpoint import protect
 from investigation.models import InvestigationSession, SessionStatus as S
-from investigation.state import RuntimeErrorBase, TERMINAL
+from investigation.state import LostClaim, RuntimeErrorBase, TERMINAL
 
 
 class Scheduler:
@@ -34,7 +34,9 @@ class Scheduler:
                 continue
             pending = [r for r in workflow["human_requests"] if r["status"] == "pending"]
             signature = ":".join((session.status.value, session.last_error_category or "",
-                                  pending[0]["request_id"] if pending else ""))
+                                  pending[0]["request_id"] if pending else "",
+                                  workflow["projection_error_category"] or "",
+                                  "blocked" if workflow["projection_blocked"] else ""))
             key = "terminal_notification:" + session.session_id
             with manager.store.read() as db:
                 if manager.store.metadata(db, key) == signature:
@@ -65,7 +67,8 @@ class Scheduler:
             if workflow["proposal_evidence_gap"]:
                 lines.append("修复补证缺口：" + workflow["proposal_evidence_gap"])
             if workflow["projection_error_category"]:
-                lines.append("Incident 投影待重试：" + workflow["projection_error_category"])
+                prefix = "Incident 投影已隔离，需人工核查：" if workflow["projection_blocked"] else "Incident 投影待重试："
+                lines.append(prefix + workflow["projection_error_category"])
             try:
                 # The displayed snapshot is already committed; stdout holds no DB lock.
                 print(protect("\n".join(lines)) + "\n", flush=True)
@@ -84,6 +87,9 @@ class Scheduler:
         while not self.stop_requested.is_set():
             try:
                 result = self.tick()
+            except LostClaim:
+                logging.getLogger(__name__).warning("Runtime claim lost; continuing with durable state")
+                result = None
             except (sqlite3.DatabaseError, RuntimeErrorBase, ValidationError, ValueError) as exc:
                 logging.getLogger(__name__).error("Runtime stopped; store consistency failure category=%s", type(exc).__name__)
                 self.stop_requested.set()

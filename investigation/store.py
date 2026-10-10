@@ -6,9 +6,9 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
-from investigation.checkpoint import encode
+from investigation.checkpoint import encode, projection_digest
 from investigation.models import Checkpoint, InvestigationSession, SessionStatus as S, utc_now
-from investigation.state import LostClaim, RuntimeErrorBase, TERMINAL, transition
+from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, StateVersionConflict, TERMINAL, transition
 
 DEFAULT_STORE = Path(__file__).resolve().parents[1] / "data" / "runtime.sqlite3"
 SCHEMA_VERSION = 1
@@ -23,13 +23,13 @@ class RuntimeStore:
         with self.transaction() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
-                raise RuntimeErrorBase("unsupported_runtime_schema")
+                raise RuntimeIntegrityError("unsupported_runtime_schema")
             if version == 0:
                 existing = db.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()
                 if existing:
-                    raise RuntimeErrorBase("unversioned_runtime_database")
+                    raise RuntimeIntegrityError("unversioned_runtime_database")
                 statements = [
                     """CREATE TABLE investigation_sessions (
                         session_id TEXT PRIMARY KEY, incident_id TEXT NOT NULL,
@@ -69,7 +69,7 @@ class RuntimeStore:
                 for statement in statements:
                     db.execute(statement)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise RuntimeErrorBase("runtime_database_corrupt")
+                raise RuntimeIntegrityError("runtime_database_corrupt")
             # Additive v1 indexes/outboxes: no table/column change or data reset.
             for statement in (
                 "CREATE INDEX IF NOT EXISTS sessions_incident ON investigation_sessions(incident_id)",
@@ -85,7 +85,9 @@ class RuntimeStore:
                 # indexed pending keys instead of opening historical checkpoints.
                 for session in self.list_sessions(db):
                     checkpoint = self.load_checkpoint(session, db)
-                    if not checkpoint.get("projected") or checkpoint.get("remediation_pending"):
+                    if checkpoint.get("projection_blocked"):
+                        self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
+                    elif not checkpoint.get("projected") or checkpoint.get("remediation_pending"):
                         self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
                     if session.status in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
                         self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
@@ -127,7 +129,7 @@ class RuntimeStore:
     def _session(row):
         session = InvestigationSession.model_validate_json(row["data"])
         if session.state_version != row["state_version"] or session.status.value != row["status"]:
-            raise RuntimeErrorBase("runtime_projection_mismatch")
+            raise RuntimeIntegrityError("runtime_projection_mismatch")
         return session
 
     def get(self, session_id, db=None):
@@ -138,7 +140,7 @@ class RuntimeStore:
             "SELECT * FROM investigation_sessions WHERE session_id=?", (session_id,)
         ).fetchone()
         if row is None:
-            raise RuntimeErrorBase("session_not_found")
+            raise RuntimeIntegrityError("session_not_found")
         return self._session(row)
 
     def list_sessions(self, db=None, *, statuses=None, incident_id=None):
@@ -223,7 +225,7 @@ class RuntimeStore:
              validated.session_id, previous_version),
         ).rowcount
         if changed != 1:
-            raise LostClaim("session_version_conflict")
+            raise StateVersionConflict("session_version_conflict")
         visible = TERMINAL | {S.WAITING_HUMAN, S.PAUSED}
         if session.status in visible and (
             previous.status != session.status or previous.last_error_category != session.last_error_category
@@ -264,9 +266,13 @@ class RuntimeStore:
             return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
 
     def checkpoint(self, session, payload, db, keep=4, *, acknowledge=False):
-        if not acknowledge:
-            payload["projected"] = False
         Checkpoint.model_validate(payload)
+        if not acknowledge:
+            payload["projected"] = bool(payload.get("projected")) and (
+                payload.get("projection_digest") == projection_digest(session, payload)
+            )
+        elif payload.get("projected"):
+            payload["projection_digest"] = projection_digest(session, payload)
         checkpoint_id = "cp-" + uuid4().hex
         db.execute(
             "INSERT INTO investigation_checkpoints VALUES (?,?,?,?)",
@@ -275,7 +281,11 @@ class RuntimeStore:
         session.checkpoint_id = checkpoint_id
         self.event(db, session.session_id, "checkpoint_saved", phase=payload.get("phase"),
                    checkpoint_id=checkpoint_id, observations=[r["observation_id"] for r in payload.get("records", [])])
-        if payload.get("projected") and not payload.get("remediation_pending"):
+        if payload.get("projection_blocked"):
+            self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
+            self.acknowledge_work(db, "projection", session.session_id)
+        elif payload.get("projected") and not payload.get("remediation_pending"):
+            db.execute("DELETE FROM runtime_metadata WHERE key=?", ("blocked_projection:" + session.session_id,))
             self.acknowledge_work(db, "projection", session.session_id)
         else:
             self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
@@ -303,10 +313,10 @@ class RuntimeStore:
             (session.checkpoint_id,),
         ).fetchone()
         if row is None or row[0] != session.session_id:
-            raise RuntimeErrorBase("checkpoint_missing_or_mismatched")
+            raise RuntimeIntegrityError("checkpoint_missing_or_mismatched")
         payload = json.loads(row[1])
         if payload.get("schema_version") != 1:
-            raise RuntimeErrorBase("unsupported_checkpoint_schema")
+            raise RuntimeIntegrityError("unsupported_checkpoint_schema")
         Checkpoint.model_validate(payload)
         return payload
 

@@ -6,7 +6,15 @@ class RuntimeErrorBase(Exception):
 
 
 class LostClaim(RuntimeErrorBase):
-    pass
+    """Expected lease/fencing loss; the former owner must stop publishing."""
+
+
+class RuntimeIntegrityError(RuntimeErrorBase):
+    """Invalid durable state; recovery must fail closed."""
+
+
+class StateVersionConflict(RuntimeIntegrityError):
+    """Unexpected stale CAS write, distinct from an expired Worker claim."""
 
 
 class AttemptToolBudgetExhausted(RuntimeErrorBase):

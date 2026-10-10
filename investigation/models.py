@@ -142,6 +142,8 @@ class Checkpoint(Record):
     investigated_value: float | None = None
     investigated_state: str | None = None
     projected: bool = False
+    projection_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    projection_blocked: bool = False
     remediation_pending: bool = False
     remediation_retry_at: datetime | None = None
     proposal_evidence_gap: str | None = None

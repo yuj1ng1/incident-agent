@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from investigation.checkpoint import encode, protect, restore_context, valid_chain
 from investigation.evidence_policy import cache_key, effective_records, fresh, stable
 from investigation.models import HumanCommand, InvestigationSession, RuntimeLimits, SessionStatus as S
-from investigation.state import LostClaim, RuntimeErrorBase, transition
+from investigation.state import LostClaim, RuntimeErrorBase, StateVersionConflict, transition
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from runtime_cli import main as cli
@@ -120,7 +120,7 @@ class RuntimeTests(unittest.TestCase):
             first = self.store.get(self.session.session_id, db)
             old = first.model_copy(deep=True)
             self.store.save(first, db)
-            with self.assertRaises(LostClaim):
+            with self.assertRaises(StateVersionConflict):
                 self.store.save(old, db)
 
     def test_normal_completed_projection_idempotent(self):
@@ -415,9 +415,10 @@ class RuntimeTests(unittest.TestCase):
     def test_json_failure_replayed_without_duplicate_record(self):
         original = self.manager.incident_store.apply_runtime_projection
         def fail_after_json(session, checkpoint):
-            original(session, checkpoint)
+            outcome = original(session, checkpoint)
             if session.status == S.COMPLETED:
                 raise OSError("crash after JSON commit before SQLite ack")
+            return outcome
         with patch.object(self.manager.incident_store, "apply_runtime_projection", side_effect=fail_after_json):
             Worker(self.manager, FixtureAgent()).run_once()
         self.assertEqual(self.get().status, S.COMPLETED)

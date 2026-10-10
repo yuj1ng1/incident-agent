@@ -1,5 +1,6 @@
 """Bounded, redacted checkpoints and conservative Responses chain validation."""
 import json
+import hashlib
 import os
 import re
 
@@ -48,6 +49,37 @@ def encode(value):
     if len(encoded.encode("utf-8")) > MAX_CHECKPOINT_BYTES:
         raise RuntimeErrorBase("checkpoint_size_limit")
     return encoded
+
+
+def projection_digest(session, payload):
+    """Watermark of business content, excluding lease/phase/history bookkeeping."""
+    from investigation.models import SessionStatus as S
+    final = session.status in {S.COMPLETED, S.EXHAUSTED, S.FAILED}
+    content = {
+        "session": {key: getattr(session, key) for key in (
+            "session_id", "incident_id", "alert_fingerprint", "service", "status",
+            "budget_group_id", "attempt_count", "last_error_category",
+        )},
+        "observations": [
+            {key: record[key] for key in ("observation_id", "name", "result", "collected_at")}
+            for record in payload.get("records", [])
+            if record.get("success") and record.get("result", {}).get("status") == "ok"
+        ],
+        "messages": payload.get("messages", []),
+        "reopen_alert": payload.get("reopen_alert"),
+        "proposal_evidence_gap": payload.get("proposal_evidence_gap"),
+    }
+    if final:
+        content["final"] = {
+            "result": payload.get("result"), "trace": payload.get("trace", []),
+            "investigated_value": payload.get("investigated_value"),
+            "investigated_state": payload.get("investigated_state"),
+            "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+            "model_requests": session.total_model_requests,
+            "tool_executions": session.total_tool_executions,
+        }
+    encoded = json.dumps(protect(content), sort_keys=True, ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def valid_chain(history):

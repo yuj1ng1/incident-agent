@@ -1,17 +1,19 @@
 """Single synchronous Worker: durable I/O boundaries and cooperative interruption."""
 from datetime import datetime, timedelta
 import json
+import sqlite3
 from types import SimpleNamespace
 from uuid import uuid4
 
 import openai
+from pydantic import ValidationError
 from agent_logger.logger_config import logger
 
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import protect, restore_context, valid_chain
 from investigation.evidence_policy import TTL, cache_key, effective_records, fresh
 from investigation.models import SessionStatus as S
-from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, budget_exhaustion, exhausted, transition
+from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, RuntimeIntegrityError, budget_exhaustion, exhausted, transition
 from models.incident import Evidence
 from models.investigation import InvestigationResult, InvestigationStatus
 from services.registry import registry
@@ -57,14 +59,29 @@ class Worker:
             return None
         claim = (self.owner, session.fencing_token)
         checkpoint = self.store.load_checkpoint(session)
+        phase = "run"
+        failure_category = None
         try:
-            self._run(session.session_id, claim, checkpoint)
-        except LostClaim:
-            # The expired owner cannot checkpoint, publish evidence or change status.
+            try:
+                self._run(session.session_id, claim, checkpoint)
+            except LostClaim:
+                raise
+            except (sqlite3.DatabaseError, RuntimeIntegrityError, ValidationError, json.JSONDecodeError):
+                raise
+            except Exception as exc:
+                phase = "failure"
+                failure_category = type(exc).__name__
+                self._failure(session.session_id, claim, checkpoint, exc)
+            phase = "projection"
+            self.manager.sync_incident(session.session_id, claim=claim)
+        except LostClaim as exc:
+            # Audit only: never publish this owner's in-memory checkpoint/evidence.
+            with self.store.transaction() as db:
+                self.store.event(db, session.session_id, "worker_claim_lost", self.owner,
+                                 phase=phase, reason=str(exc), fence=claim[1],
+                                 failure_category=failure_category)
+            logger.warning("Worker lost claim session=%s phase=%s", session.session_id, phase)
             return self.store.get(session.session_id)
-        except Exception as exc:
-            self._failure(session.session_id, claim, checkpoint, exc)
-        self.manager.sync_incident(session.session_id)
         return self.store.get(session.session_id)
 
     def _save(self, session_id, claim, checkpoint, event=None):

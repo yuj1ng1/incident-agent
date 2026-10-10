@@ -6,11 +6,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from functools import wraps
 import threading
+from enum import Enum
 
 from storage_lock import FileLock
 
 from models.incident import Evidence, HistoryArchive, Incident
 from models.investigation import InvestigationRecord
+
+
+class RuntimeProjectionResult(str, Enum):
+    APPLIED = "applied"
+    UNCHANGED = "unchanged"
+    ARCHIVED = "archived"
+    MISSING = "missing"
 
 
 def locked_update(method):
@@ -220,40 +228,45 @@ class IncidentStore:
 
     @locked_update
     def apply_runtime_projection(self, session, checkpoint):
-        """Idempotent outbox consumer; never overwrite monitor alert lifecycle."""
-        from models.incident import Evidence
-        from models.investigation import InvestigationRecord
+        """Return an explicit durable outcome; missing data is never success."""
         from investigation.models import SessionStatus as S
         incident = self.get_incident(session.incident_id, include_history=False)
         if incident is None:
-            return
+            return RuntimeProjectionResult.MISSING
+        if incident.fingerprint != session.alert_fingerprint or incident.service != session.service:
+            raise ValueError("incident_projection_identity_mismatch")
         previous_data = incident.model_dump()
-        archived_ids = {sid for ref in incident.history_archives for sid in ref.session_ids}
-        if session.session_id in archived_ids:
-            return
+        projected_record = self._runtime_record(session, checkpoint)
+        projected_evidence = self._runtime_evidence(session, checkpoint)
+        references = [ref for ref in incident.history_archives if session.session_id in ref.session_ids]
+        if references:
+            if len(references) != 1:
+                raise ValueError("duplicate_incident_history_session")
+            try:
+                archived = self._load_archive(incident.incident_id, references[0])
+            except FileNotFoundError:
+                raise ValueError("incident_history_archive_unavailable") from None
+            actual = next(r for r in archived["investigations"] if r.session_id == session.session_id)
+            if projected_record is None or actual != projected_record:
+                raise ValueError("incident_history_archive_projection_mismatch")
+            known = {e.observation_id: e for e in archived["evidence"] if e.runtime_session_id == session.session_id}
+            if any(known.get(e.observation_id) != e for e in projected_evidence):
+                raise ValueError("incident_history_archive_projection_mismatch")
+            return RuntimeProjectionResult.ARCHIVED
         if session.budget_group_id == session.session_id and not session.attempt_count:
             incident.consecutive_investigation_failures = 0
             incident.investigation_suspended_reason = None
             incident.last_attempted_at = None
-            if checkpoint.get("reopen_alert"):
-                from models.incident import AlertEvent
-                incident.alerts[-1] = AlertEvent.model_validate(checkpoint["reopen_alert"])
-        known = {item.observation_id for item in incident.evidence if item.observation_id}
-        for record in checkpoint.get("records", []):
-            if (
-                record.get("success")
-                and record.get("result", {}).get("status") == "ok"
-                and record["observation_id"] not in known
-            ):
-                incident.evidence.append(Evidence(
-                    source=record["name"],
-                    summary=f"{record['name']}查询结果（采集时观测）",
-                    detail=json.dumps(record["result"], ensure_ascii=False),
-                    collected_at=record["collected_at"],
-                    runtime_session_id=session.session_id,
-                    observation_id=record["observation_id"],
-                ))
-                known.add(record["observation_id"])
+            # The verified reopen snapshot belongs to the authorization audit;
+            # Monitor alone owns current alerts, observed_at and lifecycle state.
+        known = {item.observation_id: item for item in incident.evidence if item.observation_id}
+        for evidence in projected_evidence:
+            previous = known.get(evidence.observation_id)
+            if previous is not None and previous != evidence:
+                raise ValueError("incident_projection_evidence_mismatch")
+            if previous is None:
+                incident.evidence.append(evidence)
+                known[evidence.observation_id] = evidence
         if session.attempt_count:
             incident.last_attempted_at = session.completed_at or session.updated_at
         incident.investigation_suspended_reason = (
@@ -267,35 +280,49 @@ class IncidentStore:
             from reinvestigation import RETRYABLE_FAILURES
             if session.last_error_category not in RETRYABLE_FAILURES:
                 incident.investigation_suspended_reason = "non_retryable_failure_requires_human_reopen"
-        result = checkpoint.get("result")
-        if not result and session.status in {S.FAILED, S.EXHAUSTED}:
-            result = {"success": False, "status": "model_incomplete",
-                      "answer": "调查停止：" + (session.last_error_category or session.status.value)}
-        if (
-            result
-            and session.status in {S.COMPLETED, S.EXHAUSTED, S.FAILED}
-            and not any(r.session_id == session.session_id for r in incident.investigations)
-        ):
-            stamp = session.completed_at or session.updated_at
-            incident.investigations.append(InvestigationRecord(
-                session_id=session.session_id,
-                investigated_at=stamp,
-                status=result["status"],
-                alert_value=checkpoint.get("investigated_value"),
-                answer=result["answer"],
-                model_rounds=session.total_model_requests,
-                tool_calls=session.total_tool_executions,
-                tool_trace=checkpoint.get("trace", []),
-            ))
-            if result["success"]:
+        previous = next((r for r in incident.investigations if r.session_id == session.session_id), None)
+        if previous is not None and previous != projected_record:
+            raise ValueError("incident_projection_result_mismatch")
+        if projected_record is not None and previous is None:
+            incident.investigations.append(projected_record)
+            if (checkpoint.get("result") or {}).get("success"):
                 incident.consecutive_investigation_failures = 0
-                incident.last_investigated_at = stamp
+                incident.last_investigated_at = projected_record.investigated_at
                 incident.last_investigated_value = checkpoint.get("investigated_value")
                 incident.last_investigated_state = checkpoint.get("investigated_state")
             else:
                 incident.consecutive_investigation_failures += 1
         if incident.model_dump() != previous_data:
             self.save_incident(session.alert_fingerprint, incident)
+            return RuntimeProjectionResult.APPLIED
+        return RuntimeProjectionResult.UNCHANGED
+
+    @staticmethod
+    def _runtime_record(session, checkpoint):
+        from investigation.models import SessionStatus as S
+        if session.status not in {S.COMPLETED, S.EXHAUSTED, S.FAILED}:
+            return None
+        result = checkpoint.get("result")
+        if not result and session.status in {S.FAILED, S.EXHAUSTED}:
+            result = {"status": "model_incomplete",
+                      "answer": "调查停止：" + (session.last_error_category or session.status.value)}
+        if not result:
+            raise ValueError("completed_projection_result_missing")
+        return InvestigationRecord(
+            session_id=session.session_id, investigated_at=session.completed_at or session.updated_at,
+            status=result["status"], alert_value=checkpoint.get("investigated_value"),
+            answer=result["answer"], model_rounds=session.total_model_requests,
+            tool_calls=session.total_tool_executions, tool_trace=checkpoint.get("trace", []),
+        )
+
+    @staticmethod
+    def _runtime_evidence(session, checkpoint):
+        return [Evidence(
+            source=r["name"], summary=f"{r['name']}查询结果（采集时观测）",
+            detail=json.dumps(r["result"], ensure_ascii=False), collected_at=r["collected_at"],
+            runtime_session_id=session.session_id, observation_id=r["observation_id"],
+        ) for r in checkpoint.get("records", [])
+            if r.get("success") and r.get("result", {}).get("status") == "ok"]
 
     @locked_update
     def get_or_migrate_active(self, alert, fingerprint):

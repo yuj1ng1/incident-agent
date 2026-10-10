@@ -52,7 +52,10 @@ class FixtureAgent(Agent):
     def run_fixture_tool(self, item, *, session_id=None):
         self.executions.append(item.name)
         if self.tool_result is not None:
-            result = self.tool_result(item)
+            try:
+                result = self.tool_result(item)
+            except Exception as exc:
+                result = {"status": "tool_error", "reason": type(exc).__name__}
         elif item.name == "get_running_version":
             result = {
                 "status": "ok", "service": "order-service", "commit_sha": SHA,
@@ -61,7 +64,8 @@ class FixtureAgent(Agent):
             }
         else:
             result = {"status": "ok", "value": 0.3, "service": json.loads(item.arguments).get("service")}
-        return True, self.tool_manager.build_output_item(item, result), result
+        success = result.get("status") not in {"tool_error", "tool_not_found", "invalid_arguments", "invalid_tool_result"}
+        return success, self.tool_manager.build_output_item(item, result), result
 
 
 def create_runtime(root, clock=None, limits=None):

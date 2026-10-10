@@ -1,12 +1,14 @@
 """Application service shared by local CLI, Monitor and future authenticated Web."""
 from datetime import datetime, timedelta
+from contextlib import nullcontext
 import json
 from uuid import uuid4
 
 from config import ALERT_POLL_INTERVAL_SECONDS, RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
 from investigation.models import HumanCommand, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
-from investigation.state import RuntimeErrorBase, TERMINAL, budget_exhaustion, exhausted, transition
+from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, TERMINAL, budget_exhaustion, exhausted, transition
+from incident_store import RuntimeProjectionResult
 from reinvestigation import reinvestigation_reason, utc_timestamp
 from storage_lock import FileLockError
 
@@ -292,6 +294,8 @@ class InvestigationManager:
                     if kind != "reopen":
                         command.result = session.status.value
                         changed = True
+                except RuntimeIntegrityError:
+                    raise
                 except RuntimeErrorBase as exc:
                     command.processing_status = "rejected"
                     command.result = str(exc)
@@ -395,7 +399,9 @@ class InvestigationManager:
                          alert_observed_at=verified.observed_at.isoformat())
         self.store.event(db, session.session_id, "budget_reauthorized", command.actor,
                          command_id=command.command_id, reason=command.payload["reason"],
-                         previous_session_id=previous.session_id, authorized_limits=self.limits.model_dump())
+                         previous_session_id=previous.session_id, authorized_limits=self.limits.model_dump(),
+                         verified_alert=verified.model_dump(mode="json"),
+                         alert_fingerprint=previous.alert_fingerprint)
         self.store.metadata(db, "reinvestigation_refusal:" + incident.incident_id, None, write=True)
         return session
 
@@ -529,11 +535,13 @@ class InvestigationManager:
                 self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep)
                 self.store.save(session, db)
 
-    def sync_incident(self, session_id):
+    def sync_incident(self, session_id, claim=None):
         # SQLite -> JSON -> SQLite acknowledgement is an idempotent outbox, not a cross-store transaction.
         with self.store.read() as db:
             session = self.store.get(session_id, db)
             checkpoint = self.store.load_checkpoint(session, db)
+        if checkpoint.get("projection_blocked"):
+            return
         if checkpoint.get("projected") and not checkpoint.get("remediation_pending"):
             return
         for field in ("projection_retry_at", "remediation_retry_at"):
@@ -543,9 +551,32 @@ class InvestigationManager:
         events = []
         if not checkpoint.get("projected"):
             try:
-                # File I/O is outside SQLite. Malformed data/schema errors propagate;
-                # only a write/lock failure of this projection is isolated.
-                self.incident_store.apply_runtime_projection(session, checkpoint)
+                # Worker publication is serialized against fencing replacement.
+                # JSON commit and outbox ack remain separate crash boundaries;
+                # no model/tool I/O or remediation action is in this transaction.
+                publication = self.store.transaction() if claim else nullcontext(None)
+                with publication as db:
+                    if claim:
+                        current = self.store.get(session_id, db)
+                        if current.fencing_token != claim[1]:
+                            raise LostClaim("worker_claim_lost")
+                        if current.status == S.RUNNING:
+                            self.store.guard(db, session_id, *claim)
+                        if current.state_version != session.state_version:
+                            self.store.event(db, session_id, "incident_projection_superseded")
+                            return
+                    outcome = self.incident_store.apply_runtime_projection(session, checkpoint)
+                if not isinstance(outcome, RuntimeProjectionResult):
+                    raise RuntimeIntegrityError("unconfirmed_incident_projection")
+                if outcome == RuntimeProjectionResult.MISSING:
+                    checkpoint["projection_blocked"] = True
+                    checkpoint["projection_error_category"] = "incident_not_found"
+                    checkpoint["projection_retry_at"] = None
+                    checkpoint["projection_attempts"] = checkpoint.get("projection_attempts", 0) + 1
+                    events.append(("incident_projection_blocked", {"category": "incident_not_found"}))
+                elif outcome not in {RuntimeProjectionResult.APPLIED, RuntimeProjectionResult.UNCHANGED,
+                                      RuntimeProjectionResult.ARCHIVED}:
+                    raise RuntimeIntegrityError("unconfirmed_incident_projection")
             except (OSError, FileLockError) as exc:
                 attempts = checkpoint.get("projection_attempts", 0) + 1
                 checkpoint["projection_attempts"] = attempts
@@ -554,8 +585,9 @@ class InvestigationManager:
                 checkpoint["projection_retry_at"] = (self.store.clock() + timedelta(seconds=delay)).isoformat()
                 events.append(("incident_projection_failed", {"category": type(exc).__name__, "retry_seconds": delay}))
             else:
-                checkpoint["projection_retry_at"] = None
-                checkpoint["projection_error_category"] = None
+                if not checkpoint.get("projection_blocked"):
+                    checkpoint["projection_retry_at"] = None
+                    checkpoint["projection_error_category"] = None
         if not checkpoint.get("projection_error_category") and session.status in TERMINAL:
             checkpoint["remediation_pending"] = False
             checkpoint["remediation_retry_at"] = None
@@ -588,11 +620,14 @@ class InvestigationManager:
         with self.store.transaction() as db:
             latest = self.store.get(session_id, db)
             if latest.state_version != session.state_version:
+                self.store.event(db, session_id, "incident_projection_superseded")
                 return
             self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep, acknowledge=True)
             self.store.save(session, db)
             for name, metadata in events:
                 self.store.event(db, session_id, name, **metadata)
+                if name == "incident_projection_blocked":
+                    self.store.metadata(db, "pending_notification:" + session_id, True, write=True)
 
     def workflow(self, session_id, include_remediations=True):
         with self.store.read() as db:
@@ -618,6 +653,7 @@ class InvestigationManager:
             "proposal_evidence_gap": checkpoint.get("proposal_evidence_gap"),
             "projection_error_category": checkpoint.get("projection_error_category"),
             "projection_retry_at": checkpoint.get("projection_retry_at"),
+            "projection_blocked": checkpoint.get("projection_blocked", False),
             "human_requests": [r.model_dump(mode="json") for r in requests],
             "human_messages": [json.loads(r["data"]) | {"consumed_at": r["consumed_at"]} for r in messages],
             "checkpoint_summary": {
