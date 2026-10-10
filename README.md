@@ -25,6 +25,9 @@ Set-Location 'D:\Incident Agent'
 锁文件不导出 Conda 中的无关包。一般生产依赖声明仍在 `requirements.txt`。
 `.github/workflows/runtime-tests.yml` 在 Windows/Python 3.12 运行隔离回归，测试不需要真实密钥。
 
+CI 依赖、预算边界、Remediation 人工收口与全局模型阻塞的验证结果及操作命令，见
+[CI 与 Remediation 安全恢复验证记录](docs/CI_REMEDIATION_SAFETY_VALIDATION_2026-10-10_14-14-13.md)。
+
 Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回答；
 等待人类时显示 `[Human Input Required]`、Request ID 和问题。
 通知使用 SQLite 中的简单标记避免每次轮询或重启重复展示。
