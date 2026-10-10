@@ -11,7 +11,7 @@ from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import protect, restore_context, valid_chain
 from investigation.evidence_policy import TTL, cache_key, effective_records, fresh
 from investigation.models import SessionStatus as S
-from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, exhausted, transition
+from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, budget_exhaustion, exhausted, transition
 from models.incident import Evidence
 from models.investigation import InvestigationResult, InvestigationStatus
 from services.registry import registry
@@ -49,7 +49,7 @@ class Worker:
 
     def run_once(self):
         self.manager.recover()
-        with self.store.transaction() as db:
+        with self.store.read() as db:
             if self.store.metadata(db, "model_blocked"):
                 return None
         session = self.store.claim(self.owner, self.manager.limits)
@@ -88,7 +88,7 @@ class Worker:
                 self.store.checkpoint(session, checkpoint, db, self.manager.limits.checkpoints_to_keep)
                 self.store.save(session, db)
                 self.store.event(db, session_id, "worker_shutdown_at_safe_point")
-        incident = self.manager.incident_store.get_incident(session.incident_id)
+        incident = self.manager.incident_store.get_incident(session.incident_id, include_history=False)
         if session.status == S.RUNNING and (
             incident is None or incident.alert_state == "cleared" or incident.status == "resolved"
         ):
@@ -105,12 +105,16 @@ class Worker:
     def _reserve(self, session_id, claim, checkpoint, kind):
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
+            usage = self.store.budget_usage(session, db)
             if (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds:
                 raise RuntimeErrorBase("session_duration_exhausted")
             if kind == "model" and session.total_model_requests >= self.manager.limits.max_model_requests:
                 raise RuntimeErrorBase("session_model_budget_exhausted")
             if kind == "tool" and session.total_tool_executions >= self.manager.limits.max_tool_executions:
                 raise RuntimeErrorBase("session_tool_budget_exhausted")
+            reason = budget_exhaustion(usage, self.manager.limits, self.store.clock(), resource=kind)
+            if reason:
+                raise RuntimeErrorBase(reason)
             if kind == "model":
                 if session.current_attempt_rounds >= MAX_AGENT_LOOPS:
                     raise RuntimeErrorBase("attempt_budget_exhausted")
@@ -136,6 +140,10 @@ class Worker:
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
             if session.attempt_count == 0 or checkpoint.get("new_attempt"):
+                reason = budget_exhaustion(self.store.budget_usage(session, db), self.manager.limits,
+                                          self.store.clock(), new_attempt=True)
+                if reason:
+                    raise RuntimeErrorBase(reason)
                 if session.attempt_count >= self.manager.limits.max_attempts:
                     raise RuntimeErrorBase("session_budget_exhausted")
                 session.attempt_count += 1
@@ -152,7 +160,7 @@ class Worker:
 
     def _context(self, session_id, checkpoint):
         session = self.store.get(session_id)
-        incident = self.manager.incident_store.get_incident(session.incident_id)
+        incident = self.manager.incident_store.get_incident(session.incident_id, include_history=False)
         checkpoint["investigated_value"] = incident.alerts[-1].value
         checkpoint["investigated_state"] = incident.alerts[-1].state
         # Historical dynamic observations remain persisted but are not current facts.
@@ -441,15 +449,17 @@ class Worker:
             # cannot survive inside an otherwise syntactically valid message chain.
             history = self._context(session_id, checkpoint)
             session = self._reserve(session_id, claim, checkpoint, "model")
+            with self.store.read() as db:
+                usage = self.store.budget_usage(session, db)
             self._boundary("model_before_io", session_id)
             response = self.agent.request_durable_response(
                 history,
                 session.current_attempt_rounds,
                 session.current_attempt_tool_calls,
-                [HUMAN_TOOL] if session.human_request_count < self.manager.limits.max_human_requests else [],
+                [HUMAN_TOOL] if usage["human_requests"] < self.manager.limits.max_human_requests else [],
                 self.manager.limits.model_timeout_seconds,
-                remaining_tools=max(0, self.manager.limits.max_tool_executions - session.total_tool_executions),
-                remaining_rounds=max(0, self.manager.limits.max_model_requests - session.total_model_requests + 1),
+                remaining_tools=max(0, self.manager.limits.max_tool_executions - usage["tool_executions"]),
+                remaining_rounds=max(0, self.manager.limits.max_model_requests - usage["model_requests"] + 1),
             )
             self._boundary("model_after_io", session_id)
             if getattr(response, "status", None) != "completed":
@@ -537,8 +547,11 @@ class Worker:
         if planner is None or not checkpoint.get("result", {}).get("success"):
             return True
         session = self.store.get(session_id)
-        if (self.store.clock() - session.created_at).total_seconds() >= self.manager.limits.max_duration_seconds:
-            checkpoint["proposal_evidence_gap"] = "session_duration_exhausted"
+        with self.store.read() as db:
+            usage = self.store.budget_usage(session, db)
+        lifecycle_limit = budget_exhaustion(usage, self.manager.limits, self.store.clock(), resource="lifecycle")
+        if lifecycle_limit:
+            checkpoint["proposal_evidence_gap"] = lifecycle_limit
             return True
         incident = self.manager.incident_store.get_incident(session.incident_id)
         # A historical candidate is only a reason to collect more evidence; never an approval.
@@ -560,8 +573,10 @@ class Worker:
             record = next((r for r in reversed(observations) if r["name"] == name), None)
             if record and (name == "get_running_version" or not fresh(record, self.store.clock())):
                 required.append(record)
+        with self.store.read() as db:
+            usage = self.store.budget_usage(session, db)
         available = min(MAX_TOOL_CALLS - session.current_attempt_tool_calls,
-                        self.manager.limits.max_tool_executions - session.total_tool_executions)
+                        self.manager.limits.max_tool_executions - usage["tool_executions"])
         if len(required) > available:
             checkpoint["proposal_evidence_gap"] = "proposal_refresh_budget_unavailable"
             with self.store.transaction() as db:
@@ -585,7 +600,8 @@ class Worker:
                 raise
             except RuntimeErrorBase as exc:
                 if str(exc) not in {"session_duration_exhausted", "session_tool_budget_exhausted",
-                                    "attempt_tool_budget_exhausted"}:
+                                    "attempt_tool_budget_exhausted", "incident_duration_exhausted",
+                                    "incident_tool_budget_exhausted", "incident_resume_budget_exhausted"}:
                     raise
                 checkpoint["proposal_evidence_gap"] = str(exc)
                 self._save(session_id, claim, checkpoint, "proposal_refresh_failed")
@@ -627,14 +643,16 @@ class Worker:
                 target = S.PAUSED
                 self.store.metadata(db, "model_blocked", category, write=True)
                 event = "model_blocked"
-            elif category in {
+            elif (category.startswith("incident_") and category.endswith("exhausted")) or category in {
                 "session_budget_exhausted", "session_duration_exhausted",
                 "session_model_budget_exhausted", "session_tool_budget_exhausted",
                 "attempt_budget_exhausted",
-            } or exhausted(session, self.manager.limits, self.store.clock()):
+            } or exhausted(session, self.manager.limits, self.store.clock()) or budget_exhaustion(
+                self.store.budget_usage(session, db), self.manager.limits, self.store.clock(),
+            ):
                 target = S.EXHAUSTED
                 event = "budget_exhausted"
-            elif transient and session.attempt_count < self.manager.limits.max_attempts:
+            elif transient and self.store.budget_usage(session, db)["attempts"] < self.manager.limits.max_attempts:
                 target = S.WAITING_RETRY
                 session.next_retry_at = self.store.clock() + timedelta(
                     seconds=self.manager.limits.retry_base_seconds * 2 ** (session.attempt_count - 1)

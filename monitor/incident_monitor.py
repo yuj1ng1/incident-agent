@@ -45,7 +45,7 @@ class IncidentMonitor:
             if alert.state == "pending":
                 fingerprint = generate_alert_fingerprint(alert)
                 current.add(fingerprint)
-                incident = self.incident_store.get_active_incident(fingerprint)
+                incident = self.incident_store.get_active_incident(fingerprint, include_history=False)
                 if incident is not None:
                     incident.alert_state = "pending"
                     self.incident_store.save_observation(fingerprint, incident)
@@ -54,7 +54,7 @@ class IncidentMonitor:
             return snapshot
         inactive = [
             incident
-            for incident in self.incident_store.active_incidents()
+            for incident in self.incident_store.active_incidents(include_history=False)
             if incident.fingerprint not in current
         ]
         rules = rules_are_current(self.prometheus_client) if inactive else {}
@@ -77,7 +77,7 @@ class IncidentMonitor:
         if incident is None:
             incident = create_incident_from_alert(alert, fingerprint)
             logger.info(
-                f"创建新 Incident incident={incident.incident_id} service={incident.service}"
+                f"创建新 Incident incident_id={incident.incident_id} service={incident.service}"
             )
             investigate = True
         else:
@@ -90,8 +90,9 @@ class IncidentMonitor:
         incident.alert_state = alert.state
         incident.related_alerts = related or []
         self.incident_store.save_observation(fingerprint, incident)
-        if investigate:
-            self.investigation_manager.enqueue(incident, reinvestigate=True)
+        # The Manager owns the unified status/Policy/budget decision and records
+        # refusals. Monitoring must not silently suppress a failed Session.
+        self.investigation_manager.enqueue(incident, reinvestigate=True)
 
     def run(self):
         try:

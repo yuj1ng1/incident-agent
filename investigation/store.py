@@ -70,6 +70,26 @@ class RuntimeStore:
                     db.execute(statement)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise RuntimeErrorBase("runtime_database_corrupt")
+            # Additive v1 indexes/outboxes: no table/column change or data reset.
+            for statement in (
+                "CREATE INDEX IF NOT EXISTS sessions_incident ON investigation_sessions(incident_id)",
+                "CREATE INDEX IF NOT EXISTS sessions_budget_group ON investigation_sessions(incident_id,json_extract(data,'$.budget_group_id'))",
+                "CREATE INDEX IF NOT EXISTS sessions_status ON investigation_sessions(status)",
+                "CREATE INDEX IF NOT EXISTS commands_pending ON investigation_commands(status,session_id)",
+                "CREATE INDEX IF NOT EXISTS requests_session ON human_requests(session_id,status)",
+                "CREATE INDEX IF NOT EXISTS events_session ON investigation_events(session_id,sequence)",
+            ):
+                db.execute(statement)
+            if not self.metadata(db, "work_outboxes_v1"):
+                # Existing databases are backfilled once. Subsequent ticks query
+                # indexed pending keys instead of opening historical checkpoints.
+                for session in self.list_sessions(db):
+                    checkpoint = self.load_checkpoint(session, db)
+                    if not checkpoint.get("projected") or checkpoint.get("remediation_pending"):
+                        self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
+                    if session.status in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
+                        self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
+                self.metadata(db, "work_outboxes_v1", True, write=True)
 
     @contextmanager
     def transaction(self):
@@ -89,26 +109,97 @@ class RuntimeStore:
         finally:
             db.close()
 
+    @contextmanager
+    def read(self):
+        """Consistent read-only snapshot; never reserves the SQLite writer lock."""
+        db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
+                             timeout=5, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            yield db
+            db.commit()
+        finally:
+            db.close()
+
+    @staticmethod
+    def _session(row):
+        session = InvestigationSession.model_validate_json(row["data"])
+        if session.state_version != row["state_version"] or session.status.value != row["status"]:
+            raise RuntimeErrorBase("runtime_projection_mismatch")
+        return session
+
     def get(self, session_id, db=None):
         if db is None:
-            with self.transaction() as connection:
+            with self.read() as connection:
                 return self.get(session_id, connection)
         row = db.execute(
             "SELECT * FROM investigation_sessions WHERE session_id=?", (session_id,)
         ).fetchone()
         if row is None:
             raise RuntimeErrorBase("session_not_found")
-        session = InvestigationSession.model_validate_json(row["data"])
-        if session.state_version != row["state_version"] or session.status.value != row["status"]:
-            raise RuntimeErrorBase("runtime_projection_mismatch")
-        return session
+        return self._session(row)
 
-    def list_sessions(self, db=None):
+    def list_sessions(self, db=None, *, statuses=None, incident_id=None):
         if db is None:
-            with self.transaction() as connection:
-                return self.list_sessions(connection)
-        rows = db.execute("SELECT session_id FROM investigation_sessions ORDER BY rowid").fetchall()
-        return [self.get(row[0], db) for row in rows]
+            with self.read() as connection:
+                return self.list_sessions(connection, statuses=statuses, incident_id=incident_id)
+        conditions, values = [], []
+        if statuses is not None:
+            if not statuses:
+                return []
+            conditions.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+            values.extend(S(status).value for status in statuses)
+        if incident_id is not None:
+            conditions.append("incident_id=?")
+            values.append(incident_id)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = db.execute("SELECT * FROM investigation_sessions" + where + " ORDER BY rowid", values)
+        return [self._session(row) for row in rows]
+
+    def latest_session(self, incident_id, db):
+        row = db.execute(
+            "SELECT * FROM investigation_sessions WHERE incident_id=? ORDER BY rowid DESC LIMIT 1",
+            (incident_id,),
+        ).fetchone()
+        return self._session(row) if row else None
+
+    def budget_usage(self, session, db):
+        group = [self._session(row) for row in db.execute(
+            """SELECT * FROM investigation_sessions WHERE incident_id=?
+                AND json_extract(data,'$.budget_group_id') IS ?""",
+            (session.incident_id, session.budget_group_id),
+        )]
+        return {
+            "attempts": sum(s.attempt_count for s in group),
+            "model_requests": sum(s.total_model_requests for s in group),
+            "tool_executions": sum(s.total_tool_executions for s in group),
+            "resumes": sum(s.resume_count for s in group),
+            "human_requests": sum(s.human_request_count for s in group),
+            "started_at": min((s.created_at for s in group), default=session.created_at),
+        }
+
+    def pending_commands(self):
+        with self.read() as db:
+            return [row[0] for row in db.execute(
+                "SELECT DISTINCT session_id FROM investigation_commands WHERE status='pending'"
+            )]
+
+    def pending_work(self, kind):
+        if kind not in {"projection", "notification"}:
+            raise RuntimeErrorBase("unknown_pending_work")
+        prefix = "pending_" + kind + ":"
+        with self.read() as db:
+            rows = db.execute(
+                """SELECT s.* FROM runtime_metadata m JOIN investigation_sessions s
+                    ON s.session_id=substr(m.key,?) WHERE m.key>=? AND m.key<? ORDER BY s.rowid""",
+                (len(prefix) + 1, prefix, prefix + "\uffff"),
+            )
+            return [self._session(row) for row in rows]
+
+    def acknowledge_work(self, db, kind, session_id):
+        db.execute("DELETE FROM runtime_metadata WHERE key=?", ("pending_" + kind + ":" + session_id,))
 
     def insert(self, session, db):
         db.execute(
@@ -117,8 +208,10 @@ class RuntimeStore:
              session.state_version, session.model_dump_json()),
         )
         self.event(db, session.session_id, "session_created", "manager")
+        self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
 
     def save(self, session, db):
+        previous = self.get(session.session_id, db)
         previous_version = session.state_version
         session.updated_at = self.clock()
         session.state_version += 1
@@ -131,6 +224,13 @@ class RuntimeStore:
         ).rowcount
         if changed != 1:
             raise LostClaim("session_version_conflict")
+        visible = TERMINAL | {S.WAITING_HUMAN, S.PAUSED}
+        if session.status in visible and (
+            previous.status != session.status or previous.last_error_category != session.last_error_category
+        ):
+            self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
+        elif session.status not in visible:
+            self.acknowledge_work(db, "notification", session.session_id)
 
     def guard(self, db, session_id, owner, fence):
         session = self.get(session_id, db)
@@ -155,7 +255,7 @@ class RuntimeStore:
     def events(self, session_id, limit=100):
         if not 1 <= limit <= 1000:
             raise RuntimeErrorBase("event_limit_invalid")
-        with self.transaction() as db:
+        with self.read() as db:
             self.get(session_id, db)
             rows = db.execute(
                 """SELECT * FROM investigation_events WHERE session_id=?
@@ -163,7 +263,9 @@ class RuntimeStore:
             ).fetchall()
             return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
 
-    def checkpoint(self, session, payload, db, keep=4):
+    def checkpoint(self, session, payload, db, keep=4, *, acknowledge=False):
+        if not acknowledge:
+            payload["projected"] = False
         Checkpoint.model_validate(payload)
         checkpoint_id = "cp-" + uuid4().hex
         db.execute(
@@ -171,7 +273,12 @@ class RuntimeStore:
             (checkpoint_id, session.session_id, self.clock().isoformat(), encode(payload)),
         )
         session.checkpoint_id = checkpoint_id
-        self.event(db, session.session_id, "checkpoint_saved", phase=payload.get("phase"))
+        self.event(db, session.session_id, "checkpoint_saved", phase=payload.get("phase"),
+                   checkpoint_id=checkpoint_id, observations=[r["observation_id"] for r in payload.get("records", [])])
+        if payload.get("projected") and not payload.get("remediation_pending"):
+            self.acknowledge_work(db, "projection", session.session_id)
+        else:
+            self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
         db.execute(
             """DELETE FROM investigation_checkpoints WHERE session_id=? AND checkpoint_id NOT IN (
                 SELECT checkpoint_id FROM investigation_checkpoints WHERE session_id=?
@@ -181,7 +288,7 @@ class RuntimeStore:
 
     def load_checkpoint(self, session, db=None):
         if db is None:
-            with self.transaction() as connection:
+            with self.read() as connection:
                 return self.load_checkpoint(session, connection)
         if not session.checkpoint_id:
             return {
@@ -204,8 +311,11 @@ class RuntimeStore:
         return payload
 
     def claim(self, owner, limits):
+        with self.read() as db:
+            if not db.execute("SELECT 1 FROM investigation_sessions WHERE status='QUEUED' LIMIT 1").fetchone():
+                return None
         with self.transaction() as db:
-            sessions = self.list_sessions(db)
+            sessions = self.list_sessions(db, statuses={S.RUNNING, S.QUEUED})
             now = self.clock()
             # Across all sessions there is at most one unexpired Worker claim.
             if any(s.status == S.RUNNING and s.lease_until and s.lease_until > now for s in sessions):

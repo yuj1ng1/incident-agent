@@ -184,13 +184,18 @@ class IncidentRegressionTests(unittest.TestCase):
             pass
 
     def run_investigation(self, incident):
+        original = incident
+        latest = self.store.get_incident(incident.incident_id)
+        if latest is not None:
+            incident = latest
+        incident.alerts[-1].observed_at = self.manager.store.clock()
         self.store.save_incident(incident.fingerprint, incident)
         session = self.manager.enqueue(incident, reinvestigate=True)
         self.worker.run_once()
         session = self.manager.store.get(session.session_id)
         checkpoint = self.manager.store.load_checkpoint(session)
         latest = self.store.get_incident(incident.incident_id)
-        incident.evidence = latest.evidence
+        original.evidence = latest.evidence
         return InvestigationResult.model_validate(checkpoint["result"]).model_copy(update={
             "model_rounds": session.total_model_requests,
             "tool_calls": session.total_tool_executions,
@@ -219,6 +224,8 @@ class IncidentRegressionTests(unittest.TestCase):
         return investigated, query
 
     def test_main_constructs_real_objects_and_enters_two_poll_cycles(self):
+        from investigation.scheduler import Scheduler
+        from remediation.store import RemediationStore
         old_cwd = Path.cwd()
         try:
             os.chdir(self.work)
@@ -226,18 +233,27 @@ class IncidentRegressionTests(unittest.TestCase):
                 "status": "success", "data": {"alerts": []}
             }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]), \
                     patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}), \
+                    patch("dotenv.load_dotenv") as load_environment, \
                     patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(self.work / "assembly.sqlite3")), \
-                    patch("investigation.scheduler.Scheduler.start") as start, \
-                    patch("investigation.scheduler.Scheduler.stop"):
+                    patch("remediation.store.RemediationStore", side_effect=lambda: RemediationStore(self.work / "assembly-remediations.json")), \
+                    patch("monitor.incident_monitor.IncidentMonitor", side_effect=IncidentMonitor) as monitor_factory, \
+                    patch("investigation.scheduler.Scheduler", side_effect=Scheduler) as scheduler_factory, \
+                    patch.object(Scheduler, "start") as start, \
+                    patch.object(Scheduler, "stop") as stop:
                 namespace = runpy.run_path(str(ROOT / "main.py"), run_name="__main__")
-            self.assertIsInstance(namespace["agent"], Agent)
-            self.assertIsInstance(namespace["prometheus_client"], PrometheusClient)
-            self.assertIsInstance(namespace["incident_store"], IncidentStore)
-            self.assertIsInstance(namespace["monitor"], IncidentMonitor)
-            self.assertIs(namespace["monitor"].investigation_manager, namespace["runtime_manager"])
-            self.assertIs(namespace["scheduler"].worker.manager, namespace["runtime_manager"])
-            self.assertFalse(hasattr(namespace["agent"], "investigate"))
+            self.assertTrue(callable(namespace["main"]))
+            manager = monitor_factory.call_args.kwargs["investigation_manager"]
+            worker = scheduler_factory.call_args.args[0]
+            self.assertIs(worker.manager, manager)
+            self.assertIsInstance(worker.agent, Agent)
+            self.assertIsInstance(monitor_factory.call_args.kwargs["prometheus_client"], PrometheusClient)
+            self.assertIsInstance(manager.incident_store, IncidentStore)
+            self.assertEqual(manager.store.path, self.work / "assembly.sqlite3")
+            self.assertEqual(worker.agent.model_client.client.max_retries, 0)
+            self.assertTrue(worker.agent.model_client.client.is_closed())
             start.assert_called_once()
+            stop.assert_called_once()
+            load_environment.assert_called_once()
             self.assertEqual(get_alerts.call_count, 2)
             self.assertEqual(json.loads((self.work / "data" / "incidents.json").read_text()), {
                 "version": 2, "incidents": {}, "active_by_fingerprint": {}
@@ -468,7 +484,10 @@ class IncidentRegressionTests(unittest.TestCase):
     def test_changed_evidence_across_investigations_is_added(self):
         incident = create_incident_from_alert(parse_prometheus_alert(raw_alert()), self.fp)
         self.investigate_with_metrics(incident, value=0.27)
+        self.manager.store.clock = lambda: NOW + timedelta(minutes=5)
         self.investigate_with_metrics(incident, value=0.40)
+        self.assertEqual(self.sdk.responses.create.call_count, 4)
+        self.assertEqual(len(self.manager.store.list_sessions()), 2)
         self.assertEqual(len(incident.evidence), 2)
         self.assertEqual([json.loads(e.detail)["value"] for e in incident.evidence], [0.27, 0.40])
 

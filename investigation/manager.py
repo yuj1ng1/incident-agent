@@ -3,44 +3,99 @@ from datetime import datetime, timedelta
 import json
 from uuid import uuid4
 
-from config import RUNTIME_LIMITS
+from config import ALERT_POLL_INTERVAL_SECONDS, RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
 from investigation.models import HumanCommand, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
-from investigation.state import RuntimeErrorBase, TERMINAL, exhausted, transition
+from investigation.state import RuntimeErrorBase, TERMINAL, budget_exhaustion, exhausted, transition
+from reinvestigation import reinvestigation_reason, utc_timestamp
 from storage_lock import FileLockError
 
 
+def live_alert_for_incident(prometheus_client, incident):
+    from alert_parser import normalize_snapshot
+    from fingerprint import generate_alert_fingerprint
+    snapshot = normalize_snapshot(prometheus_client.get_alerts())
+    if not snapshot.complete:
+        raise ValueError("untrusted_live_alert_snapshot")
+    return next((alert for alert in snapshot.alerts
+                 if generate_alert_fingerprint(alert) == incident.fingerprint), None)
+
+
 class InvestigationManager:
-    def __init__(self, store, incident_store, remediation_planner=None, limits=None):
+    def __init__(self, store, incident_store, remediation_planner=None, limits=None, alert_verifier=None):
         self.store = store
         self.incident_store = incident_store
         self.remediation_planner = remediation_planner
         self.limits = limits or RuntimeLimits(**RUNTIME_LIMITS)
+        self.alert_verifier = alert_verifier
 
     def enqueue(self, incident, reinvestigate=False):
+        incident = self.incident_store.get_incident(incident.incident_id, include_history=False)
+        if incident is None:
+            raise RuntimeErrorBase("incident_not_found")
+        with self.store.read() as db:
+            latest = self.store.latest_session(incident.incident_id, db)
+            reason = self._enqueue_reason(incident, latest, db, reinvestigate)
+            if reason and self.store.metadata(db, "reinvestigation_refusal:" + incident.incident_id) == reason:
+                return latest
         with self.store.transaction() as db:
-            previous = [s for s in self.store.list_sessions(db) if s.incident_id == incident.incident_id]
-            if previous:
-                latest = previous[-1]
-                if latest.status != S.COMPLETED or not reinvestigate:
-                    return latest
-                checkpoint = self.store.load_checkpoint(latest, db)
-                if not checkpoint.get("projected"):
-                    return latest
-            session = InvestigationSession(
-                incident_id=incident.incident_id,
-                alert_fingerprint=incident.fingerprint,
-                service=incident.service,
-                priority=1 if incident.severity.lower() == "critical" else 0,
-                created_at=self.store.clock(),
-                updated_at=self.store.clock(),
-                queued_at=self.store.clock(),
-            )
-            self.store.insert(session, db)
-            transition(session, S.QUEUED)
-            self.store.save(session, db)
-            self.store.event(db, session.session_id, "queued", "monitor")
-            return session
+            latest = self.store.latest_session(incident.incident_id, db)
+            reason = self._enqueue_reason(incident, latest, db, reinvestigate)
+            key = "reinvestigation_refusal:" + incident.incident_id
+            if reason:
+                if self.store.metadata(db, key) != reason:
+                    self.store.metadata(db, key, reason, write=True)
+                    if latest:
+                        self.store.event(db, latest.session_id, "reinvestigation_rejected", "monitor", reason=reason)
+                return latest
+            self.store.metadata(db, key, None, write=True)
+            return self._insert_session(incident, latest, db)
+
+    def _enqueue_reason(self, incident, latest, db, requested):
+        if latest and not requested:
+            return "reinvestigation_not_requested"
+        if not incident.alerts:
+            return "incident_has_no_alert"
+        reason = reinvestigation_reason(incident, incident.alerts[-1], self.store.clock(), latest)
+        if reason:
+            return reason
+        if latest:
+            checkpoint = self.store.load_checkpoint(latest, db)
+            if not checkpoint.get("projected"):
+                return "previous_projection_pending"
+            reason = budget_exhaustion(self.store.budget_usage(latest, db), self.limits,
+                                      self.store.clock(), new_attempt=True)
+            if reason:
+                return reason
+            if not self._fresh_alert(incident.alerts[-1]):
+                return "fresh_alert_observation_required"
+        return None
+
+    def _fresh_alert(self, alert):
+        if alert is None or alert.state != "firing" or alert.observed_at is None:
+            return False
+        age = (self.store.clock() - utc_timestamp(alert.observed_at)).total_seconds()
+        return -5 <= age <= 2 * ALERT_POLL_INTERVAL_SECONDS
+
+    def _insert_session(self, incident, previous, db, command=None):
+        now = self.store.clock()
+        session = InvestigationSession(
+            incident_id=incident.incident_id,
+            alert_fingerprint=incident.fingerprint,
+            service=incident.service,
+            budget_group_id=previous.budget_group_id if previous else None,
+            priority=1 if incident.severity.lower() == "critical" else 0,
+            created_at=now, updated_at=now, queued_at=now,
+        )
+        if command:
+            session.budget_group_id = session.session_id
+        self.store.insert(session, db)
+        transition(session, S.QUEUED)
+        self.store.save(session, db)
+        self.store.event(db, session.session_id, "queued", command.actor if command else "monitor",
+                         previous_session_id=previous.session_id if previous else None,
+                         budget_group_id=session.budget_group_id)
+        return session
 
     def submit(self, command):
         command = HumanCommand.model_validate(command)
@@ -51,8 +106,14 @@ class InvestigationManager:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip() or len(text) > 4000:
                 raise RuntimeErrorBase("message_text_required_max_4000")
+        if command.command_type == "reopen":
+            reason = payload.get("reason")
+            if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+                raise RuntimeErrorBase("reopen_reason_required_max_2000")
         allowed = {"text"} if command.command_type == "message" else (
-            {"text", "request_id"} if command.command_type == "answer" else set()
+            {"text", "request_id"} if command.command_type == "answer" else (
+                {"reason"} if command.command_type == "reopen" else set()
+            )
         )
         if set(payload) != allowed:
             raise RuntimeErrorBase("invalid_command_payload")
@@ -88,10 +149,13 @@ class InvestigationManager:
                              command_id=command.command_id)
         # Persist first, then process non-running sessions. Running Worker delivers at safe points.
         self.process_commands(command.session_id)
-        return self.get_command(command.command_id)
+        result = self.get_command(command.command_id)
+        if result.command_type == "reopen" and result.processing_status == "applied":
+            self.sync_incident(result.result)
+        return result
 
     def get_command(self, command_id):
-        with self.store.transaction() as db:
+        with self.store.read() as db:
             row = db.execute(
                 "SELECT data FROM investigation_commands WHERE command_id=?", (command_id,)
             ).fetchone()
@@ -111,9 +175,12 @@ class InvestigationManager:
         )
 
     def requests(self, session_id=None):
-        with self.store.transaction() as db:
-            sessions = [self.store.get(session_id, db)] if session_id else self.store.list_sessions(db)
-            return [r for s in sessions for r in self._requests(db, s.session_id)]
+        with self.store.read() as db:
+            if session_id:
+                self.store.get(session_id, db)
+                return self._requests(db, session_id)
+            return [HumanRequest.model_validate_json(r[0]) for r in
+                    db.execute("SELECT data FROM human_requests ORDER BY rowid")]
 
     def unblock_model(self, actor):
         """Explicit local operator action; cancellation never implies authentication recovery."""
@@ -139,6 +206,18 @@ class InvestigationManager:
         return {"model_blocked": None, **operation}
 
     def process_commands(self, session_id, claim=None, payload=None):
+        with self.store.read() as db:
+            session = self.store.get(session_id, db)
+            pending = db.execute(
+                "SELECT data FROM investigation_commands WHERE session_id=? AND status='pending'", (session_id,)
+            ).fetchall()
+        if claim is None and (session.status == S.RUNNING or not pending):
+            return session, False
+        verified = {}
+        for row in pending:
+            command = HumanCommand.model_validate_json(row[0])
+            if command.command_type == "reopen":
+                verified[command.command_id] = self._verify_reopen(session)
         with self.store.transaction() as db:
             session = self.store.get(session_id, db)
             if session.status == S.RUNNING:
@@ -158,10 +237,12 @@ class InvestigationManager:
                 try:
                     if command.expected_version is not None and command.expected_version != session.state_version:
                         raise RuntimeErrorBase("command_state_version_conflict")
-                    if session.status in TERMINAL:
+                    if session.status in TERMINAL and command.command_type != "reopen":
                         raise RuntimeErrorBase("session_terminal")
                     kind = command.command_type
-                    if kind in {"message", "answer"}:
+                    if kind == "reopen":
+                        command.result = self._reopen(session, command, verified.get(command.command_id), db).session_id
+                    elif kind in {"message", "answer"}:
                         if kind == "answer":
                             request = next((r for r in self._requests(db, session_id)
                                             if r.request_id == command.payload["request_id"]), None)
@@ -172,7 +253,7 @@ class InvestigationManager:
                             if session.status not in {S.WAITING_HUMAN, S.PAUSED}:
                                 raise RuntimeErrorBase("session_not_waiting_for_answer")
                             if session.status == S.WAITING_HUMAN:
-                                self._resume(session, checkpoint)
+                                self._resume(session, checkpoint, db)
                             request.status = "answered"
                             request.answer_command_id = command.command_id
                             self._put_request(db, request)
@@ -197,7 +278,7 @@ class InvestigationManager:
                     elif kind == "resume":
                         if session.status != S.PAUSED:
                             raise RuntimeErrorBase("resume_requires_paused_session")
-                        self._resume(session, checkpoint)
+                        self._resume(session, checkpoint, db)
                         self.store.event(db, session_id, "resumed", command.actor)
                     elif kind == "cancel":
                         transition(session, S.CANCELLED)
@@ -208,8 +289,9 @@ class InvestigationManager:
                                 self._put_request(db, request)
                         self.store.event(db, session_id, "investigation_cancelled", command.actor)
                     command.processing_status = "applied"
-                    command.result = session.status.value
-                    changed = True
+                    if kind != "reopen":
+                        command.result = session.status.value
+                        changed = True
                 except RuntimeErrorBase as exc:
                     command.processing_status = "rejected"
                     command.result = str(exc)
@@ -237,12 +319,11 @@ class InvestigationManager:
                     if request.status == "answered":
                         request.status = "consumed"
                         self._put_request(db, request)
-                if (
-                    (self.store.clock() - session.created_at).total_seconds() >= self.limits.max_duration_seconds
-                    or session.resume_count > self.limits.max_resumes
-                ) and not checkpoint.get("result", {}).get("success"):
+                lifecycle_limit = budget_exhaustion(self.store.budget_usage(session, db), self.limits,
+                                                    self.store.clock(), resource="lifecycle")
+                if lifecycle_limit and not checkpoint.get("result", {}).get("success"):
                     transition(session, S.EXHAUSTED)
-                    session.last_error_category = "session_duration_or_resume_budget_exhausted"
+                    session.last_error_category = lifecycle_limit
                     session.completed_at = self.store.clock()
                     changed = True
                 elif any(r.status == "pending" for r in self._requests(db, session_id)):
@@ -260,11 +341,72 @@ class InvestigationManager:
                 self.store.save(session, db)
             return session, context_changed
 
-    def _resume(self, session, checkpoint):
+    def _verify_reopen(self, session):
+        """External verification precedes the short SQLite write transaction."""
+        incident = self.incident_store.get_incident(session.incident_id, include_history=False)
+        if incident is None or incident.status == "resolved" or incident.alert_state != "firing":
+            return "incident_not_active"
+        if self.alert_verifier is None:
+            return "live_alert_verifier_required"
+        import requests
+        try:
+            alert = self.alert_verifier(incident)
+        except (requests.RequestException, OSError, ValueError) as exc:
+            return "live_alert_verification_failed:" + type(exc).__name__
+        from fingerprint import generate_alert_fingerprint
+        if not self._fresh_alert(alert):
+            return "live_firing_alert_not_confirmed"
+        if alert.service != session.service or generate_alert_fingerprint(alert) != incident.fingerprint:
+            return "live_alert_identity_mismatch"
+        return alert
+
+    def _reopen(self, previous, command, verified, db):
+        if previous.status == S.COMPLETED:
+            if not budget_exhaustion(self.store.budget_usage(previous, db), self.limits,
+                                     self.store.clock(), new_attempt=True):
+                raise RuntimeErrorBase("completed_reopen_requires_exhausted_incident_budget")
+        elif previous.status not in {S.FAILED, S.EXHAUSTED, S.CANCELLED}:
+            raise RuntimeErrorBase("reopen_requires_failed_exhausted_or_cancelled")
+        latest = self.store.latest_session(previous.incident_id, db)
+        if latest.session_id != previous.session_id:
+            raise RuntimeErrorBase("reopen_requires_latest_session")
+        if not self.store.load_checkpoint(previous, db).get("projected"):
+            raise RuntimeErrorBase("previous_projection_pending")
+        if isinstance(verified, str) or verified is None:
+            raise RuntimeErrorBase(verified or "live_alert_verification_required")
+        if not self._fresh_alert(verified):
+            raise RuntimeErrorBase("live_alert_verification_expired")
+        incident = self.incident_store.get_incident(previous.incident_id, include_history=False)
+        if incident is None or incident.status == "resolved" or incident.alert_state != "firing":
+            raise RuntimeErrorBase("incident_not_active")
+        session = self._insert_session(incident, previous, db, command)
+        checkpoint = self.store.load_checkpoint(session, db)
+        checkpoint["reopen_alert"] = verified.model_dump(mode="json")
+        self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep)
+        self.store.save(session, db)
+        usage = self.store.budget_usage(previous, db)
+        usage["started_at"] = usage["started_at"].isoformat()
+        self.store.event(db, previous.session_id, "investigation_reopened", command.actor,
+                         command_id=command.command_id, reason=command.payload["reason"],
+                         new_session_id=session.session_id, previous_status=previous.status.value,
+                         previous_error=previous.last_error_category,
+                         previous_usage=usage,
+                         authorized_limits=self.limits.model_dump(),
+                         alert_observed_at=verified.observed_at.isoformat())
+        self.store.event(db, session.session_id, "budget_reauthorized", command.actor,
+                         command_id=command.command_id, reason=command.payload["reason"],
+                         previous_session_id=previous.session_id, authorized_limits=self.limits.model_dump())
+        self.store.metadata(db, "reinvestigation_refusal:" + incident.incident_id, None, write=True)
+        return session
+
+    def _resume(self, session, checkpoint, db):
         saved_final = checkpoint.get("result", {}).get("success")
+        usage = self.store.budget_usage(session, db)
         if (
             (exhausted(session, self.limits, self.store.clock()) and not saved_final)
             or session.resume_count >= self.limits.max_resumes
+            or usage["resumes"] >= self.limits.max_resumes
+            or (budget_exhaustion(usage, self.limits, self.store.clock()) and not saved_final)
         ):
             raise RuntimeErrorBase("session_budget_exhausted")
         session.resume_count += 1
@@ -275,7 +417,7 @@ class InvestigationManager:
     def request_human(self, session_id, claim, question, checkpoint):
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
-            if session.human_request_count >= self.limits.max_human_requests:
+            if self.store.budget_usage(session, db)["human_requests"] >= self.limits.max_human_requests:
                 raise RuntimeErrorBase("human_request_budget_exhausted")
             request = HumanRequest(
                 session_id=session_id,
@@ -296,80 +438,100 @@ class InvestigationManager:
 
     def recover(self):
         """Reconcile leases/expiry, then replay only durable JSON projections."""
+        active = set(S) - TERMINAL
+        for session in self.store.list_sessions(statuses=active):
+            self._recover_session(session.session_id)
+        for session_id in self.store.pending_commands():
+            self.process_commands(session_id)
+        for session in self.store.pending_work("projection"):
+            self.sync_incident(session.session_id)
+        for incident in self.incident_store.active_incidents(include_history=False):
+            with self.store.read() as db:
+                known = self.store.latest_session(incident.incident_id, db)
+            if known is None:
+                self.enqueue(incident)
+
+    def _recover_session(self, session_id):
+        incident = self.incident_store.get_incident(
+            self.store.get(session_id).incident_id, include_history=False,
+        )
+        now = self.store.clock()
+        with self.store.read() as db:
+            session = self.store.get(session_id, db)
+            if session.status in TERMINAL:
+                return
+            requests = self._requests(db, session_id)
+            usage = self.store.budget_usage(session, db)
+            live = session.status == S.RUNNING and session.lease_until and session.lease_until > now
+            inactive = incident is None or incident.alert_state == "cleared" or incident.status == "resolved"
+            saved_final = self.store.load_checkpoint(session, db).get("result", {}).get("success")
+            budget = budget_exhaustion(usage, self.limits, now)
+            retry_due = session.status == S.WAITING_RETRY and session.next_retry_at and session.next_retry_at <= now
+            if not any(r.status == "pending" and r.expires_at <= now for r in requests) and (
+                live or not (inactive or (budget and not saved_final) or session.status == S.RUNNING or retry_due)
+            ):
+                return
         with self.store.transaction() as db:
             now = self.store.clock()
-            for session in self.store.list_sessions(db):
-                changed = False
-                for request in self._requests(db, session.session_id):
-                    if request.status == "pending" and request.expires_at <= now:
-                        request.status = "expired"
-                        self._put_request(db, request)
-                        if session.status == S.WAITING_HUMAN:
-                            transition(session, S.PAUSED)
-                            session.last_error_category = "human_request_expired"
-                            changed = True
-                        self.store.event(db, session.session_id, "human_request_expired",
-                                         request_id=request.request_id)
-                if session.status not in TERMINAL:
-                    incident = self.incident_store.get_incident(session.incident_id)
-                    live_claim = session.status == S.RUNNING and session.lease_until and session.lease_until > now
-                    if not live_claim:
-                        if incident is None or incident.alert_state == "cleared" or incident.status == "resolved":
-                            transition(session, S.CANCELLED)
-                            session.last_error_category = "incident_missing_or_alert_cleared"
-                            self.store.event(db, session.session_id, "recovery_not_required")
-                            changed = True
-                        elif (
-                            exhausted(session, self.limits, now)
-                            and not self.store.load_checkpoint(session, db).get("result", {}).get("success")
-                        ):
-                            transition(session, S.EXHAUSTED)
-                            session.last_error_category = "session_budget_exhausted"
-                            changed = True
-                        elif session.status == S.RUNNING:
-                            if session.resume_count >= self.limits.max_resumes:
-                                transition(session, S.EXHAUSTED)
-                                session.last_error_category = "session_resume_budget_exhausted"
-                            else:
-                                session.resume_count += 1
-                                transition(session, S.QUEUED)
-                                session.queued_at = now
-                            session.fencing_token += 1
-                            self.store.event(db, session.session_id, "worker_recovered",
-                                             unfinished_phase=self.store.load_checkpoint(session, db).get("phase"))
-                            changed = True
-                        elif session.status == S.WAITING_RETRY and session.next_retry_at <= now:
-                            transition(session, S.QUEUED)
-                            session.queued_at = now
-                            changed = True
-                if changed:
-                    session.owner_token = None
-                    session.lease_until = None
-                    if session.status in TERMINAL:
-                        session.completed_at = now
-                        for request in self._requests(db, session.session_id):
-                            if request.status in {"pending", "answered"}:
-                                request.status = "cancelled"
-                                self._put_request(db, request)
-                                self.store.event(db, session.session_id, "human_request_cancelled",
-                                                 request_id=request.request_id, reason=session.status.value)
-                    self.store.save(session, db)
-        for session in self.store.list_sessions():
-            self.process_commands(session.session_id)
-            self.sync_incident(session.session_id)
-        known_incidents = {s.incident_id for s in self.store.list_sessions()}
-        from reinvestigation import should_reinvestigate
-        for incident in self.incident_store.active_incidents():
-            if (
-                incident.incident_id not in known_incidents
-                and incident.alerts
-                and should_reinvestigate(incident, incident.alerts[-1])
-            ):
-                self.enqueue(incident)
+            session = self.store.get(session_id, db)
+            if session.status in TERMINAL:
+                return
+            checkpoint = self.store.load_checkpoint(session, db)
+            changed = False
+            for request in self._requests(db, session_id):
+                if request.status == "pending" and request.expires_at <= now:
+                    request.status = "expired"
+                    self._put_request(db, request)
+                    if session.status == S.WAITING_HUMAN:
+                        transition(session, S.PAUSED)
+                        session.last_error_category = "human_request_expired"
+                        changed = True
+                    self.store.event(db, session_id, "human_request_expired", request_id=request.request_id)
+            live = session.status == S.RUNNING and session.lease_until and session.lease_until > now
+            if not live:
+                usage = self.store.budget_usage(session, db)
+                reason = budget_exhaustion(usage, self.limits, now)
+                if inactive:
+                    transition(session, S.CANCELLED)
+                    session.last_error_category = "incident_missing_or_alert_cleared"
+                    self.store.event(db, session_id, "recovery_not_required")
+                    changed = True
+                elif reason and not checkpoint.get("result", {}).get("success"):
+                    transition(session, S.EXHAUSTED)
+                    session.last_error_category = reason
+                    changed = True
+                elif session.status == S.RUNNING:
+                    if usage["resumes"] >= self.limits.max_resumes:
+                        transition(session, S.EXHAUSTED)
+                        session.last_error_category = "session_resume_budget_exhausted"
+                    else:
+                        session.resume_count += 1
+                        transition(session, S.QUEUED)
+                        session.queued_at = now
+                    session.fencing_token += 1
+                    self.store.event(db, session_id, "worker_recovered", unfinished_phase=checkpoint.get("phase"))
+                    changed = True
+                elif session.status == S.WAITING_RETRY and session.next_retry_at and session.next_retry_at <= now:
+                    transition(session, S.QUEUED)
+                    session.queued_at = now
+                    changed = True
+            if changed:
+                session.owner_token = None
+                session.lease_until = None
+                if session.status in TERMINAL:
+                    session.completed_at = now
+                    for request in self._requests(db, session_id):
+                        if request.status in {"pending", "answered"}:
+                            request.status = "cancelled"
+                            self._put_request(db, request)
+                            self.store.event(db, session_id, "human_request_cancelled",
+                                             request_id=request.request_id, reason=session.status.value)
+                self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep)
+                self.store.save(session, db)
 
     def sync_incident(self, session_id):
         # SQLite -> JSON -> SQLite acknowledgement is an idempotent outbox, not a cross-store transaction.
-        with self.store.transaction() as db:
+        with self.store.read() as db:
             session = self.store.get(session_id, db)
             checkpoint = self.store.load_checkpoint(session, db)
         if checkpoint.get("projected") and not checkpoint.get("remediation_pending"):
@@ -419,6 +581,7 @@ class InvestigationManager:
                         checkpoint["remediation_pending"] = True
                         checkpoint["remediation_retry_at"] = (self.store.clock() + timedelta(seconds=30)).isoformat()
                         events.append(("remediation_projection_failed", {"category": type(exc).__name__}))
+        if not checkpoint.get("projection_error_category"):
             checkpoint["projected"] = True
         # A concurrent Worker may have saved a newer checkpoint during file I/O.
         # Acknowledge only the snapshot actually projected; newer work stays pending.
@@ -426,20 +589,22 @@ class InvestigationManager:
             latest = self.store.get(session_id, db)
             if latest.state_version != session.state_version:
                 return
-            if session.status in TERMINAL or events or checkpoint.get("projection_attempts"):
-                self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep)
-                self.store.save(session, db)
+            self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep, acknowledge=True)
+            self.store.save(session, db)
             for name, metadata in events:
                 self.store.event(db, session_id, name, **metadata)
 
     def workflow(self, session_id, include_remediations=True):
-        with self.store.transaction() as db:
+        with self.store.read() as db:
             session = self.store.get(session_id, db)
             checkpoint = self.store.load_checkpoint(session, db)
             requests = self._requests(db, session_id)
             messages = db.execute(
                 "SELECT data,consumed_at FROM human_messages WHERE session_id=? ORDER BY sequence", (session_id,)
             ).fetchall()
+            usage = self.store.budget_usage(session, db)
+            usage["started_at"] = usage["started_at"].isoformat()
+            refusal = self.store.metadata(db, "reinvestigation_refusal:" + session.incident_id)
         proposals = [] if self.remediation_planner is None or not include_remediations else [
             p.model_dump(mode="json") for p in self.remediation_planner.store.list()
             if p.incident_id == session.incident_id
@@ -448,6 +613,8 @@ class InvestigationManager:
             "session": session.model_dump(mode="json"),
             "investigation_result": checkpoint.get("result"),
             "limits": self.limits.model_dump(mode="json"),
+            "incident_budget_usage": usage,
+            "reinvestigation_refusal": refusal,
             "proposal_evidence_gap": checkpoint.get("proposal_evidence_gap"),
             "projection_error_category": checkpoint.get("projection_error_category"),
             "projection_retry_at": checkpoint.get("projection_retry_at"),

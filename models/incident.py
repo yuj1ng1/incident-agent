@@ -83,6 +83,12 @@ class Evidence(BaseModel):
     runtime_session_id: str | None = None
     observation_id: str | None = None
 
+class HistoryArchive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    session_ids: list[str] = Field(min_length=1)
+
+
 class Incident(BaseModel):
     incident_id:str
     fingerprint:str|None=None
@@ -109,6 +115,7 @@ class Incident(BaseModel):
     related_alerts: list[dict] = Field(default_factory=list)
     consecutive_investigation_failures: int = Field(default=0, ge=0)
     investigation_suspended_reason: str | None = None
+    history_archives: list[HistoryArchive] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

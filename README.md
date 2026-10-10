@@ -2,7 +2,7 @@
 
 基于 Prometheus 告警、Loki 日志和服务健康检查的 SRE 故障排查 Agent。
 
-当前版本：完成告警生命周期监控、Incident 持久化和回归问题修复。
+当前版本：调查由持久化 Runtime 执行，支持人类介入、有限再调查及历史证据归档。
 
 调查统一由 `IncidentMonitor → InvestigationManager → Scheduler/Worker → Agent → ToolManager` 执行。
 Agent 保留 Prompt、FunctionCall 解析与回答解释；旧同步 `Agent.investigate()` 已移除。
@@ -36,25 +36,28 @@ Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回�
 ```powershell
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-sessions
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-session ses-替换为真实ID
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-incident inc-替换为真实ID
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-human-requests
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py answer-human-request ses-替换为真实ID --request-id req-替换为真实ID --actor 本地操作员 --text '回答内容'
 ```
 
-`show-session` 包含 `investigation_result.answer`、Session 计数、限制、HumanRequest、
-错误类别及投影重试信息。自定义 `--store`、`--incidents`、`--remediations` 参数放在子命令之前。
+`show-session` 包含 `investigation_result.answer`、Session 计数、Incident 累计预算、
+再调查拒绝原因、HumanRequest 和投影重试信息；`show-incident` 包含完整归档历史。自定义 `--store`、`--incidents`、`--remediations` 参数放在子命令之前。
 模型认证/余额错误会全局阻塞请求；取消 Session 不代表问题已修复。
 修正认证/余额后，可显式运行 `runtime_cli.py unblock-model --actor 本地操作员`；
-暂停的 Session 仍需 `resume`，已取消的 Session 不会复活。修复批准与执行继续使用独立 `remediation_cli.py`。
+暂停的 Session 仍需 `resume`，已取消的 Session 不会因轮询复活。人工重开使用
+`runtime_cli.py reopen ses-实际ID --actor 操作员 --reason '原因已处理，重新授权有限调查' --command-id 重开001`，
+并重新核对当前 firing 告警；同一命令 ID 可安全重试。修复批准与执行继续使用独立 `remediation_cli.py`。
 
 本次问题核实、预算规则、测试结果和未验证范围见 [Runtime 质量修复验证记录](docs/RUNTIME_QUALITY_FIX_VALIDATION_2026-10-09_19-01-18.md)。
 
 ## 当前内容
 
-- `main.py`：创建对象、组装依赖并启动 Monitor。
+- `main.py`：显式 `main()` 组装和管理启动/退出；普通导入不构造客户端、不开线程、不写 Store。
 - `monitor/incident_monitor.py`：轮询告警，调度调查、重新调查和恢复判断，并隔离单轮异常。
 - `investigation/`：管理调查生命周期、权威预算、Checkpoint、缓存、HITL 和恢复对账。
 - `agent/agent.py`：构建 Prompt、发起单轮模型请求、解析 FunctionCall 和最终回答。
-- `incident_store.py`：将 Incident、证据和调查记录保存到 `data/incidents.json`。
+- `incident_store.py`：保存 Incident 与最近调查，更早 Runtime 证据完整归档到 `data/history/`。
 - `clients/`、`tools/`：查询真实 Prometheus 指标、Loki 日志和服务健康状态。
 - `models/`：Alert、Evidence、Incident、InvestigationResult 和 InvestigationRecord。
 - `model_client/`：单次模型请求；重试及累计预算由 Runtime 控制。
@@ -83,7 +86,7 @@ Incident 数据文件在首次启动时自动创建。真实 `.env`、运行数�
 python -B -m pytest tests -q --disable-warnings
 ```
 
-2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，数据与日志写入临时目录；生产装配测试提供占位密钥，不需要真实密钥。最新结果见本次 Runtime 质量验证记录。
+2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，数据与日志写入临时目录；生产装配测试提供占位密钥，不需要真实密钥。最新结果见 [Runtime 稳定性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)。
 
 2026-10-06 还验证了真实启动、两轮告警查询及一次使用合成告警的真实模型调查。详细验证记录及修复说明见 [REGRESSION_REPORT.md](REGRESSION_REPORT.md)。真实服务当时没有 firing 告警，生命周期变化由可控响应覆盖。
 
@@ -93,9 +96,11 @@ python -B -m pytest tests -q --disable-warnings
 
 IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。SQLite Runtime、Incident JSON 和 Remediation JSON 分别承担调查状态、告警历史和修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
 
-默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。Agent 最多调查 7 轮、执行工具 13 次，每轮提示剩余预算。
+默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。每次尝试最多 7 轮模型、13 次工具；同一 Incident 的自动 Session 共用原有 3 次尝试、21 次模型、39 次工具及时间/恢复限制。分类 FAILED 退避后有限重试，EXHAUSTED/CANCELLED 需人工重开。
 
-仓库中的依赖清单用于记录直接依赖，版本尚未全部锁定。
+热文件默认保留最近 3 次 Runtime 调查，完整历史可查询。归档及审计继续占用磁盘；备份需要完整 data 目录，不能只复制 incidents.json。
+
+生产及测试依赖分别固定于 `requirements.lock.txt`、`requirements-test.lock.txt`。
 
 ## 代码级因果证据工具
 
@@ -137,4 +142,5 @@ Prompt 区分提交存在、实例版本自报、进程启动、代码修改、�
 ## Durable Runtime 与人类介入
 
 - [持久化调查、恢复、预算及 CLI 使用指南](docs/DURABLE_AGENT_RUNTIME_GUIDE.md)
+- [Runtime 稳定性与维护性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)
 - [单元、跨进程及真实模型验收记录](docs/DURABLE_AGENT_RUNTIME_VALIDATION.md)

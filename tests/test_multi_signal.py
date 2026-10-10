@@ -106,16 +106,22 @@ class PolicyAndEventTests(unittest.TestCase):
             self.assertEqual(normalized.alert.unit, policy.unit)
 
     def test_rules_contract(self):
-        import os
-        import yaml
+        self.assert_rules_contract(Path(__file__).with_name("fixtures") / "alert_rules.yml")
 
-        path = Path(os.getenv("ALERT_RULES_PATH", "D:/prometheus-demo/alerts.yml"))
-        if not path.is_file():
-            self.skipTest(
-                "Set ALERT_RULES_PATH for cross-repository contract validation"
-            )
+    def test_external_rules_contract_when_explicitly_configured(self):
+        import os
+        if not os.getenv("ALERT_RULES_PATH"):
+            self.skipTest("Set ALERT_RULES_PATH for optional cross-repository validation")
+        path = Path(os.environ["ALERT_RULES_PATH"])
+        self.assertTrue(path.is_file(), "Explicitly configured rules must exist")
+        self.assert_rules_contract(path)
+
+    def assert_rules_contract(self, path):
+        import yaml
         rules = yaml.safe_load(path.read_text(encoding="utf-8"))["groups"][0]["rules"]
-        self.assertEqual({r["alert"] for r in rules}, set(ALERT_POLICIES))
+        expected = {"HighHttp5xxRate", "ServiceDown", "DatabaseUnavailable", "PostgresExporterDown", "HighHttpLatency"}
+        self.assertEqual({r["alert"] for r in rules}, expected)
+        self.assertEqual(set(ALERT_POLICIES), expected)
         for rule in rules:
             policy = ALERT_POLICIES[rule["alert"]]
             self.assertEqual(rule["labels"]["metric"], policy.metric)
@@ -345,6 +351,8 @@ class IdentityCorrelationTests(unittest.TestCase):
     def test_dependency_relation_is_candidate_only(self):
         alerts = [event(), event("DatabaseUnavailable"), event("HighHttpLatency")]
         related = correlate_alerts(alerts)
+        self.assertEqual(set(related), {generate_alert_fingerprint(alert) for alert in alerts})
+        self.assertEqual(len(related), 3)
         self.assertTrue(all(len(items) == 2 for items in related.values()))
         for items in related.values():
             self.assertTrue(
@@ -357,15 +365,15 @@ class IdentityCorrelationTests(unittest.TestCase):
 
     def test_simultaneous_unrelated_services_have_no_relation(self):
         related = correlate_alerts([event(), event(service="inventory-service")])
-        self.assertTrue(all(not items for items in related.values()))
+        self.assertEqual(related, {generate_alert_fingerprint(event()): [],
+                                   generate_alert_fingerprint(event(service="inventory-service")): []})
 
     def test_outside_window_or_unknown_start_has_no_relation(self):
         first = event()
         for stamp in [None, NOW + timedelta(seconds=301)]:
             second = event("HighHttpLatency").model_copy(update={"starts_at": stamp})
-            self.assertTrue(
-                all(not items for items in correlate_alerts([first, second]).values())
-            )
+            self.assertEqual(correlate_alerts([first, second]),
+                             {generate_alert_fingerprint(first): [], generate_alert_fingerprint(second): []})
 
 
 class StoreMonitorTests(unittest.TestCase):
@@ -483,11 +491,13 @@ class StoreMonitorTests(unittest.TestCase):
         item.consecutive_investigation_failures = 3
         item.investigation_suspended_reason = "model_api_http_402"
         self.store.save_incident(item.fingerprint, item)
-        self.store.resume_investigation(item.incident_id)
-        resumed = self.store.active_incidents()[0]
-        self.assertEqual(resumed.alert_state, "firing")
-        self.assertEqual(resumed.consecutive_investigation_failures, 0)
-        self.assertIsNone(resumed.investigation_suspended_reason)
+        with self.assertRaisesRegex(ValueError, "audited_reopen"):
+            self.store.resume_investigation(item.incident_id)
+        saved = self.store.active_incidents()[0]
+        self.assertEqual(saved.alert_state, "firing")
+        self.assertEqual(saved.consecutive_investigation_failures, 3)
+        self.assertEqual(saved.evidence, item.evidence)
+        self.assertEqual(saved.investigation_suspended_reason, "model_api_http_402")
 
     def test_legacy_v2_rekeys_without_losing_id_or_history(self):
         modern = event()

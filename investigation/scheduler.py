@@ -25,7 +25,7 @@ class Scheduler:
 
     def _notify_states(self):
         manager = self.worker.manager
-        for session in manager.store.list_sessions():
+        for session in manager.store.pending_work("notification"):
             if session.status not in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
                 continue
             workflow = manager.workflow(session.session_id, include_remediations=False)
@@ -36,9 +36,17 @@ class Scheduler:
             signature = ":".join((session.status.value, session.last_error_category or "",
                                   pending[0]["request_id"] if pending else ""))
             key = "terminal_notification:" + session.session_id
-            with manager.store.transaction() as db:
+            with manager.store.read() as db:
                 if manager.store.metadata(db, key) == signature:
-                    continue
+                    displayed = True
+                else:
+                    displayed = False
+            if displayed:
+                with manager.store.transaction() as db:
+                    latest = manager.store.get(session.session_id, db)
+                    if latest.state_version == session.state_version:
+                        manager.store.acknowledge_work(db, "notification", session.session_id)
+                continue
             lines = [
                 "[Investigation Completed]" if session.status == S.COMPLETED else (
                     "[Human Input Required]" if session.status == S.WAITING_HUMAN else "[Investigation Status]"
@@ -65,7 +73,11 @@ class Scheduler:
                 logging.getLogger(__name__).warning("Runtime display unavailable category=%s", type(exc).__name__)
                 continue
             with manager.store.transaction() as db:
+                latest = manager.store.get(session.session_id, db)
+                if latest.state_version != session.state_version:
+                    continue
                 manager.store.metadata(db, key, signature, write=True)
+                manager.store.acknowledge_work(db, "notification", session.session_id)
                 manager.store.event(db, session.session_id, "operator_status_displayed", status=session.status.value)
 
     def run(self):

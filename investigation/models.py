@@ -42,6 +42,9 @@ class InvestigationSession(Record):
     incident_id: str = Field(min_length=1)
     alert_fingerprint: str = Field(min_length=1)
     service: str = Field(min_length=1)
+    # None keeps old v1 sessions in the original Incident budget. Only a persisted
+    # human reopen command may grant a new group, identified by its first Session.
+    budget_group_id: str | None = None
     status: SessionStatus = SessionStatus.CREATED
     priority: Literal[0, 1] = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -84,13 +87,20 @@ class HumanCommand(Record):
     command_id: str = Field(default_factory=lambda: "cmd-" + uuid4().hex, min_length=1, max_length=120)
     session_id: str = Field(min_length=1)
     actor: str = Field(min_length=1, max_length=100)
-    command_type: Literal["message", "pause", "resume", "cancel", "answer"]
+    command_type: Literal["message", "pause", "resume", "cancel", "answer", "reopen"]
     payload: dict = Field(default_factory=dict)
     expected_version: int | None = Field(default=None, ge=0)
     created_at: datetime = Field(default_factory=utc_now)
     processed_at: datetime | None = None
     processing_status: Literal["pending", "applied", "rejected"] = "pending"
     result: str | None = None
+
+    @field_validator("actor")
+    @classmethod
+    def operator_identity(cls, value):
+        if not value.strip() or any(ord(c) < 32 for c in value):
+            raise ValueError("operator_identity_required")
+        return value
 
 
 class HumanRequest(Record):
@@ -138,3 +148,4 @@ class Checkpoint(Record):
     projection_attempts: int = Field(default=0, ge=0)
     projection_retry_at: datetime | None = None
     projection_error_category: str | None = None
+    reopen_alert: dict | None = None

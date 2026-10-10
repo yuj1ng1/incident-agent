@@ -15,22 +15,8 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 DEMO = Path("D:/prometheus-demo").resolve()
 PYTHON = Path("D:/conda/envs/agentlearn/python.exe").resolve()
-
-from dotenv import load_dotenv
-
-load_dotenv(ROOT / ".env")
-import requests
-import tools
-from agent.agent import Agent
-from clients.prometheus_client import PrometheusClient
-from incident_store import IncidentStore
-from monitor.incident_monitor import IncidentMonitor
-from models.incident import Evidence
-from prompts.agent_prompt import agent_prompt
-from remediation.windows_process import ProcessHandle
 
 
 def command(*args):
@@ -75,6 +61,7 @@ def listener(port):
 
 
 def stop_service(service):
+    from remediation.windows_process import ProcessHandle
     port, script = (
         (8001, "app.py") if service == "order-service" else (8002, "inventory_app.py")
     )
@@ -102,6 +89,7 @@ def stop_service(service):
 
 
 def start_service(service, error=False, slow=False):
+    import requests
     stop_service(service)
     script, port, flag = (
         ("app.py", 8001, "SIMULATE_CODE_REGRESSION")
@@ -144,6 +132,7 @@ def start_service(service, error=False, slow=False):
 
 
 def wait_until(check, timeout, label):
+    import requests
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         try:
@@ -156,6 +145,7 @@ def wait_until(check, timeout, label):
 
 
 def traffic(stop, url):
+    import requests
     while not stop.is_set():
         try:
             requests.get(url, timeout=5)
@@ -205,6 +195,17 @@ def main():
         default="all",
     )
     args = parser.parse_args()
+    sys.path.insert(0, str(ROOT))
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    import requests
+    import tools
+    from agent.agent import Agent
+    from clients.prometheus_client import PrometheusClient
+    from incident_store import IncidentStore
+    from monitor.incident_monitor import IncidentMonitor
+    from models.incident import Evidence
+    from prompts.agent_prompt import agent_prompt
     if Path.cwd().resolve() != ROOT or not PYTHON.is_file():
         raise RuntimeError("run_from_confirmed_agent_workspace")
     containers = {

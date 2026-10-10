@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -8,7 +9,8 @@ import threading
 
 from storage_lock import FileLock
 
-from models.incident import Incident
+from models.incident import Evidence, HistoryArchive, Incident
+from models.investigation import InvestigationRecord
 
 
 def locked_update(method):
@@ -27,8 +29,11 @@ def locked_update(method):
 
 
 class IncidentStore:
-    def __init__(self,file_path):
+    def __init__(self,file_path, runtime_history_to_keep=3):
+        if not isinstance(runtime_history_to_keep, int) or runtime_history_to_keep < 1:
+            raise ValueError("runtime_history_retention_must_be_positive")
         self.file_path=Path(file_path)
+        self.runtime_history_to_keep = runtime_history_to_keep
         self._thread_lock = threading.RLock()
         self._lock_depth = threading.local()
 
@@ -92,22 +97,119 @@ class IncidentStore:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
 
-    def active_incidents(self):
+    def active_incidents(self, include_history=True):
         data = self.load()
         return [
-            Incident.model_validate(data["incidents"][incident_id])
+            self._incident(data["incidents"][incident_id], include_history)
             for incident_id in data["active_by_fingerprint"].values()
             if incident_id in data["incidents"]
         ]
 
-    def get_incident(self, incident_id):
+    def get_incident(self, incident_id, include_history=True):
         value = self.load()["incidents"].get(incident_id)
-        return Incident.model_validate(value) if value is not None else None
+        return self._incident(value, include_history) if value is not None else None
+
+    def _incident(self, value, include_history):
+        incident = Incident.model_validate(value)
+        if include_history and incident.history_archives:
+            investigations, evidence = [], []
+            seen = set()
+            for reference in incident.history_archives:
+                if seen.intersection(reference.session_ids):
+                    raise ValueError("duplicate_incident_history_session")
+                seen.update(reference.session_ids)
+                archived = self._load_archive(incident.incident_id, reference)
+                investigations.extend(archived["investigations"])
+                evidence.extend(archived["evidence"])
+            def stamp(value):
+                if value is None:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                if value.tzinfo is None:
+                    from datetime import timedelta
+                    value = value.replace(tzinfo=timezone(timedelta(hours=8)))
+                return value.astimezone(timezone.utc)
+            incident.investigations = sorted(investigations + incident.investigations,
+                                            key=lambda r: stamp(r.investigated_at))
+            incident.evidence = sorted(evidence + incident.evidence, key=lambda e: stamp(e.collected_at))
+        return incident
+
+    def _load_archive(self, incident_id, reference):
+        path = self.file_path.parent / "history" / (reference.sha256 + ".json")
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != reference.sha256:
+            raise ValueError("incident_history_archive_checksum_mismatch")
+        body = json.loads(content)
+        if (not isinstance(body, dict)
+                or set(body) != {"schema_version", "incident_id", "investigations", "evidence"}
+                or body["schema_version"] != 1 or body["incident_id"] != incident_id
+                or not isinstance(body["investigations"], list) or not isinstance(body["evidence"], list)):
+            raise ValueError("incident_history_archive_identity_mismatch")
+        investigations = [InvestigationRecord.model_validate(r) for r in body["investigations"]]
+        evidence = [Evidence.model_validate(e) for e in body["evidence"]]
+        if ([r.session_id for r in investigations] != reference.session_ids
+                or len(set(reference.session_ids)) != len(reference.session_ids)
+                or any(e.runtime_session_id not in reference.session_ids for e in evidence)):
+            raise ValueError("incident_history_archive_records_mismatch")
+        return {"investigations": investigations, "evidence": evidence}
+
+    def _archive_history(self, incident):
+        archived_ids = {sid for ref in incident.history_archives for sid in ref.session_ids}
+        # Public reads hydrate immutable history. Reject attempts to alter it;
+        # routine hot-path writes do not reopen every old archive.
+        included = {r.session_id for r in incident.investigations if r.session_id in archived_ids}
+        if included or any(e.runtime_session_id in archived_ids for e in incident.evidence):
+            expected_records, expected_evidence = [], []
+            for ref in incident.history_archives:
+                body = self._load_archive(incident.incident_id, ref)
+                expected_records.extend(body["investigations"])
+                expected_evidence.extend(body["evidence"])
+            actual_records = [r for r in incident.investigations if r.session_id in archived_ids]
+            actual_evidence = [e for e in incident.evidence if e.runtime_session_id in archived_ids]
+            # Full-history reads sort by observation time; immutability compares
+            # complete contents independently of that presentation order.
+            def contents(records):
+                return sorted(json.dumps(r.model_dump(mode="json"), sort_keys=True) for r in records)
+            if (contents(actual_records) != contents(expected_records)
+                    or contents(actual_evidence) != contents(expected_evidence)):
+                raise ValueError("archived_incident_history_is_immutable")
+        incident.investigations = [r for r in incident.investigations if r.session_id not in archived_ids]
+        incident.evidence = [e for e in incident.evidence if e.runtime_session_id not in archived_ids]
+        runtime_records = [r for r in incident.investigations if r.session_id]
+        older = runtime_records[:-self.runtime_history_to_keep]
+        if not older:
+            return
+        session_ids = [r.session_id for r in older]
+        evidence = [e for e in incident.evidence if e.runtime_session_id in session_ids]
+        body = {"schema_version": 1, "incident_id": incident.incident_id,
+                "investigations": [r.model_dump(mode="json") for r in older],
+                "evidence": [e.model_dump(mode="json") for e in evidence]}
+        content = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        reference = HistoryArchive(sha256=hashlib.sha256(content).hexdigest(), session_ids=session_ids)
+        path = self.file_path.parent / "history" / (reference.sha256 + ".json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Archive first, fsync and validate it, then atomically commit the hot
+        # manifest. A crash can leave an unreferenced file, never missing history.
+        if not path.exists():
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(content)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, path)
+            finally:
+                if temporary is not None and temporary.exists():
+                    temporary.unlink()
+        self._load_archive(incident.incident_id, reference)
+        incident.history_archives.append(reference)
+        incident.investigations = [r for r in incident.investigations if r.session_id not in session_ids]
+        incident.evidence = [e for e in incident.evidence if e.runtime_session_id not in session_ids]
 
     @locked_update
     def save_observation(self, fingerprint, incident):
         """Merge monitor observations with the latest Worker-owned fields."""
-        latest = self.get_incident(incident.incident_id)
+        latest = self.get_incident(incident.incident_id, include_history=False)
         if latest is not None:
             latest.alerts = incident.alerts
             latest.alert_state = incident.alert_state
@@ -122,10 +224,20 @@ class IncidentStore:
         from models.incident import Evidence
         from models.investigation import InvestigationRecord
         from investigation.models import SessionStatus as S
-        incident = self.get_incident(session.incident_id)
+        incident = self.get_incident(session.incident_id, include_history=False)
         if incident is None:
             return
         previous_data = incident.model_dump()
+        archived_ids = {sid for ref in incident.history_archives for sid in ref.session_ids}
+        if session.session_id in archived_ids:
+            return
+        if session.budget_group_id == session.session_id and not session.attempt_count:
+            incident.consecutive_investigation_failures = 0
+            incident.investigation_suspended_reason = None
+            incident.last_attempted_at = None
+            if checkpoint.get("reopen_alert"):
+                from models.incident import AlertEvent
+                incident.alerts[-1] = AlertEvent.model_validate(checkpoint["reopen_alert"])
         known = {item.observation_id for item in incident.evidence if item.observation_id}
         for record in checkpoint.get("records", []):
             if (
@@ -143,11 +255,22 @@ class IncidentStore:
                 ))
                 known.add(record["observation_id"])
         if session.attempt_count:
-            incident.last_attempted_at = session.updated_at
+            incident.last_attempted_at = session.completed_at or session.updated_at
         incident.investigation_suspended_reason = (
-            session.last_error_category if session.status == S.PAUSED else None
+            session.last_error_category if session.status == S.PAUSED else (
+                "exhausted_requires_human_reauthorization" if session.status == S.EXHAUSTED else (
+                    "cancelled_requires_human_reopen" if session.status == S.CANCELLED else None
+                )
+            )
         )
+        if session.status == S.FAILED:
+            from reinvestigation import RETRYABLE_FAILURES
+            if session.last_error_category not in RETRYABLE_FAILURES:
+                incident.investigation_suspended_reason = "non_retryable_failure_requires_human_reopen"
         result = checkpoint.get("result")
+        if not result and session.status in {S.FAILED, S.EXHAUSTED}:
+            result = {"success": False, "status": "model_incomplete",
+                      "answer": "调查停止：" + (session.last_error_category or session.status.value)}
         if (
             result
             and session.status in {S.COMPLETED, S.EXHAUSTED, S.FAILED}
@@ -176,7 +299,7 @@ class IncidentStore:
 
     @locked_update
     def get_or_migrate_active(self, alert, fingerprint):
-        incident = self.get_active_incident(fingerprint)
+        incident = self.get_active_incident(fingerprint, include_history=False)
         if incident is not None or alert.identity_labels:
             return incident
         # Only migrate unambiguous service-aggregated legacy HTTP alerts.
@@ -184,7 +307,7 @@ class IncidentStore:
             return None
         from fingerprint import legacy_fingerprint
         old_fingerprint = legacy_fingerprint(alert)
-        old = self.get_active_incident(old_fingerprint)
+        old = self.get_active_incident(old_fingerprint, include_history=False)
         if old is None or not old.alerts or any(
             event.source != "legacy"
             or event.service != alert.service
@@ -213,18 +336,30 @@ class IncidentStore:
         data["incidents"][incident_id] = incident.model_dump(mode="json")
         self.save(data)
 
-    @locked_update
-    def resume_investigation(self, incident_id):
-        """Operator call only, never an Agent tool; does not clear alert/recovery state."""
-        data = self.load()
-        incident = Incident.model_validate(data["incidents"][incident_id])
-        incident.consecutive_investigation_failures = 0
-        incident.investigation_suspended_reason = None
-        incident.last_attempted_at = None
-        data["incidents"][incident_id] = incident.model_dump(mode="json")
-        self.save(data)
+    def resume_investigation(self, incident_id, *, manager=None, actor=None, reason=None, command_id=None):
+        """Operator convenience delegates to the durable, audited reopen command."""
+        if manager is None or manager.incident_store is not self:
+            raise ValueError("resume_requires_runtime_manager_and_audited_reopen")
+        from investigation.models import HumanCommand
+        with manager.store.read() as db:
+            latest = manager.store.latest_session(incident_id, db)
+            if command_id:
+                previous = db.execute("SELECT data FROM investigation_commands WHERE command_id=?", (command_id,)).fetchone()
+                if previous:
+                    existing = HumanCommand.model_validate_json(previous[0])
+                    target = manager.store.get(existing.session_id, db)
+                    if target.incident_id != incident_id:
+                        raise ValueError("reopen_command_incident_conflict")
+                    latest = target
+        if latest is None:
+            raise ValueError("incident_has_no_runtime_session")
+        fields = {"session_id": latest.session_id, "actor": actor, "command_type": "reopen",
+                  "payload": {"reason": reason}}
+        if command_id:
+            fields["command_id"] = command_id
+        return manager.submit(HumanCommand(**fields))
 
-    def get_active_incident(self, fingerprint):
+    def get_active_incident(self, fingerprint, include_history=True):
         data=self.load()
 
         incident_id=data[
@@ -250,14 +385,18 @@ class IncidentStore:
         )=="resolved":
             return None
 
-        return Incident.model_validate(
-            incident_data
-        )
+        return self._incident(incident_data, include_history)
     
     @locked_update
     def save_incident(self,fingerprint,incident):
         incident = Incident.model_validate(incident.model_dump())
         data=self.load()
+        existing = data["incidents"].get(incident.incident_id)
+        if existing:
+            previous_archives = Incident.model_validate(existing).history_archives
+            if any(reference not in incident.history_archives for reference in previous_archives):
+                raise ValueError("incident_history_manifest_conflict")
+        self._archive_history(incident)
 
         incident.fingerprint=fingerprint
 

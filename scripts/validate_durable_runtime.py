@@ -18,29 +18,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = Path("D:/prometheus-demo")
-sys.path.insert(0, str(ROOT))
-
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
-
-import requests
-from openai import OpenAI
-
-import tools
-from agent.agent import Agent
-from clients.prometheus_client import PrometheusClient
-from incident_store import IncidentStore
-from investigation.manager import InvestigationManager
-from investigation.models import HumanCommand
-from investigation.store import RuntimeStore
-from investigation.worker import Worker
-from monitor.incident_monitor import IncidentMonitor
-from prompts.agent_prompt import agent_prompt
-from remediation.planner import RemediationPlanner
-from remediation.store import RemediationStore
 
 
 def wait_until(predicate, timeout=45):
+    import requests
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -58,6 +39,7 @@ def ensure_free(port):
 
 
 def start_demo(service, faulty, output):
+    import requests
     port, module, flag = (
         (8001, "app", "SIMULATE_CODE_REGRESSION") if service == "order-service"
         else (8002, "inventory_app", "SIMULATE_INVENTORY_ERROR")
@@ -105,6 +87,23 @@ def main():
     args = parser.parse_args()
     if not args.inject_faults:
         parser.error("--inject-faults required: only known, initially unoccupied local Demo ports")
+    sys.path.insert(0, str(ROOT))
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    import requests
+    from openai import OpenAI
+    import tools
+    from agent.agent import Agent
+    from clients.prometheus_client import PrometheusClient
+    from incident_store import IncidentStore
+    from investigation.manager import InvestigationManager
+    from investigation.models import HumanCommand
+    from investigation.store import RuntimeStore
+    from investigation.worker import Worker
+    from monitor.incident_monitor import IncidentMonitor
+    from prompts.agent_prompt import agent_prompt
+    from remediation.planner import RemediationPlanner
+    from remediation.store import RemediationStore
     ensure_free(8001)
     ensure_free(8002)
     output_dir = ROOT / "data" / "runtime-validation" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

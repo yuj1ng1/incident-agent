@@ -4,13 +4,13 @@ import getpass
 import json
 import sys
 
-from remediation.executor import ActionExecutor
-from remediation.state import RemediationError
-from remediation.store import DEFAULT_STORE, RemediationStore
-from models.remediation import RemediationStatus
-
-
 def main(argv=None):
+    from dotenv import load_dotenv
+    load_dotenv()
+    from remediation.executor import ActionExecutor
+    from remediation.state import RemediationError
+    from remediation.store import DEFAULT_STORE, RemediationStore
+    from models.remediation import RemediationStatus
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Human-approved local Demo remediation")

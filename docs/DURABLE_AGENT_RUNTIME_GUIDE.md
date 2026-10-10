@@ -18,11 +18,13 @@ Worker 的有效证据 → 原有 RemediationPlanner → RemediationStore
 
 Incident 表示告警与调查历史；InvestigationSession 表示一次具有累计预算的可恢复任务。把任务独立出来后，等待人类、暂时失败和进程退出都不必丢弃调查或停止监控。
 
-IncidentMonitor 继续负责 AlertEvent、AlertPolicy、Fingerprint、候选关联与告警解除。它在 Runtime 模式下只持久化观测和提交任务；旧的同步调查入口保留兼容。Worker 负责执行时序和持久化，Agent 继续负责模型选择、提示词、响应解释；ServiceRegistry 和既有工具保持服务能力的唯一配置来源。
+IncidentMonitor 继续负责 AlertEvent、AlertPolicy、Fingerprint、候选关联与告警解除，只持久化观测和提交任务。旧同步调查入口已经移除。Worker 负责执行时序和持久化，Agent 继续负责模型选择、提示词、响应解释；ServiceRegistry 和既有工具保持服务能力的唯一配置来源。
 
 SQLite 是本地任务、命令、Checkpoint、问题、预算和执行权的权威来源。原有 IncidentStore JSON 仍是 Incident 的权威来源，RemediationStore JSON 仍是审批、动作和审计的权威来源。没有把整个 Incident 再复制到 SQLite。没有新增第三方生产依赖。
 
-同一 Incident 只能有一个非终止 Session。正常 COMPLETED 且完成投影后，可以按原有 reinvestigation Policy 再调查；FAILED、EXHAUSTED、CANCELLED 不通过新 Session 绕过限制。告警解除后再触发由原有 IncidentStore 创建新的 Incident，历史保持。
+同一 Incident 只能有一个非终止 Session。COMPLETED 完成投影后按既有 Policy、最小间隔、冷却和恶化条件再调查；FAILED 仅允许已分类的 `model_empty_answer`、`model_invalid_call_ids` 自动再调查，退避使用 Policy 的 retry_seconds 按连续失败次数倍增，且受原有失败上限约束。其他 FAILED、EXHAUSTED、CANCELLED 必须人工 `reopen`；PAUSED、WAITING_HUMAN 等状态继续使用原 Session。告警解除后再触发由原有 IncidentStore 创建新的 Incident，历史保持。
+
+同一 Incident 的自动 Session 共享一次授权预算，计数从 Session 的权威字段汇总。只有持久化的人工 `reopen` 可以建立新的授权范围；COMPLETED 只有原授权预算耗尽时才能人工重开。拒绝原因保存在 `reinvestigation_refusal`，变更时记录 `reinvestigation_rejected` 事件，重复轮询不重复写入同一拒绝事件。
 
 ## 2. 文件职责
 
@@ -40,7 +42,7 @@ SQLite 是本地任务、命令、Checkpoint、问题、预算和执行权的权
 | `../storage_lock.py` | 两个 JSON Store 共用的 OS 文件锁 |
 | `../scripts/validate_durable_runtime.py` | 显式启用的本地真实模型/工具验收 |
 
-`main.py` 启动一个 Scheduler 线程和原有监控循环；不引入分布式队列。`Agent.request_durable_response` 与 `ModelClient.call_once` 提供受控的单次请求入口。原有 `Agent.investigate` 保留。Evidence 新增可选的采集时间、Session 和 observation ID；InvestigationRecord 新增可选 Session ID，旧 JSON 可以继续读取。
+直接执行 `main.py` 时，由 `main()` 启动一个 Scheduler 线程和原有监控循环，退出时停止 Scheduler 并关闭模型客户端；不引入分布式队列。普通导入 `main`、`runtime_cli`、`remediation_cli` 不加载 dotenv 或业务依赖、不构造客户端、不开线程、不读写 Store。dotenv 在明确启动后、配置与工具导入前加载；已有客户端按调用延迟读取凭据的机制保留。`Agent.request_durable_response` 与 `ModelClient.call_once` 提供受控的单次请求入口，旧 `Agent.investigate` 已移除。Evidence 的采集时间、Session 和 observation ID、InvestigationRecord 的 Session ID 均为可选字段，旧 JSON 可以继续读取。
 
 ## 3. SQLite 与事务
 
@@ -54,13 +56,13 @@ SQLite 是本地任务、命令、Checkpoint、问题、预算和执行权的权
 | human_messages | command_id 唯一；明确 consumed_at |
 | human_requests | request_id 唯一；每个 Session 最多一个 pending |
 | investigation_events | event_id 唯一；sequence 提供事件顺序 |
-| runtime_metadata | 持久化全局模型 401/402/403 阻塞等运行信息 |
+| runtime_metadata | 全局模型阻塞、再调查拒绝及待投影/待通知索引；业务状态仍以 Session/Checkpoint 为准 |
 
 Session 的 JSON 数据经过 Pydantic 校验；status/state_version 为索引投影，读取时检查它们与正文一致。执行权和预算放在 Session 内，不另建重复状态表。
 
-每次事务使用独立连接、`BEGIN IMMEDIATE`、外键、5000ms busy timeout、`synchronous=FULL` 和参数化 SQL。第一版使用 DELETE journal，没有默认启用 WAL。网络调用发生在事务之外，CLI 不必等待模型完成才能写消息。状态、预算、Checkpoint、消息消费和相关事件在各自事务内一起提交。
+每次写事务使用独立连接、`BEGIN IMMEDIATE`、外键、5000ms busy timeout、`synchronous=FULL` 和参数化 SQL。第一版使用 DELETE journal，没有默认启用 WAL。网络调用发生在事务之外，CLI 不必等待模型完成才能写消息。状态、预算、Checkpoint、消息消费和相关事件在各自事务内一起提交。
 
-读取查询也使用短 IMMEDIATE 事务，取舍是实现简单、状态视图一致，但并发吞吐有限。当前只支持同机单 Worker，SQLite 文件不要放在网络共享盘。
+只读查询使用 `mode=ro`、`query_only=ON` 和短 `BEGIN` 快照，不申请 RESERVED 写锁。`list_sessions` 一次 SELECT 返回所需行，支持状态与 Incident 条件；恢复只查询非终态 Session、pending 命令及待投影工作，通知只查询待通知工作。旧 v1 数据库首次启动会回填这两类持久化索引，此后不在每个 tick 重读所有历史 Checkpoint。添加索引及 metadata，不修改表、列或 schema version；DELETE journal 与 FULL 持久化设置保持。当前只支持同机单 Worker，SQLite 文件不要放在网络共享盘。
 
 ## 4. Session 状态机
 
@@ -74,10 +76,12 @@ Session 的 JSON 数据经过 Pydantic 校验；status/state_version 为索引�
 | PAUSED | 人工暂停、模型认证/余额阻塞或问题过期；显式 resume |
 | COMPLETED | 调查正常完成，不代表业务恢复或修复已经执行 |
 | EXHAUSTED | 累计/尝试预算耗尽 |
-| FAILED | 非可恢复错误导致调查停止 |
+| FAILED | 当前调查失败；错误分类、Policy 和共享预算决定是否允许新的有限调查 |
 | CANCELLED | 停止后续调查，保留 Incident、证据和审计 |
 
 最后四种是终止状态，不允许 resume。普通 resume 只接受 PAUSED；WAITING_HUMAN 通过有效 answer 恢复，WAITING_RETRY 由调度器到期恢复。暂停期间可以回答仍未过期的问题，答案先保存，任务仍保持 PAUSED，直到显式 resume。
+
+`reopen` 是另一条明确的人工授权命令，必须提供操作者、非空理由和稳定命令 ID。它保留原终态 Session，建立一次有上限的新调查授权，不重用旧证据。处理前重新读取完整的 Prometheus 告警快照，核对 fingerprint、服务、firing 状态和观测时效，并在提交前再次核对 Incident 活动状态。校验失败会持久化拒绝；重复相同命令返回原结果，冲突拒绝。原/新 Session 的审计包含命令、理由、先前错误和计数、重新授权限制与当前告警观测时间。本地 actor 是审计身份字段，实际访问权限依赖操作系统；没有新增公网认证。
 
 Remediation 的 pending/approved/executing 等状态属于原有独立工作流。Session 可以 COMPLETED，同时 Proposal 为 pending。
 
@@ -117,15 +121,15 @@ HumanCommand 包含 command_id、Session、actor、类型、payload、UTC 创建
 
 人类消息和答案始终标记为 `human_provided_unverified_context`。它们不进入 Evidence，也不能增加工具权限、预算或批准修复。actor 只是本地审计字段，本阶段没有公网身份认证。
 
-模型可调用 Runtime 专用 `request_human_input(question)`，此入口不注册到通用修复系统。问题、Checkpoint 和 WAITING_HUMAN 同一事务保存，Worker 释放执行权。默认每 Session 最多 3 个问题、同时最多 1 个 pending、1800 秒过期；过期后 PAUSED，旧答案不能恢复任务。answer 需要有效 request_id，重复新 ID 回答拒绝，相同 command_id 可安全重试；cancel 使未完成请求失效。
+模型可调用 Runtime 专用 `request_human_input(question)`，此入口不注册到通用修复系统。问题、Checkpoint 和 WAITING_HUMAN 同一事务保存，Worker 释放执行权。默认同一 Incident 授权范围最多 3 个问题、每 Session 同时最多 1 个 pending、1800 秒过期；过期后 PAUSED，旧答案不能恢复任务。answer 需要有效 request_id，重复新 ID 回答拒绝，相同 command_id 可安全重试；cancel 使未完成请求失效。
 
 ## 8. 预算、重试与公平调度
 
 单次尝试仍为 7 次模型请求、13 次实际工具执行。Runtime 的 SDK 调用关闭 SDK 内部重试，不叠加原有 ModelClient 的 legacy 重试。请求失败、超时、不完整响应和实际失败工具均计入预算，缓存命中单独计数。
 
-集中配置位于 `../config.py` 的 RUNTIME_LIMITS：3 次尝试、21 次模型请求、39 次工具执行、8 次恢复、3600 秒总时长。暂停、等待、进程退出不会清零累计计数。问题也有独立提问上限。第一版不提供预算扩展命令。
+集中配置位于 `../config.py` 的 RUNTIME_LIMITS：3 次尝试、21 次模型请求、39 次工具执行、8 次恢复、3600 秒总时长，数值未改变。同一 Incident 一次授权范围内的所有自动 Session 共用这些限制，时间从该范围最早 Session 创建时起算。暂停、等待、进程退出和自动新建 Session 都不会清零计数。第 8 次获准恢复仍可以运行，第 9 次恢复在增加计数之前被拒绝。问题也有独立提问上限。人工 `reopen` 明确重新授权同样的固定上限，不接受任意预算数值，不授权修复动作；模型全局阻塞不会因此解除。
 
-401/402/403 持久化为 PAUSED 和全局模型阻塞，停止其他自动模型请求；操作员处理原因后，对阻塞 Session 显式 resume 才解除全局阻塞。429、临时 5xx、连接失败和 incomplete 有限进入 WAITING_RETRY，5/10 秒指数退避，最多 3 次尝试。非法输入/工具调用不能无限重试。工具 no_data 是证据缺口，模型可以选择其他工具或在剩余预算内重新查询；没有额外隐藏的客户端重试层。
+401/402/403 持久化为 PAUSED 和全局模型阻塞，停止其他自动模型请求；操作员处理原因后，先显式 `unblock-model --actor 操作员` 解除全局阻塞，再对暂停 Session 执行 resume。resume、cancel、reopen 本身都不解除全局阻塞。429、临时 5xx、连接失败和 incomplete 有限进入 WAITING_RETRY，5/10 秒指数退避，最多 3 次尝试。非法输入/工具调用不能无限重试。工具 no_data 是证据缺口，模型可以选择其他工具或在剩余预算内重新查询；没有额外隐藏的客户端重试层。
 
 调度使用持久化 queued_at：通常 Critical 优先、同级 FIFO；排队达到 120 秒的任务进入最老优先队列，避免 Warning 永久饥饿。调度不抢占已经发出的请求。等待人类、暂停、等待重试均不占 Worker。
 
@@ -156,12 +160,15 @@ no_data 和失败不缓存为成功证据。过期观测保留在历史记录，
 ```powershell
 & 'D:\conda\envs\agentlearn\python.exe' -B main.py
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-sessions
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py unblock-model --actor 本地操作员
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-session ses-实际ID
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-incident inc-实际ID
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py show-events ses-实际ID --limit 1000
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py send-message ses-实际ID --actor 本地操作员 --command-id 调查方向001 --text '先检查数据库连接情况。'
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py pause ses-实际ID --actor 本地操作员 --command-id 暂停001
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py resume ses-实际ID --actor 本地操作员 --command-id 继续001
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py cancel ses-实际ID --actor 本地操作员 --command-id 取消001
+& 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py reopen ses-实际ID --actor 本地操作员 --reason '故障原因已处理，重新授权有限调查' --command-id 重开001
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-human-requests
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py answer-human-request ses-实际ID --request-id req-实际ID --actor 本地操作员 --command-id 回答001 --text '部署背景线索，仍需要工具验证。'
 & 'D:\conda\envs\agentlearn\python.exe' -B runtime_cli.py list-pending-remediations
@@ -179,7 +186,13 @@ Ctrl+C 停止监控并让 Worker 在下一个安全点保存后释放回队列�
 
 凭据字段、配置中实际凭据值、Bearer 和敏感日志字段脱敏；源码脱敏保留变量引用与语法，不把变量名误认成密码值。脱敏不是对任意自由文本所有秘密的形式化证明，本地数据目录仍应限制 OS 访问权限。完整 trace 不进入 Git。
 
-Session、命令、问题和结构化事件默认长期保留，不自动删除调查/审批历史。当前只自动轮替旧 Checkpoint；长期部署需操作员备份并制定历史归档周期，第一版没有按天自动清除审计的功能。数据库不能通过自动清空来恢复损坏。
+IncidentStore 的告警生命周期字段及 active_by_fingerprint 是权威状态；Session 状态/计数和 Checkpoint 在 SQLite 中权威保存，JSON 内调查状态、失败次数及 Runtime Evidence 是投影。没有 Session ID 的旧 Evidence/调查记录只有 JSON 保留，继续留在热文件，不根据推测删除。
+
+写入时默认只在 `incidents.json` 保留最近 3 次 Runtime 调查及其证据，更早内容完整写入同目录 `history/<sha256>.json`，热文件保留归档引用。归档先原子写入、fsync、校验身份/结构/校验和，再提交 JSON manifest；失败保留原记录，崩溃可能留下未引用的归档文件，不自动清理。旧 JSON 不在启动时批量迁移，仅在正常保存对应 Incident 时归档。`get_incident` 等公开查询默认恢复全部历史，`runtime_cli show-incident` 同样包含归档；监控和调查上下文显式使用热记录。缺失或损坏归档会报错，不返回伪造的空历史。修改已归档内容被拒绝。
+
+Checkpoint 轮替删除的是中间快照，最新快照仍保存累计 observations、trace 和可靠结果；事件补充 checkpoint ID 与 observation ID 以关联历史。不能恢复已经删除的每一个中间模型请求原文，也不能重建未保存响应。历史查询以保留的最新 Session 快照及 JSON/归档为依据。
+
+Session、命令、问题、结构化事件和归档文件默认长期保留，不自动删除调查/审批历史。此策略限制热文件的证据体积，并不限制整个数据目录总容量；归档引用及审计仍随历史增长。备份须包含完整 data 目录（尤其 incidents.json、history、runtime.sqlite3 与 Remediation 文件），并在进程停止时取得一致快照。没有按天自动清除审计或归档的功能。数据库不能通过自动清空来恢复损坏。
 
 ## 12. 未来 Web 接入与当前限制
 

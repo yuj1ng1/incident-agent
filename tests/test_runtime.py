@@ -387,9 +387,25 @@ class RuntimeTests(unittest.TestCase):
         agent.request_durable_response.assert_not_called()
 
     def test_failed_session_not_recreated_to_bypass_budget(self):
-        Worker(self.manager, FixtureAgent([ValueError("invalid")])).run_once()
+        # A classified FAILED may retry in a new Session. Its requests still
+        # belong to the same Incident grant and cannot reset the two-call limit.
+        self.manager.limits.max_model_requests = 2
+        failed = Worker(self.manager, FixtureAgent([RuntimeErrorBase("model_empty_answer")])).run_once()
+        self.assertEqual(failed.status, S.FAILED)
+        self.now += timedelta(seconds=61)
         incident = self.manager.incident_store.get_incident(self.session.incident_id)
-        self.assertEqual(self.manager.enqueue(incident, True).session_id, self.session.session_id)
+        incident.alerts[-1].observed_at = self.now
+        self.manager.incident_store.save_observation(incident.fingerprint, incident)
+        next_session = self.manager.enqueue(incident, True)
+        self.assertNotEqual(next_session.session_id, self.session.session_id)
+        result = Worker(self.manager, FixtureAgent([RuntimeErrorBase("model_empty_answer")])).run_once()
+        self.assertEqual(result.status, S.EXHAUSTED)
+        self.now += timedelta(seconds=600)
+        self.assertEqual(self.manager.enqueue(incident, True).session_id, result.session_id)
+        sessions = self.store.list_sessions(incident_id=incident.incident_id)
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual(sum(s.total_model_requests for s in sessions), 2)
+        self.assertEqual({s.budget_group_id for s in sessions}, {None})
 
     def test_alert_cleared_cancels_pending_task(self):
         self.manager.incident_store.resolve_inactive_incidents(set())

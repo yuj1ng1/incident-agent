@@ -1,0 +1,86 @@
+groups:
+  - name: demo-alerts
+    rules:
+      - alert: HighHttp5xxRate
+        expr: |
+          (
+            (
+              sum by (service) (rate(demo_http_requests_total{status=~"5[0-9][0-9]"}[1m]))
+              or on (service) (0 * sum by (service) (rate(demo_http_requests_total[1m])))
+            )
+            / sum by (service) (rate(demo_http_requests_total[1m]))
+          ) > 0.2
+          and on (service) (sum by (service) (increase(demo_http_requests_total[1m])) >= 20)
+          and on (service) (min by (service) (up{job=~"demo-python|inventory-service"}) == 1)
+        for: 10s
+        labels:
+          severity: critical
+          metric: http_5xx_rate
+          signal_type: numeric
+        annotations:
+          summary: "{{ $labels.service }} HTTP 5xx ratio exceeds threshold"
+          threshold: "0.2"
+          unit: ratio
+          direction: higher_is_worse
+          window: 1m
+          minimum_requests: "20"
+
+      - alert: ServiceDown
+        expr: up{job=~"demo-python|inventory-service"} < 1
+        for: 10s
+        labels:
+          severity: critical
+          metric: service_scrape_up
+          signal_type: state
+        annotations:
+          summary: "{{ $labels.service }} business target scrape failed"
+          threshold: "1"
+          unit: boolean
+          direction: lower_is_worse
+
+      - alert: DatabaseUnavailable
+        expr: pg_up{job="postgres"} < 1 and on (job, instance) (up{job="postgres"} == 1)
+        for: 10s
+        labels:
+          severity: critical
+          metric: postgres_up
+          signal_type: state
+        annotations:
+          summary: "{{ $labels.service }} exporter cannot access PostgreSQL"
+          threshold: "1"
+          unit: boolean
+          direction: lower_is_worse
+
+      - alert: PostgresExporterDown
+        expr: up{job="postgres"} < 1
+        for: 10s
+        labels:
+          severity: warning
+          metric: exporter_scrape_up
+          signal_type: state
+        annotations:
+          summary: "{{ $labels.service }} PostgreSQL exporter scrape failed"
+          threshold: "1"
+          unit: boolean
+          direction: lower_is_worse
+
+      - alert: HighHttpLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service, le) (rate(demo_http_request_duration_seconds_bucket[1m]))
+          ) > 0.5
+          and on (service) (sum by (service) (increase(demo_http_request_duration_seconds_count[1m])) >= 20)
+          and on (service) (min by (service) (up{job=~"demo-python|inventory-service"}) == 1)
+        for: 10s
+        labels:
+          severity: warning
+          metric: http_latency_p95_seconds
+          signal_type: numeric
+        annotations:
+          summary: "{{ $labels.service }} HTTP P95 latency exceeds threshold"
+          threshold: "0.5"
+          unit: seconds
+          direction: higher_is_worse
+          window: 1m
+          minimum_requests: "20"
