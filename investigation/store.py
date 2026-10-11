@@ -15,9 +15,19 @@ SCHEMA_VERSION = 1
 
 
 class RuntimeStore:
-    def __init__(self, path=DEFAULT_STORE, clock=utc_now):
+    def __init__(self, path=DEFAULT_STORE, clock=utc_now, *, read_only=False):
         self.path = Path(path)
         self.clock = clock
+        self.read_only = read_only
+        if read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError("runtime_store_not_found")
+            with self.read() as db:
+                if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                    raise RuntimeIntegrityError("unsupported_runtime_schema")
+                if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise RuntimeIntegrityError("runtime_database_corrupt")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # A corrupt or newer DB fails closed; never replace it with an empty DB.
         with self.transaction() as db:
@@ -97,6 +107,8 @@ class RuntimeStore:
 
     @contextmanager
     def transaction(self):
+        if self.read_only:
+            raise RuntimeErrorBase("runtime_store_read_only")
         db = sqlite3.connect(str(self.path), timeout=5, isolation_level=None)
         db.row_factory = sqlite3.Row
         try:
@@ -145,10 +157,14 @@ class RuntimeStore:
             raise RuntimeIntegrityError("session_not_found")
         return self._session(row)
 
-    def list_sessions(self, db=None, *, statuses=None, incident_id=None):
+    def list_sessions(self, db=None, *, statuses=None, incident_id=None,
+                      limit=None, offset=0, newest_first=False):
+        if offset < 0 or (limit is not None and not 1 <= limit <= 1000) or (offset and limit is None):
+            raise RuntimeErrorBase("session_pagination_invalid")
         if db is None:
             with self.read() as connection:
-                return self.list_sessions(connection, statuses=statuses, incident_id=incident_id)
+                return self.list_sessions(connection, statuses=statuses, incident_id=incident_id,
+                                          limit=limit, offset=offset, newest_first=newest_first)
         conditions, values = [], []
         if statuses is not None:
             if not statuses:
@@ -159,7 +175,11 @@ class RuntimeStore:
             conditions.append("incident_id=?")
             values.append(incident_id)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        rows = db.execute("SELECT * FROM investigation_sessions" + where + " ORDER BY rowid", values)
+        order = " ORDER BY rowid DESC" if newest_first else " ORDER BY rowid"
+        page = " LIMIT ? OFFSET ?" if limit is not None else ""
+        if limit is not None:
+            values.extend((limit, offset))
+        rows = db.execute("SELECT * FROM investigation_sessions" + where + order + page, values)
         return [self._session(row) for row in rows]
 
     def latest_session(self, incident_id, db):

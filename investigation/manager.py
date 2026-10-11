@@ -717,6 +717,7 @@ class InvestigationManager:
             "incident_budget_usage": usage,
             "reinvestigation_refusal": refusal,
             "proposal_evidence_gap": checkpoint.get("proposal_evidence_gap"),
+            "projected": checkpoint.get("projected", False),
             "projection_error_category": checkpoint.get("projection_error_category"),
             "projection_retry_at": checkpoint.get("projection_retry_at"),
             "projection_blocked": checkpoint.get("projection_blocked", False),

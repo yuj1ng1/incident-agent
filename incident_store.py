@@ -24,6 +24,8 @@ class RuntimeProjectionResult(str, Enum):
 def locked_update(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
+        if self.read_only:
+            raise PermissionError("incident_store_read_only")
         with self._thread_lock:
             if getattr(self._lock_depth, "active", False):
                 return method(self, *args, **kwargs)
@@ -37,13 +39,19 @@ def locked_update(method):
 
 
 class IncidentStore:
-    def __init__(self,file_path, runtime_history_to_keep=3):
+    def __init__(self,file_path, runtime_history_to_keep=3, *, read_only=False):
         if not isinstance(runtime_history_to_keep, int) or runtime_history_to_keep < 1:
             raise ValueError("runtime_history_retention_must_be_positive")
         self.file_path=Path(file_path)
+        self.read_only = read_only
         self.runtime_history_to_keep = runtime_history_to_keep
         self._thread_lock = threading.RLock()
         self._lock_depth = threading.local()
+
+        if read_only:
+            if not self.file_path.is_file():
+                raise FileNotFoundError("incident_store_not_found")
+            return
 
         self.file_path.parent.mkdir(
             parents=True,
@@ -71,6 +79,8 @@ class IncidentStore:
 
         data = json.loads(content)
         if isinstance(data, dict) and data.get("version") == 2:
+            if not isinstance(data.get("incidents"), dict) or not isinstance(data.get("active_by_fingerprint"), dict):
+                raise ValueError("unsupported_or_corrupt_incident_store")
             return data
         # Original v1 used a fingerprint -> incident mapping. Keep every ID/record.
         if isinstance(data, dict) and all(
@@ -116,6 +126,20 @@ class IncidentStore:
     def get_incident(self, incident_id, include_history=True):
         value = self.load()["incidents"].get(incident_id)
         return self._incident(value, include_history) if value is not None else None
+
+    def list_incidents(self, *, status=None, limit=20, offset=0):
+        """Bounded newest-first query; archives are never opened by a list view."""
+        if not 1 <= limit <= 1000 or offset < 0:
+            raise ValueError("incident_pagination_invalid")
+        incidents = []
+        for incident_id, value in self.load()["incidents"].items():
+            incident = self._incident(value, include_history=False)
+            if incident.incident_id != incident_id:
+                raise ValueError("incident_store_identity_mismatch")
+            if status is None or incident.status == status:
+                incidents.append(incident)
+        # The JSON store preserves creation insertion order, including legacy v1.
+        return list(reversed(incidents))[offset:offset + limit]
 
     def _incident(self, value, include_history):
         incident = Incident.model_validate(value)
