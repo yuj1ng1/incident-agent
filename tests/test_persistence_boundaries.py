@@ -1,5 +1,5 @@
 """Real temporary stores, controlled clocks, threads and isolated child processes."""
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -236,15 +236,18 @@ class PersistenceBoundaryTests(unittest.TestCase):
         self.finish()
         self.pending()
         ready, release = threading.Event(), threading.Event()
-        project = self.incidents.apply_runtime_projection
+        original_transaction = self.store.transaction
         failures = []
+        other_manager = create_runtime(self.root, clock=lambda: self.now)
 
-        def concurrent_projection(session, checkpoint):
-            outcome = project(session, checkpoint)
-            ready.set()
-            if not release.wait(15):
-                raise TimeoutError("projection barrier")
-            return outcome
+        @contextmanager
+        def after_publication():
+            with original_transaction() as db:
+                yield db
+            if threading.current_thread().name == "projection-ack" and not ready.is_set():
+                ready.set()
+                if not release.wait(15):
+                    raise TimeoutError("projection acknowledgement barrier")
 
         def sync():
             try:
@@ -252,12 +255,11 @@ class PersistenceBoundaryTests(unittest.TestCase):
             except Exception as exc:
                 failures.append(exc)
 
-        with patch.object(self.incidents, "apply_runtime_projection", side_effect=concurrent_projection):
-            thread = threading.Thread(target=sync)
+        with patch.object(self.store, "transaction", side_effect=after_publication):
+            thread = threading.Thread(target=sync, name="projection-ack")
             thread.start()
             try:
                 self.assertTrue(ready.wait(15))
-                other_manager = create_runtime(self.root, clock=lambda: self.now)
                 with other_manager.store.transaction() as db:
                     session = other_manager.store.get(self.session.session_id, db)
                     checkpoint = other_manager.store.load_checkpoint(session, db)

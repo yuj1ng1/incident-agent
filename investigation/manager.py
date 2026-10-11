@@ -1,6 +1,5 @@
 """Application service shared by local CLI, Monitor and future authenticated Web."""
 from datetime import datetime, timedelta
-from contextlib import nullcontext
 import json
 from uuid import uuid4
 
@@ -569,20 +568,20 @@ class InvestigationManager:
         events = []
         if not checkpoint.get("projected"):
             try:
-                # Worker publication is serialized against fencing replacement.
+                # All publication is serialized against Worker/CAS replacement,
+                # including recovery without a claim. A late ack cannot undo JSON.
                 # JSON commit and outbox ack remain separate crash boundaries;
                 # no model/tool I/O or remediation action is in this transaction.
-                publication = self.store.transaction() if claim else nullcontext(None)
-                with publication as db:
+                with self.store.transaction() as db:
+                    current = self.store.get(session_id, db)
                     if claim:
-                        current = self.store.get(session_id, db)
                         if current.fencing_token != claim[1]:
                             raise LostClaim("worker_claim_lost")
                         if current.status == S.RUNNING:
                             self.store.guard(db, session_id, *claim)
-                        if current.state_version != session.state_version:
-                            self.store.event(db, session_id, "incident_projection_superseded")
-                            return
+                    if current.state_version != session.state_version:
+                        self.store.event(db, session_id, "incident_projection_superseded")
+                        return
                     outcome = self.incident_store.apply_runtime_projection(session, checkpoint)
                 if not isinstance(outcome, RuntimeProjectionResult):
                     raise RuntimeIntegrityError("unconfirmed_incident_projection")

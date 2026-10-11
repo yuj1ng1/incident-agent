@@ -304,17 +304,25 @@ class RuntimeQualityTests(unittest.TestCase):
             checkpoint["projected"] = False
             self.store.checkpoint(session, checkpoint, db)
             self.store.save(session, db)
-        project = self.manager.incident_store.apply_runtime_projection
-        def concurrent_checkpoint(session, checkpoint):
-            outcome = project(session, checkpoint)
-            with self.store.transaction() as db:
-                newer = self.store.get(session.session_id, db)
+        original_transaction = self.store.transaction
+        first = True
+
+        @contextmanager
+        def concurrent_checkpoint():
+            nonlocal first
+            with original_transaction() as db:
+                yield db
+            if not first:
+                return
+            first = False
+            # JSON publication has committed; race only the separate outbox ack.
+            with original_transaction() as db:
+                newer = self.store.get(completed.session_id, db)
                 payload = self.store.load_checkpoint(newer, db)
                 payload["messages"].append({"text": "并发保存的线索"})
                 self.store.checkpoint(newer, payload, db)
                 self.store.save(newer, db)
-            return outcome
-        with patch.object(self.manager.incident_store, "apply_runtime_projection", side_effect=concurrent_checkpoint):
+        with patch.object(self.store, "transaction", side_effect=concurrent_checkpoint):
             self.manager.sync_incident(completed.session_id)
         _, checkpoint = self.saved()
         self.assertFalse(checkpoint["projected"])

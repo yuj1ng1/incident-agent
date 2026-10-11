@@ -549,6 +549,15 @@ class Worker:
         if target == S.COMPLETED:
             if not self._refresh_proposal_evidence(session_id, claim, checkpoint):
                 return
+            # Every refresh exit, including missing evidence/budget, must deliver
+            # controls before completion. A failed probe still yields a safe point.
+            alive, changed = self._safe(session_id, claim, checkpoint)
+            if not alive:
+                return
+            if changed:
+                checkpoint.pop("result", None)
+                self._yield(session_id, claim, checkpoint, "human_context_changed_before_completion")
+                return
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
             transition(session, target)
@@ -627,12 +636,7 @@ class Worker:
                 checkpoint["proposal_evidence_gap"] = "proposal_refresh_missing_observation"
                 self._save(session_id, claim, checkpoint, "proposal_refresh_failed")
                 return True
-        alive, changed = self._safe(session_id, claim, checkpoint)
-        if alive and changed:
-            checkpoint.pop("result", None)
-            self._yield(session_id, claim, checkpoint, "human_context_changed_before_completion")
-            return False
-        return alive
+        return True
 
     def _yield(self, session_id, claim, checkpoint, event):
         with self.store.transaction() as db:

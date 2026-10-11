@@ -31,14 +31,25 @@ def runtime(tmp_path):
     return manager, session, clock
 
 
-@pytest.mark.parametrize("interruption", ["lease", "message", "cancel", "cleared", "yield", "saved_final"])
-def test_finish_refresh_interruption_semantics(runtime, interruption):
+@pytest.mark.parametrize("interruption", ["lease", "message", "pause", "cancel", "cleared", "yield", "saved_final"])
+@pytest.mark.parametrize("refresh_status", ["ok", "tool_error"])
+def test_finish_refresh_interruption_semantics(runtime, interruption, refresh_status):
     manager, session, clock = runtime
     planner = Mock()
     planner.plan.return_value = object()
     planner.propose.return_value = None
     manager.remediation_planner = planner
     agent = FixtureAgent([response(answer="已经保存的最终调查结论")])
+    original_tool = agent.tool_manager.run_tool
+
+    def refresh_tool(item, **kwargs):
+        success, output, result = original_tool(item, **kwargs)
+        if item.call_id.startswith("proposal-refresh-") and refresh_status != "ok":
+            result = {"status": refresh_status, "reason": "fixture_refresh_failed"}
+            return False, agent.tool_manager.build_output_item(item, result), result
+        return success, output, result
+
+    agent.tool_manager.run_tool = refresh_tool
     worker = Worker(manager, agent)
     injected = False
 
@@ -49,8 +60,8 @@ def test_finish_refresh_interruption_semantics(runtime, interruption):
         injected = True
         if interruption in {"lease", "saved_final"}:
             clock.now += timedelta(seconds=manager.limits.lease_seconds + 1)
-        elif interruption in {"message", "cancel"}:
-            command = "message" if interruption == "message" else "cancel"
+        elif interruption in {"message", "pause", "cancel"}:
+            command = interruption
             manager.submit(HumanCommand(
                 session_id=session_id, actor="fixture-operator", command_type=command,
                 payload={"text": "补证期间的新线索"} if command == "message" else {},
@@ -69,6 +80,7 @@ def test_finish_refresh_interruption_semantics(runtime, interruption):
     events = [e["event_type"] for e in manager.store.events(session.session_id)]
     assert result.attempt_count == 1
     assert result.total_model_requests == 1
+    assert result.total_tool_executions == 2
     assert result.last_error_category is None
     planner.propose.assert_not_called()
     if interruption in {"lease", "saved_final"}:
@@ -107,16 +119,20 @@ def test_finish_refresh_interruption_semantics(runtime, interruption):
             assert manager.store.load_checkpoint(continued)["result"]["answer"] == "考虑新线索后的结论"
         else:
             assert checkpoint["result"]["answer"] == "已经保存的最终调查结论"
-            expected = S.QUEUED if interruption == "yield" else S.CANCELLED
+            expected = {"yield": S.QUEUED, "pause": S.PAUSED}.get(interruption, S.CANCELLED)
             assert result.status == expected
-            expected_event = {"cancel": "investigation_cancelled", "cleared": "alert_cleared",
+            expected_event = {"pause": "paused", "cancel": "investigation_cancelled", "cleared": "alert_cleared",
                               "yield": "worker_shutdown_at_safe_point"}[interruption]
             assert expected_event in events
             manager.remediation_planner = None
             next_agent = FixtureAgent()
+            if interruption == "pause":
+                manager.submit(HumanCommand(session_id=result.session_id, actor="fixture-operator", command_type="resume"))
             continued = Worker(manager, next_agent).run_once()
-            if interruption == "yield":
+            if interruption in {"yield", "pause"}:
                 assert continued.status == S.COMPLETED and continued.attempt_count == 1
+                assert continued.total_model_requests == 1
+                assert continued.total_tool_executions == 2
             else:
                 assert continued is None
             next_agent.request_durable_response.assert_not_called()

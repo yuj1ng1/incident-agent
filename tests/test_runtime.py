@@ -549,6 +549,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_cli_repeated_command(self):
         args = ["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+                "--remediations", str(self.root / "remediation.json"),
                 "pause", self.session.session_id, "--actor", "local", "--command-id", "cli-id"]
         with redirect_stdout(io.StringIO()):
             self.assertEqual(cli(args), 0)
@@ -557,6 +558,7 @@ class RuntimeTests(unittest.TestCase):
     def test_cli_missing_session_reports_error(self):
         with redirect_stdout(io.StringIO()):
             self.assertEqual(cli(["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+                                  "--remediations", str(self.root / "remediation.json"),
                                   "show-session", "missing"]), 2)
 
     def test_no_execution_or_approval_tool_exposed(self):
