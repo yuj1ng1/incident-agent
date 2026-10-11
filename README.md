@@ -144,3 +144,30 @@ Prompt 区分提交存在、实例版本自报、进程启动、代码修改、�
 - [持久化调查、恢复、预算及 CLI 使用指南](docs/DURABLE_AGENT_RUNTIME_GUIDE.md)
 - [Runtime 稳定性与维护性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)
 - [单元、跨进程及真实模型验收记录](docs/DURABLE_AGENT_RUNTIME_VALIDATION.md)
+
+## 本地只读 Web 工作台
+
+第一版包括总览、Incident 列表与详情、Session 列表与详情，通过现有 FastAPI 读取真实记录。
+API 与前端独立启动；页面和 API 都不会启动第二份 Worker。
+
+在项目根目录的第一个终端启动 API：
+
+```powershell
+& 'D:\conda\envs\agentlearn\python.exe' -B -m web_api
+```
+
+在第二个终端启动前端：
+
+```powershell
+Set-Location 'D:\Incident Agent\frontend'
+npm ci
+npm run dev
+```
+
+使用 Node.js 24，访问 [本地工作台](http://127.0.0.1:5173)。默认 API 为 127.0.0.1:8010，
+仅为固定本地前端来源开放 GET；无开发代理、登录、审批或执行接口。
+原有 API 进程需要重启才能加载新增的本地 CORS 配置。
+
+目录、页面对应 API、替代端口、测试和安全限制见
+[Web 工作台使用指南](docs/WEB_WORKBENCH_GUIDE_2026-10-11_12-17-36.md)；
+[FastAPI 学习说明](docs/FASTAPI_LEARNING_2026-10-11_11-58-48.md) 已修正默认端口和 Incident 状态筛选。

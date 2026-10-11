@@ -318,6 +318,50 @@ def test_incident_open_filter_is_rejected_without_reading_stores(api):
     assert result.status_code == 422
 
 
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:5173", "http://localhost:5173"])
+def test_workbench_cors_allows_only_local_gets_without_credentials(api, origin):
+    client = api[2]
+    result = client.get("/api/incidents", headers={"Origin": origin})
+    assert result.status_code == 200
+    assert result.headers["access-control-allow-origin"] == origin
+    assert "access-control-allow-credentials" not in result.headers
+    preflight = client.options("/api/sessions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "GET",
+    })
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-methods"] == "GET"
+    rejected = client.options("/api/sessions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+    })
+    assert rejected.status_code == 400
+    assert client.post("/api/sessions", headers={"Origin": origin}).status_code == 405
+
+
+@pytest.mark.parametrize("origin", [
+    "https://untrusted.example", "http://localhost:5174",
+    "http://127.0.0.1:5174", "http://evil.localhost:5173", "null",
+])
+def test_workbench_cors_does_not_grant_other_origins_access(api, origin):
+    client = api[2]
+    result = client.get("/healthz", headers={"Origin": origin})
+    assert result.status_code == 200
+    assert "access-control-allow-origin" not in result.headers
+    assert client.options("/healthz", headers={
+        "Origin": origin, "Access-Control-Request-Method": "GET",
+    }).status_code == 400
+
+
+@pytest.mark.parametrize("failure,status", [(FileNotFoundError(), 503), (ValueError(), 500)])
+def test_workbench_can_read_safe_store_errors_across_origins(api, failure, status):
+    with patch("web_api.app.RuntimeQueries.incidents", side_effect=failure):
+        result = api[2].get("/api/incidents", headers={"Origin": "http://127.0.0.1:5173"})
+    assert result.status_code == status
+    assert result.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+    assert result.json()["detail"] in {"store_unavailable", "store_read_failed"}
+
+
 def test_legacy_data_is_mapped_without_migration_or_backfill(api):
     manager, session, client = api
     incident = manager.incident_store.get_incident(session.incident_id, include_history=False)

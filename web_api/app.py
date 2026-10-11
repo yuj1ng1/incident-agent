@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import ResponseValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from investigation.models import SessionStatus
@@ -23,6 +24,13 @@ PageOffset = Annotated[int, Query(ge=0, le=10000)]
 def create_app(*, incident_path: Path = ROOT / "data" / "incidents.json",
                runtime_path: Path = ROOT / "data" / "runtime.sqlite3") -> FastAPI:
     app = FastAPI(title="Incident Agent 本地只读 API", version="0.1.0", debug=False)
+    # Direct browser GETs from the local workbench; no proxy or credentials.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_methods=["GET"],
+        allow_credentials=False,
+    )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     queries = RuntimeQueries(incident_path, runtime_path)
 

@@ -28,6 +28,8 @@ Thumbs.db
 logs/
 build/
 dist/
+node_modules/
+frontend/coverage/
 *.egg-info/
 
 # Runtime Incident data

@@ -10,7 +10,7 @@
 6. **如何复用 Runtime？** [queries.py](../web_api/queries.py) 使用 `IncidentStore.list_incidents/get_incident`、`RuntimeStore.list_sessions` 和 `InvestigationManager.workflow(include_remediations=False)`。路由不写 SQL，也不复制调查逻辑。两个 Store 用 `read_only=True` 打开已有文件；SQLite 连接使用 `mode=ro`，不建库、迁移或回填 outbox。`workflow` 返回内部查询结果，适配层再选字段构造响应模型。
 7. **为什么使用 `def`？** 当前 JSON 和 SQLite 访问是同步 I/O。同步路由由 Starlette 在线程池运行，因此没有把阻塞文件操作直接放进 `async def` 的事件循环。仅当实际引入异步 I/O 时再使用 `async def/await`。参见 [Starlette 线程池说明](https://www.starlette.io/threadpool/)。
 8. **为什么导入 Web 不能启动 Worker？** Uvicorn 导入模块，开发重载和测试也会重复导入。导入时启动 Worker 会产生重复 Scheduler、模型调用和状态写入。`create_app` 只保存路径和注册路由；Store 到查询请求时才打开。`/healthz` 只证明 Web API 可以响应，不代表模型、监控或存储健康。文件缺失的查询返回 503，损坏数据返回安全的 500，同时记录诊断类别。
-9. **怎样用 `/docs`？** 在项目根目录，激活 `agentlearn` 后执行 `python -m web_api`，访问 [本地 Swagger 文档](http://127.0.0.1:8002/docs)，选择 GET 接口、点击 Try it out、填入真实 ID 或分页参数，再点击 Execute。先查询列表获取 ID。Swagger 页面使用 FastAPI 默认的外部文档资源；资源不可达时仍可用终端调用 API。分页默认 20，最多 100，offset 最大 10000；Incident 状态支持 open/investigating/resolved，Session 使用现有枚举。
+9. **怎样用 `/docs`？** 在项目根目录，激活 `agentlearn` 后执行 `python -m web_api`，访问 [本地 Swagger 文档](http://127.0.0.1:8010/docs)，选择 GET 接口、点击 Try it out、填入真实 ID 或分页参数，再点击 Execute。先查询列表获取 ID。Swagger 页面使用 FastAPI 默认的外部文档资源；资源不可达时仍可用终端调用 API。分页默认 20，最多 100，offset 最大 10000；Incident 状态只支持 `investigating` 和 `resolved`，传入 `status=open` 会返回 422；Session 使用现有枚举。
 10. **下一步如何扩展？** 先加入身份认证和 RBAC，使查询、操作、正式审批和执行权限分别可控；再让人工消息接口调用现有 `submit`，持久化命令、目标 Session 与可信身份。HTTP 回复仍不等于正式 Remediation 审批。Web 状态先用有限轮询，确有需求后再增加只读 SSE；调查继续由同一 Worker 运行。前端通过这些响应模型访问 API。
 
 查询调用链：
@@ -27,10 +27,10 @@ flowchart LR
 也可以显式启动：
 
 ```powershell
-& 'D:\conda\envs\agentlearn\python.exe' -m uvicorn web_api.app:app --host 127.0.0.1 --port 8002 --no-proxy-headers
+& 'D:\conda\envs\agentlearn\python.exe' -m uvicorn web_api.app:app --host 127.0.0.1 --port 8010 --no-proxy-headers
 ```
 
-`python -m web_api` 的 [启动器](../web_api/__main__.py) 固定绑定 127.0.0.1:8002，关闭代理头信任。未实现认证授权前，这个本地开发接口不能直接暴露到公网，也不应通过反向代理绕开本地边界。
+`python -m web_api` 的 [启动器](../web_api/__main__.py) 固定绑定 127.0.0.1，默认端口 8010，也可通过 `python -m web_api --port 8011` 指定其他本地端口；关闭代理头信任。未实现认证授权前，这个本地开发接口不能直接暴露到公网，也不应通过反向代理绕开本地边界。
 
 只读查询不会证明修复成功。`proposal_generation.status = not_pending` 只表示没有待处理的提案生成任务；当前不读取 Proposal 内容或提供审批、执行接口。Incident 默认不读取归档，详情只展示最近三条告警和调查记录。JSON 列表仍需要读取现有整文件；分页约束的是返回数量，尚未针对大规模历史或高并发优化。不同 Store 之间没有原子的联合快照。
 
