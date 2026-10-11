@@ -24,6 +24,7 @@ def main():
     from investigation.manager import InvestigationManager, live_alert_for_incident
     from investigation.worker import Worker
     from investigation.scheduler import Scheduler
+    from recovery.worker import RecoveryWorker
 
     with OpenAI(
         api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -41,16 +42,20 @@ def main():
             alert_verifier=lambda incident: live_alert_for_incident(prometheus_client, incident),
         )
         scheduler = Scheduler(Worker(runtime_manager, agent))
+        recovery_worker = RecoveryWorker(incident_store)
         monitor = IncidentMonitor(
             prometheus_client=prometheus_client,
             incident_store=incident_store,
             poll_interval=ALERT_POLL_INTERVAL_SECONDS,
             investigation_manager=runtime_manager,
+            recovery_worker=recovery_worker,
         )
         scheduler.start()
         try:
+            recovery_worker.start()
             monitor.run()
         finally:
+            recovery_worker.stop()
             scheduler.stop()
 
 

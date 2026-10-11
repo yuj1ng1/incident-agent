@@ -556,14 +556,14 @@ class StoreMonitorTests(unittest.TestCase):
         row = self.store.load()["incidents"][saved.incident_id]
         self.assertEqual(row["alert_state"], "cleared")
         self.assertIsNone(row["recovery_verified_at"])
-        self.store.record_recovery_verification(
-            saved.incident_id,
-            [Evidence(source="business_probe", summary="200", detail="{}")],
-            NOW,
-        )
-        self.assertIsNotNone(
-            self.store.load()["incidents"][saved.incident_id]["recovery_verified_at"]
-        )
+        # An arbitrary historical "200" cannot attest independent recovery.
+        with self.assertRaisesRegex(ValueError, "claimed_timed_recovery_receipt_required"):
+            self.store.record_recovery_verification(
+                saved.incident_id,
+                [Evidence(source="business_probe", summary="200", detail="{}")],
+                NOW,
+            )
+        self.assertIsNone(self.store.get_incident(saved.incident_id).recovery_verified_at)
 
     def test_unvalidated_nan_cannot_pollute_store(self):
         incident = create_incident_from_alert(event(), "fp")

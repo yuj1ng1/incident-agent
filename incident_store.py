@@ -2,16 +2,21 @@ import json
 import hashlib
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from functools import wraps
 import threading
+import time
 from enum import Enum
+from uuid import uuid4
 
 from storage_lock import FileLock
 
 from models.incident import Evidence, HistoryArchive, Incident
 from models.investigation import InvestigationRecord
+from models.recovery import (
+    RecoveryAttempt, RecoveryPolicy, RecoveryReceipt, RecoveryVerification, aware_utc, utc_now,
+)
 
 
 class RuntimeProjectionResult(str, Enum):
@@ -39,11 +44,12 @@ def locked_update(method):
 
 
 class IncidentStore:
-    def __init__(self,file_path, runtime_history_to_keep=3, *, read_only=False):
+    def __init__(self,file_path, runtime_history_to_keep=3, *, read_only=False, clock=utc_now):
         if not isinstance(runtime_history_to_keep, int) or runtime_history_to_keep < 1:
             raise ValueError("runtime_history_retention_must_be_positive")
         self.file_path=Path(file_path)
         self.read_only = read_only
+        self.clock = clock
         self.runtime_history_to_keep = runtime_history_to_keep
         self._thread_lock = threading.RLock()
         self._lock_depth = threading.local()
@@ -73,9 +79,10 @@ class IncidentStore:
         }
 
     def load(self):
-        content=self.file_path.read_text(
-            encoding="utf-8"
-        )
+        # Coordinate readers sharing this Store with its atomic writer. Parsing
+        # operates on an already closed, complete file snapshot.
+        with self._thread_lock:
+            content = self.file_path.read_text(encoding="utf-8")
 
         data = json.loads(content)
         if isinstance(data, dict) and data.get("version") == 2:
@@ -110,7 +117,16 @@ class IncidentStore:
                 json.dump(data, output, ensure_ascii=False, indent=2, allow_nan=False)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self.file_path)
+            for attempt in range(3):
+                try:
+                    os.replace(temporary, self.file_path)
+                    break
+                except PermissionError as exc:
+                    # A separate Windows reader may briefly deny replacement.
+                    # Bound only this local commit retry; never repeat HTTP here.
+                    if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32} or attempt == 2:
+                        raise
+                    time.sleep(0.01)
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
@@ -374,18 +390,196 @@ class IncidentStore:
         self.save(data)
         return old
 
+    @staticmethod
+    def _recovery_context_current(data, incident):
+        if (incident.status != "resolved" or incident.alert_state != "cleared"
+                or not incident.fingerprint or incident.cleared_at is None):
+            return False
+        if data["active_by_fingerprint"].get(incident.fingerprint) is not None:
+            return False
+        # Re-firing creates a new Incident. Even if that successor has already
+        # cleared, an old in-flight probe must not attest the preceding episode.
+        newest = next((key for key, value in reversed(data["incidents"].items())
+                       if value.get("fingerprint") == incident.fingerprint), None)
+        return newest == incident.incident_id
+
+    def recovery_candidates(self):
+        """Read the hot manifest only; finished jobs never reopen archives."""
+        result = []
+        for key, value in self.load()["incidents"].items():
+            if (value.get("status") != "resolved" or value.get("alert_state", "cleared") != "cleared"
+                    or value.get("recovery_verified_at") is not None):
+                continue
+            incident = Incident.model_validate(value)
+            if incident.incident_id != key:
+                raise ValueError("incident_store_identity_mismatch")
+            state = incident.recovery_verification
+            if state is None or state.status in {"pending", "running"} or state.next_retry_at is not None:
+                result.append(key)
+        return result
+
+    def _save_recovery(self, data, incident, state):
+        if state.status != "running" and state.attempts and state.attempts[-1].outcome == "running":
+            attempt = state.attempts[-1]
+            attempt.outcome, attempt.reason, attempt.completed_at = "insufficient", state.reason, aware_utc(self.clock())
+        incident.recovery_verification = RecoveryVerification.model_validate(state.model_dump())
+        data["incidents"][incident.incident_id] = incident.model_dump(mode="json")
+        self.save(data)
+
     @locked_update
-    def record_recovery_verification(self, incident_id, evidence, verified_at):
-        if verified_at.tzinfo is None or not evidence:
-            raise ValueError("explicit_timed_recovery_evidence_required")
+    def claim_recovery_verification(self, incident_id, policy: RecoveryPolicy | None):
+        """Commit the attempt before I/O; crashes consume a bounded attempt."""
         data = self.load()
         incident = Incident.model_validate(data["incidents"][incident_id])
-        if incident.alert_state != "cleared":
-            raise ValueError("alert_not_cleared")
-        incident.recovery_verified_at = verified_at.astimezone(timezone.utc)
-        incident.recovery_evidence = evidence
-        data["incidents"][incident_id] = incident.model_dump(mode="json")
-        self.save(data)
+        if incident.incident_id != incident_id:
+            raise ValueError("incident_store_identity_mismatch")
+        if incident.recovery_verified_at is not None:
+            return None
+        now = aware_utc(self.clock())
+        state = incident.recovery_verification
+        if state is None:
+            try:
+                cleared_at = aware_utc(incident.cleared_at)
+            except ValueError:
+                cleared_at = None
+            state = RecoveryVerification(cleared_at=cleared_at, policy=policy)
+            if cleared_at is None or cleared_at > now:
+                state.status, state.reason = "insufficient", "clear_time_invalid"
+                self._save_recovery(data, incident, state)
+                return None
+        if not self._recovery_context_current(data, incident) or state.cleared_at != incident.cleared_at:
+            if state.status != "superseded":
+                state.status, state.reason, state.next_retry_at = "superseded", "alert_changed", None
+                self._save_recovery(data, incident, state)
+            return None
+        if policy is None or state.policy is None:
+            state.status, state.reason, state.next_retry_at = "insufficient", "recovery_capability_not_configured", None
+            self._save_recovery(data, incident, state)
+            return None
+        policy = RecoveryPolicy.model_validate(policy.model_dump())
+        if state.policy != policy:
+            state.status, state.reason, state.next_retry_at = "insufficient", "configuration_changed", None
+            self._save_recovery(data, incident, state)
+            return None
+        if state.status in {"verified", "superseded"}:
+            return None
+        if state.status == "running":
+            attempt = state.attempts[-1]
+            if attempt.lease_until > now:
+                return None
+            attempt.outcome, attempt.reason, attempt.completed_at = "abandoned", "lease_expired", now
+            state.status, state.reason = "insufficient", "lease_expired"
+        elif state.status != "pending" and state.next_retry_at is None:
+            return None
+        if len(state.attempts) >= policy.max_attempts:
+            state.next_retry_at = None
+            self._save_recovery(data, incident, state)
+            return None
+        if state.next_retry_at is not None and state.next_retry_at > now:
+            return None
+        state.attempts.append(RecoveryAttempt(
+            token=uuid4().hex, started_at=now,
+            lease_until=now + timedelta(seconds=policy.lease_seconds),
+        ))
+        state.status, state.reason, state.next_retry_at = "running", None, None
+        self._save_recovery(data, incident, state)
+        return incident
+
+    @staticmethod
+    def _validate_recovery_receipt(incident, state, receipt, now, *, success):
+        attempt, policy = state.attempts[-1], state.policy
+        if (receipt.incident_id != incident.incident_id or receipt.service != incident.service
+                or receipt.cleared_at != incident.cleared_at or receipt.cleared_at != state.cleared_at
+                or receipt.claim_token != attempt.token or receipt.target_id != policy.target_id
+                or receipt.config_digest != policy.config_digest or receipt.started_at != attempt.started_at):
+            raise ValueError("recovery_receipt_identity_mismatch")
+        stamps = [receipt.completed_at] + [item.collected_at for item in receipt.samples]
+        if any(not 0 <= (now - stamp).total_seconds() <= policy.evidence_max_age_seconds for stamp in stamps):
+            raise ValueError("recovery_evidence_expired_or_future")
+        if success:
+            expected = [item.model_dump() for item in policy.required_checks]
+            if (receipt.outcome != "success" or len(receipt.samples) != policy.successes_required
+                    or any(item.http_status != policy.expected_status
+                           or [check.model_dump(exclude={"matched"}) for check in item.checks] != expected
+                           or not all(check.matched for check in item.checks) for item in receipt.samples)):
+                raise ValueError("recovery_success_conditions_unconfirmed")
+        elif len(receipt.samples) > policy.successes_required:
+            raise ValueError("recovery_probe_count_exceeds_policy")
+
+    @locked_update
+    def record_recovery_verification(self, incident_id, evidence, verified_at, *, claim_token=None):
+        """Accept only a fresh, complete receipt for the current durable claim."""
+        verified_at = aware_utc(verified_at)
+        if verified_at is None or not claim_token or not evidence or len(evidence) != 1:
+            raise ValueError("claimed_timed_recovery_receipt_required")
+        item = Evidence.model_validate(evidence[0])
+        if len(item.detail) > 32768:
+            raise ValueError("recovery_receipt_too_large")
+        receipt = RecoveryReceipt.model_validate_json(item.detail)
+        if (item.source != "recovery_http" or item.observation_id != claim_token
+                or item.runtime_session_id is not None or item.collected_at != verified_at
+                or receipt.completed_at != verified_at or receipt.claim_token != claim_token):
+            raise ValueError("recovery_evidence_identity_mismatch")
+        data = self.load()
+        incident = Incident.model_validate(data["incidents"][incident_id])
+        state = incident.recovery_verification
+        if incident.recovery_verified_at is not None:
+            known = next((old for old in incident.recovery_evidence if old.observation_id == claim_token), None)
+            if known and RecoveryReceipt.model_validate_json(known.detail) == receipt:
+                return False
+            raise ValueError("recovery_already_verified")
+        now = aware_utc(self.clock())
+        if (not self._recovery_context_current(data, incident) or state is None or state.status != "running"
+                or not state.attempts or state.attempts[-1].token != claim_token
+                or state.attempts[-1].lease_until <= now):
+            raise ValueError("recovery_claim_or_alert_changed")
+        self._validate_recovery_receipt(incident, state, receipt, now, success=True)
+        # Rebuild the allowlisted evidence instead of persisting caller free text.
+        incident.recovery_evidence.append(Evidence(
+            source="recovery_http", summary="注册业务探测的 HTTP 状态及全部业务条件已满足。",
+            detail=receipt.model_dump_json(), collected_at=verified_at, observation_id=claim_token,
+        ))
+        incident.recovery_verified_at = verified_at
+        attempt = state.attempts[-1]
+        attempt.outcome, attempt.reason, attempt.completed_at = "success", "conditions_met", now
+        state.status, state.reason, state.next_retry_at = "verified", "conditions_met", None
+        self._save_recovery(data, incident, state)
+        return True
+
+    @locked_update
+    def finish_recovery_verification(self, incident_id, claim_token, *, receipt=None, reason="internal_probe_error"):
+        """Retain failed/unknown observations; never change alert or approval state."""
+        data = self.load()
+        incident = Incident.model_validate(data["incidents"][incident_id])
+        state = incident.recovery_verification
+        if (state is None or state.status != "running" or not state.attempts
+                or state.attempts[-1].token != claim_token):
+            return False
+        now, attempt = aware_utc(self.clock()), state.attempts[-1]
+        outcome = "insufficient"
+        if not self._recovery_context_current(data, incident) or state.cleared_at != incident.cleared_at:
+            state.status, reason, receipt = "superseded", "alert_changed", None
+        elif attempt.lease_until <= now:
+            outcome, reason, receipt = "abandoned", "lease_expired", None
+        elif receipt is not None:
+            try:
+                receipt = RecoveryReceipt.model_validate(receipt.model_dump())
+                self._validate_recovery_receipt(incident, state, receipt, now, success=False)
+                if receipt.outcome == "success":
+                    raise ValueError("success_requires_record_recovery_verification")
+                outcome, reason = receipt.outcome, receipt.reason
+            except ValueError:
+                receipt, reason = None, "invalid_evidence"
+        attempt.outcome, attempt.reason, attempt.completed_at, attempt.receipt = outcome, reason, now, receipt
+        state.reason = reason
+        if state.status != "superseded":
+            state.status = "failed" if outcome == "failed" else "insufficient"
+        state.next_retry_at = (
+            now + timedelta(seconds=state.policy.retry_seconds)
+            if state.status != "superseded" and len(state.attempts) < state.policy.max_attempts else None
+        )
+        self._save_recovery(data, incident, state)
+        return True
 
     def resume_investigation(self, incident_id, *, manager=None, actor=None, reason=None, command_id=None):
         """Operator convenience delegates to the durable, audited reopen command."""
@@ -444,9 +638,15 @@ class IncidentStore:
         data=self.load()
         existing = data["incidents"].get(incident.incident_id)
         if existing:
-            previous_archives = Incident.model_validate(existing).history_archives
+            previous = Incident.model_validate(existing)
+            previous_archives = previous.history_archives
             if any(reference not in incident.history_archives for reference in previous_archives):
                 raise ValueError("incident_history_manifest_conflict")
+            # Recovery fields belong to the atomic claim/receipt methods. A stale
+            # Monitor or Runtime snapshot cannot erase an attempt or its evidence.
+            incident.recovery_verification = previous.recovery_verification
+            incident.recovery_verified_at = previous.recovery_verified_at
+            incident.recovery_evidence = previous.recovery_evidence
         self._archive_history(incident)
 
         incident.fingerprint=fingerprint
@@ -480,7 +680,7 @@ class IncidentStore:
         self.save(data)
 
     @locked_update
-    def resolve_inactive_incidents(self,active_fingerprints, eligible_fingerprints=None):
+    def resolve_inactive_incidents(self,active_fingerprints, eligible_fingerprints=None, *, expected_incidents=None):
         data=self.load()
 
         resolved_incidents=[]
@@ -510,9 +710,19 @@ class IncidentStore:
                 )
                 continue
 
+            if expected_incidents is not None:
+                expected = expected_incidents.get(fingerprint)
+                latest = Incident.model_validate(incident_data)
+                if (expected is None or latest.incident_id != expected.incident_id
+                        or latest.service != expected.service or latest.alert_state != expected.alert_state
+                        or latest.alerts != expected.alerts):
+                    # Prometheus queries run outside the file lock. A concurrent
+                    # fresh observation must win over the older clearing decision.
+                    continue
+
             incident_data["status"]="resolved"
             incident_data["alert_state"] = "cleared"
-            incident_data["cleared_at"] = datetime.now(timezone.utc).isoformat()
+            incident_data["cleared_at"] = aware_utc(self.clock()).isoformat()
             # Clearing the monitoring signal does not attest business recovery.
             incident_data.setdefault("recovery_verified_at", None)
 

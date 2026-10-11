@@ -1,5 +1,6 @@
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
+from ipaddress import ip_address
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -59,6 +60,68 @@ class HTTPSettings(Configuration):
 class HTTPHealth(HTTPSettings):
     provider: Literal["http"]
     endpoint: str = "/health"
+
+
+class HTTPRecovery(HTTPSettings):
+    """Operator-approved business query; never a model-supplied URL or action."""
+    provider: Literal["http_business"]
+    target_id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$")
+    method: Literal["GET"] = "GET"
+    side_effect_free: Literal[True]
+    expected_status: int = Field(default=200, ge=200, le=299)
+    json_equals: dict[str, str | int | bool] = Field(min_length=1, max_length=10)
+    required_json_objects: tuple[str, ...] = ()
+    successes_required: int = Field(default=1, ge=1, le=5)
+    timeout_seconds: float = Field(default=2.0, ge=0.1, le=5)
+    max_attempts: int = Field(default=3, ge=1, le=5)
+    retry_seconds: int = Field(default=30, ge=1, le=300)
+    evidence_max_age_seconds: int = Field(default=60, ge=1, le=300)
+
+    @field_validator("base_url")
+    @classmethod
+    def fixed_origin(cls, value):
+        parsed = urlsplit(value)
+        # A single explicit IP avoids DNS rebinding and an unbounded resolver.
+        # Other existing HTTP capabilities retain their hostname support.
+        try:
+            address = ip_address(parsed.hostname)
+        except ValueError:
+            raise ValueError("recovery requires an explicitly approved IP origin") from None
+        if (parsed.path or parsed.port == 0 or any(char in value for char in "%?#\\@")
+                or address.is_unspecified or address.is_multicast or address.is_link_local):
+            raise ValueError("invalid recovery origin")
+        return value
+
+    @field_validator("side_effect_free", mode="before")
+    @classmethod
+    def explicit_approval(cls, value):
+        if type(value) is not bool or value is not True:
+            raise ValueError("recovery probe requires explicit side-effect-free approval")
+        return value
+
+    @field_validator("endpoint")
+    @classmethod
+    def fixed_business_path(cls, value):
+        if not re.fullmatch(r"/[a-zA-Z0-9/_-]+", value):
+            raise ValueError("recovery requires an unencoded fixed business path")
+        return value
+
+    @field_validator("required_json_objects", mode="before")
+    @classmethod
+    def object_tuple(cls, value):
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def bounded_conditions(self):
+        fields = list(self.json_equals) + list(self.required_json_objects)
+        if (len(self.required_json_objects) > 10
+                or len(fields) != len(set(fields))
+                or any(not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,79}", key) for key in fields)
+                or any(isinstance(value, str) and len(value) > 200 for value in self.json_equals.values())):
+            raise ValueError("recovery conditions must use bounded, unique JSON fields")
+        if self.evidence_max_age_seconds < self.successes_required * self.timeout_seconds * 2:
+            raise ValueError("evidence age must cover the configured probe sequence")
+        return self
 
 
 class PostgreSQLHealth(Configuration):
@@ -184,8 +247,15 @@ class ServiceProfile(Configuration):
     metrics: MetricsSettings | None = None
     source: SourceSettings | None = None
     runtime: RuntimeSettings | None = None
+    recovery: HTTPRecovery | None = None
     dependencies: tuple[str, ...] = ()
     remediation: tuple[Literal["disable_demo_regression"], ...] = ()
+
+    @model_validator(mode="after")
+    def recovery_identity(self):
+        if self.recovery and self.recovery.json_equals.get("service") != self.name:
+            raise ValueError("recovery must confirm the registered service identity")
+        return self
 
     @field_validator(
         "dependencies",

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Literal
 import math
 from models.investigation import InvestigationRecord
+from models.recovery import RecoveryVerification
 
 class AlertEvent(BaseModel):
     """Normalized event; legacy defaults support old constructors/Store records only."""
@@ -112,6 +113,7 @@ class Incident(BaseModel):
     cleared_at: datetime | None = None
     recovery_verified_at: datetime | None = None
     recovery_evidence: list[Evidence] = Field(default_factory=list)
+    recovery_verification: RecoveryVerification | None = None
     related_alerts: list[dict] = Field(default_factory=list)
     consecutive_investigation_failures: int = Field(default=0, ge=0)
     investigation_suspended_reason: str | None = None

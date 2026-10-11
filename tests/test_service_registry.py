@@ -201,7 +201,8 @@ class RegistryTests(unittest.TestCase):
         for name in ("order-service", "inventory-service"):
             self.assertEqual(
                 set(get_service_capabilities(name)["capabilities"]),
-                {"health", "logs", "metrics", "dependencies", "runtime", "source"},
+                {"health", "logs", "metrics", "dependencies", "runtime", "source"}
+                | ({"recovery"} if name == "order-service" else set()),
             )
 
     def test_database_capabilities(self):

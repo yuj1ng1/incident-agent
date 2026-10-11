@@ -17,6 +17,7 @@ class IncidentMonitor:
         poll_interval,
         investigation_manager,
         normalizer=normalize_snapshot,
+        recovery_worker=None,
     ):
         self.prometheus_client = prometheus_client
         self.incident_store = incident_store
@@ -24,6 +25,7 @@ class IncidentMonitor:
         self.normalizer = normalizer
         self.last_snapshot = None
         self.investigation_manager = investigation_manager
+        self.recovery_worker = recovery_worker
 
     def process_alerts_once(self):
         snapshot = self.normalizer(self.prometheus_client.get_alerts())
@@ -64,12 +66,16 @@ class IncidentMonitor:
                 incident.alerts[-1], self.prometheus_client, rules
             ):
                 eligible.add(incident.fingerprint)
-        cleared = self.incident_store.resolve_inactive_incidents(current, eligible)
+        cleared = self.incident_store.resolve_inactive_incidents(
+            current, eligible, expected_incidents={item.fingerprint: item for item in inactive},
+        )
         for incident_id in cleared:
             logger.info(
                 "Alert cleared; business recovery unverified incident=%s", incident_id
             )
             print(f"告警已解除；业务恢复尚未验证 incident={incident_id}")
+        if self.recovery_worker is not None:
+            self.recovery_worker.wake()
         return snapshot
 
     def handle_alert(self, alert, fingerprint, related=None):

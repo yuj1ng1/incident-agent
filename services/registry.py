@@ -57,7 +57,7 @@ class ServiceRegistry:
             raise CapabilityUnavailable(service, "service_not_registered")
         return tuple(
             k
-            for k in ("health", "logs", "metrics", "dependencies", "runtime", "source")
+            for k in ("health", "logs", "metrics", "dependencies", "runtime", "source", "recovery")
             if k == "dependencies" or getattr(profile, k) is not None
         )
 

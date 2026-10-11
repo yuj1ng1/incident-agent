@@ -28,6 +28,17 @@ SERVICES = [
             "investigation_paths": ("app.py", "http_observability.py"),
         },
         "dependencies": ("order-db",),
+        # /order was reviewed: SELECT only, no business-data mutation.
+        # Normal access logs/metrics are expected observational effects.
+        "recovery": {
+            "provider": "http_business",
+            "target_id": "order_read_query",
+            "base_url": "http://127.0.0.1:8001",
+            "endpoint": "/order",
+            "side_effect_free": True,
+            "json_equals": {"service": "order-service", "dependency": "order-db"},
+            "required_json_objects": ("order",),
+        },
         "remediation": ("disable_demo_regression",),
     },
     {
