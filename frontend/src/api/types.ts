@@ -4,6 +4,8 @@ export const SESSION_STATUSES = [
   'PAUSED', 'COMPLETED', 'EXHAUSTED', 'FAILED', 'CANCELLED',
 ] as const;
 export type SessionStatus = typeof SESSION_STATUSES[number];
+export type InvestigationStatus = 'completed' | 'max_round_reached' | 'model_incomplete';
+export type HumanRequestStatus = 'pending' | 'answered' | 'consumed' | 'expired' | 'cancelled';
 
 export interface Page<T> {
   items: T[];
@@ -11,6 +13,8 @@ export interface Page<T> {
   offset: number;
   has_more: boolean;
 }
+export type IncidentPage = Page<IncidentSummary>;
+export type SessionPage = Page<SessionSummary>;
 
 export interface IncidentSummary {
   incident_id: string;
@@ -27,7 +31,7 @@ export interface IncidentSummary {
 
 export interface InvestigationAnswer {
   success: boolean | null;
-  status: string;
+  status: InvestigationStatus;
   answer: string;
   answer_truncated: boolean;
   model_rounds: number;
@@ -88,6 +92,6 @@ export interface SessionDetail {
     error_category: string | null; retry_at: string | null; evidence_gap: string | null;
   };
   human_requests: {
-    request_id: string; status: string; question: string; created_at: string; expires_at: string;
+    request_id: string; status: HumanRequestStatus; question: string; created_at: string; expires_at: string;
   }[];
 }

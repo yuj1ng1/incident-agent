@@ -1,0 +1,1036 @@
+{
+  "responses": {
+    "/api/incidents": {
+      "$ref": "#/components/schemas/IncidentPage"
+    },
+    "/api/incidents/{incident_id}": {
+      "$ref": "#/components/schemas/IncidentDetail"
+    },
+    "/api/sessions": {
+      "$ref": "#/components/schemas/SessionPage"
+    },
+    "/api/sessions/{session_id}": {
+      "$ref": "#/components/schemas/SessionDetail"
+    }
+  },
+  "schemas": {
+    "AlertSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "alertname": {
+          "maxLength": 200,
+          "title": "Alertname",
+          "type": "string"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metric"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observed At"
+        },
+        "state": {
+          "maxLength": 100,
+          "title": "State",
+          "type": "string"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Threshold"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "alertname",
+        "state",
+        "metric",
+        "value",
+        "threshold",
+        "observed_at"
+      ],
+      "title": "AlertSummary",
+      "type": "object"
+    },
+    "BudgetUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "minimum": 0.0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "human_requests": {
+          "minimum": 0.0,
+          "title": "Human Requests",
+          "type": "integer"
+        },
+        "model_requests": {
+          "minimum": 0.0,
+          "title": "Model Requests",
+          "type": "integer"
+        },
+        "resumes": {
+          "minimum": 0.0,
+          "title": "Resumes",
+          "type": "integer"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "tool_executions": {
+          "minimum": 0.0,
+          "title": "Tool Executions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attempts",
+        "model_requests",
+        "tool_executions",
+        "resumes",
+        "human_requests",
+        "started_at"
+      ],
+      "title": "BudgetUsage",
+      "type": "object"
+    },
+    "HumanRequestView": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 2000,
+          "title": "Question",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "answered",
+            "consumed",
+            "expired",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "status",
+        "question",
+        "created_at",
+        "expires_at"
+      ],
+      "title": "HumanRequestView",
+      "type": "object"
+    },
+    "IncidentDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "alert_state": {
+          "maxLength": 100,
+          "title": "Alert State",
+          "type": "string"
+        },
+        "archived_session_count": {
+          "minimum": 0.0,
+          "title": "Archived Session Count",
+          "type": "integer"
+        },
+        "cleared_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cleared At"
+        },
+        "consecutive_investigation_failures": {
+          "minimum": 0.0,
+          "title": "Consecutive Investigation Failures",
+          "type": "integer"
+        },
+        "evidence_count": {
+          "minimum": 0.0,
+          "title": "Evidence Count",
+          "type": "integer"
+        },
+        "history_included": {
+          "const": false,
+          "default": false,
+          "title": "History Included",
+          "type": "boolean"
+        },
+        "incident_id": {
+          "maxLength": 120,
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "investigation_suspended_reason": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Investigation Suspended Reason"
+        },
+        "last_investigated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Investigated At"
+        },
+        "recent_alerts": {
+          "items": {
+            "$ref": "#/components/schemas/AlertSummary"
+          },
+          "maxItems": 3,
+          "title": "Recent Alerts",
+          "type": "array"
+        },
+        "recent_investigations": {
+          "items": {
+            "$ref": "#/components/schemas/InvestigationHistory"
+          },
+          "maxItems": 3,
+          "title": "Recent Investigations",
+          "type": "array"
+        },
+        "recovery_verified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recovery Verified At"
+        },
+        "service": {
+          "maxLength": 200,
+          "title": "Service",
+          "type": "string"
+        },
+        "severity": {
+          "maxLength": 100,
+          "title": "Severity",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 100,
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_id",
+        "service",
+        "severity",
+        "status",
+        "alert_state",
+        "last_investigated_at",
+        "cleared_at",
+        "recovery_verified_at",
+        "consecutive_investigation_failures",
+        "investigation_suspended_reason",
+        "recent_alerts",
+        "recent_investigations",
+        "evidence_count",
+        "archived_session_count"
+      ],
+      "title": "IncidentDetail",
+      "type": "object"
+    },
+    "IncidentPage": {
+      "additionalProperties": false,
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/components/schemas/IncidentSummary"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "limit": {
+          "maximum": 100.0,
+          "minimum": 1.0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "maximum": 10000.0,
+          "minimum": 0.0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "limit",
+        "offset",
+        "has_more"
+      ],
+      "title": "IncidentPage",
+      "type": "object"
+    },
+    "IncidentSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "alert_state": {
+          "maxLength": 100,
+          "title": "Alert State",
+          "type": "string"
+        },
+        "cleared_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cleared At"
+        },
+        "consecutive_investigation_failures": {
+          "minimum": 0.0,
+          "title": "Consecutive Investigation Failures",
+          "type": "integer"
+        },
+        "incident_id": {
+          "maxLength": 120,
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "investigation_suspended_reason": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Investigation Suspended Reason"
+        },
+        "last_investigated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Investigated At"
+        },
+        "recovery_verified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recovery Verified At"
+        },
+        "service": {
+          "maxLength": 200,
+          "title": "Service",
+          "type": "string"
+        },
+        "severity": {
+          "maxLength": 100,
+          "title": "Severity",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 100,
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_id",
+        "service",
+        "severity",
+        "status",
+        "alert_state",
+        "last_investigated_at",
+        "cleared_at",
+        "recovery_verified_at",
+        "consecutive_investigation_failures",
+        "investigation_suspended_reason"
+      ],
+      "title": "IncidentSummary",
+      "type": "object"
+    },
+    "InvestigationAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 8000,
+          "title": "Answer",
+          "type": "string"
+        },
+        "answer_truncated": {
+          "title": "Answer Truncated",
+          "type": "boolean"
+        },
+        "model_rounds": {
+          "minimum": 0.0,
+          "title": "Model Rounds",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/components/schemas/InvestigationStatus"
+        },
+        "success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Success"
+        },
+        "tool_calls": {
+          "minimum": 0.0,
+          "title": "Tool Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success",
+        "status",
+        "answer",
+        "answer_truncated",
+        "model_rounds",
+        "tool_calls"
+      ],
+      "title": "InvestigationAnswer",
+      "type": "object"
+    },
+    "InvestigationHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 8000,
+          "title": "Answer",
+          "type": "string"
+        },
+        "answer_truncated": {
+          "title": "Answer Truncated",
+          "type": "boolean"
+        },
+        "investigated_at": {
+          "format": "date-time",
+          "title": "Investigated At",
+          "type": "string"
+        },
+        "model_rounds": {
+          "minimum": 0.0,
+          "title": "Model Rounds",
+          "type": "integer"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Id"
+        },
+        "status": {
+          "$ref": "#/components/schemas/InvestigationStatus"
+        },
+        "success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Success"
+        },
+        "tool_calls": {
+          "minimum": 0.0,
+          "title": "Tool Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success",
+        "status",
+        "answer",
+        "answer_truncated",
+        "model_rounds",
+        "tool_calls",
+        "session_id",
+        "investigated_at"
+      ],
+      "title": "InvestigationHistory",
+      "type": "object"
+    },
+    "InvestigationStatus": {
+      "enum": [
+        "completed",
+        "max_round_reached",
+        "model_incomplete"
+      ],
+      "title": "InvestigationStatus",
+      "type": "string"
+    },
+    "Projection": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked": {
+          "title": "Blocked",
+          "type": "boolean"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error Category"
+        },
+        "projected": {
+          "title": "Projected",
+          "type": "boolean"
+        },
+        "retry_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retry At"
+        }
+      },
+      "required": [
+        "projected",
+        "blocked",
+        "error_category",
+        "retry_at"
+      ],
+      "title": "Projection",
+      "type": "object"
+    },
+    "ProposalGeneration": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "minimum": 0.0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "blocked": {
+          "title": "Blocked",
+          "type": "boolean"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Blocked Reason"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error Category"
+        },
+        "evidence_gap": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Gap"
+        },
+        "pending": {
+          "title": "Pending",
+          "type": "boolean"
+        },
+        "retry_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retry At"
+        },
+        "status": {
+          "enum": [
+            "not_pending",
+            "waiting_retry",
+            "blocked"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "pending",
+        "attempts",
+        "blocked",
+        "blocked_reason",
+        "error_category",
+        "retry_at",
+        "evidence_gap"
+      ],
+      "title": "ProposalGeneration",
+      "type": "object"
+    },
+    "RuntimeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoints_to_keep": {
+          "default": 4,
+          "maximum": 20.0,
+          "minimum": 1.0,
+          "title": "Checkpoints To Keep",
+          "type": "integer"
+        },
+        "human_timeout_seconds": {
+          "default": 1800,
+          "minimum": 1.0,
+          "title": "Human Timeout Seconds",
+          "type": "integer"
+        },
+        "lease_seconds": {
+          "default": 120,
+          "minimum": 1.0,
+          "title": "Lease Seconds",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 3,
+          "maximum": 10.0,
+          "minimum": 1.0,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_duration_seconds": {
+          "default": 3600,
+          "minimum": 1.0,
+          "title": "Max Duration Seconds",
+          "type": "integer"
+        },
+        "max_human_requests": {
+          "default": 3,
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "title": "Max Human Requests",
+          "type": "integer"
+        },
+        "max_model_requests": {
+          "default": 21,
+          "maximum": 100.0,
+          "minimum": 1.0,
+          "title": "Max Model Requests",
+          "type": "integer"
+        },
+        "max_resumes": {
+          "default": 8,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Max Resumes",
+          "type": "integer"
+        },
+        "max_tool_executions": {
+          "default": 39,
+          "maximum": 200.0,
+          "minimum": 1.0,
+          "title": "Max Tool Executions",
+          "type": "integer"
+        },
+        "model_timeout_seconds": {
+          "default": 60,
+          "maximum": 90.0,
+          "minimum": 1.0,
+          "title": "Model Timeout Seconds",
+          "type": "integer"
+        },
+        "retry_base_seconds": {
+          "default": 5,
+          "minimum": 1.0,
+          "title": "Retry Base Seconds",
+          "type": "integer"
+        },
+        "starvation_seconds": {
+          "default": 120,
+          "minimum": 1.0,
+          "title": "Starvation Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeLimits",
+      "type": "object"
+    },
+    "SessionDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "human_requests": {
+          "items": {
+            "$ref": "#/components/schemas/HumanRequestView"
+          },
+          "maxItems": 10,
+          "title": "Human Requests",
+          "type": "array"
+        },
+        "incident_budget_usage": {
+          "$ref": "#/components/schemas/BudgetUsage"
+        },
+        "investigation_result": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/InvestigationAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "$ref": "#/components/schemas/RuntimeLimits"
+        },
+        "projection": {
+          "$ref": "#/components/schemas/Projection"
+        },
+        "proposal_generation": {
+          "$ref": "#/components/schemas/ProposalGeneration"
+        },
+        "session": {
+          "$ref": "#/components/schemas/SessionSummary"
+        }
+      },
+      "required": [
+        "session",
+        "limits",
+        "incident_budget_usage",
+        "investigation_result",
+        "projection",
+        "proposal_generation",
+        "human_requests"
+      ],
+      "title": "SessionDetail",
+      "type": "object"
+    },
+    "SessionPage": {
+      "additionalProperties": false,
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/components/schemas/SessionSummary"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "limit": {
+          "maximum": 100.0,
+          "minimum": 1.0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "maximum": 10000.0,
+          "minimum": 0.0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "limit",
+        "offset",
+        "has_more"
+      ],
+      "title": "SessionPage",
+      "type": "object"
+    },
+    "SessionStatus": {
+      "enum": [
+        "CREATED",
+        "QUEUED",
+        "RUNNING",
+        "WAITING_RETRY",
+        "WAITING_HUMAN",
+        "PAUSED",
+        "COMPLETED",
+        "EXHAUSTED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "SessionStatus",
+      "type": "string"
+    },
+    "SessionSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_count": {
+          "minimum": 0.0,
+          "title": "Attempt Count",
+          "type": "integer"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Completed At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "current_attempt_rounds": {
+          "minimum": 0.0,
+          "title": "Current Attempt Rounds",
+          "type": "integer"
+        },
+        "current_attempt_tool_calls": {
+          "minimum": 0.0,
+          "title": "Current Attempt Tool Calls",
+          "type": "integer"
+        },
+        "incident_id": {
+          "maxLength": 120,
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "last_error_category": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Error Category"
+        },
+        "next_retry_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Retry At"
+        },
+        "resume_count": {
+          "minimum": 0.0,
+          "title": "Resume Count",
+          "type": "integer"
+        },
+        "service": {
+          "maxLength": 200,
+          "title": "Service",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 120,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "state_version": {
+          "minimum": 0.0,
+          "title": "State Version",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/components/schemas/SessionStatus"
+        },
+        "total_model_requests": {
+          "minimum": 0.0,
+          "title": "Total Model Requests",
+          "type": "integer"
+        },
+        "total_tool_executions": {
+          "minimum": 0.0,
+          "title": "Total Tool Executions",
+          "type": "integer"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "incident_id",
+        "service",
+        "status",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "state_version",
+        "attempt_count",
+        "current_attempt_rounds",
+        "current_attempt_tool_calls",
+        "total_model_requests",
+        "total_tool_executions",
+        "resume_count",
+        "last_error_category",
+        "next_retry_at"
+      ],
+      "title": "SessionSummary",
+      "type": "object"
+    }
+  },
+  "serialization": {
+    "/api/incidents": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/incidents/{incident_id}": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/sessions": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/sessions/{session_id}": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    }
+  }
+}
