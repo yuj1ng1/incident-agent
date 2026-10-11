@@ -67,6 +67,16 @@ def effective_records(records, identity=None, now=None, service=None):
     return [
         record for record in records
         if fresh(record, now)
+        # A newly fetched alert window remains evidence about that interval.
+        # Its collection TTL permits caching, not a claim about current health.
+        and not (
+            record["name"] == "query_logs"
+            and (
+                record["arguments"].get("start") is not None
+                or record["arguments"].get("end") is not None
+                or record["result"].get("evidence_scope") == "time_window"
+            )
+        )
         and (
             (
                 stable(record["name"], record["arguments"])

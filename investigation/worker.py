@@ -315,7 +315,10 @@ class Worker:
         if truncated:
             summary["summary_truncated"] = True
         if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
-            return {key: summary[key] for key in ("status", "reason", "service", "dependency", "value", "reachable", "ref", "commit_sha") if key in summary} | {"summary_truncated": True}
+            keys = ("status", "reason", "service", "dependency", "value", "reachable", "ref", "commit_sha")
+            if tool_name == "query_logs":
+                keys += ("query_range", "evidence_scope", "log_count", "limit", "truncated", "out_of_range_count", "truncation_reason")
+            return {key: summary[key] for key in keys if key in summary} | {"summary_truncated": True}
         return summary
 
     def _validate_tool(self, name, arguments, service):
