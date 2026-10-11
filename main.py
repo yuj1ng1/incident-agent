@@ -3,6 +3,7 @@
 
 def main():
     import os
+    from pathlib import Path
 
     from dotenv import load_dotenv
 
@@ -32,7 +33,7 @@ def main():
     ) as client:
         agent = Agent(client=client, agent_prompt=agent_prompt)
         prometheus_client = PrometheusClient(base_url=PROMETHEUS_URL)
-        incident_store = IncidentStore("data/incidents.json")
+        incident_store = IncidentStore(Path(__file__).resolve().parent / "data" / "incidents.json")
         runtime_manager = InvestigationManager(
             RuntimeStore(),
             incident_store,

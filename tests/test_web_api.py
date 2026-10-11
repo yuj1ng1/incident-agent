@@ -295,10 +295,27 @@ def test_concurrent_readers_observe_consistent_uncommitted_writer_snapshot(api):
     assert client.get(f"/api/sessions/{session.session_id}").json()["session"]["total_model_requests"] == 1
 
 
-def test_launcher_fixes_loopback_and_does_not_trust_proxy_headers():
+@pytest.mark.parametrize("argv,port", [([], 8010), (["--port", "8011"], 8011),
+                                     (["--port", "1"], 1), (["--port", "65535"], 65535)])
+def test_launcher_fixes_loopback_and_does_not_trust_proxy_headers(argv, port):
     with patch("uvicorn.run") as run:
-        web_main()
-    run.assert_called_once_with("web_api.app:app", host="127.0.0.1", port=8002, proxy_headers=False)
+        web_main(argv)
+    run.assert_called_once_with("web_api.app:app", host="127.0.0.1", port=port, proxy_headers=False)
+
+
+@pytest.mark.parametrize("argv", [["--port", "0"], ["--port", "65536"], ["--port", "text"],
+                                  ["--host", "0.0.0.0"]])
+def test_launcher_rejects_invalid_ports_and_public_bindings(argv):
+    with patch("uvicorn.run") as run, pytest.raises(SystemExit) as stopped:
+        web_main(argv)
+    assert stopped.value.code == 2
+    run.assert_not_called()
+
+
+def test_incident_open_filter_is_rejected_without_reading_stores(api):
+    with patch("web_api.app.RuntimeQueries.incidents", side_effect=AssertionError("invalid status opened store")):
+        result = api[2].get("/api/incidents", params={"status": "open"})
+    assert result.status_code == 422
 
 
 def test_legacy_data_is_mapped_without_migration_or_backfill(api):

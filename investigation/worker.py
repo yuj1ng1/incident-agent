@@ -12,7 +12,7 @@ from agent_logger.logger_config import logger
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import protect, restore_context, valid_chain
 from investigation.evidence_policy import TTL, cache_key, effective_records, fresh
-from investigation.models import SessionStatus as S
+from investigation.models import HumanInputArguments, SessionStatus as S
 from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, RuntimeIntegrityError, budget_exhaustion, exhausted, transition
 from models.incident import Evidence
 from models.investigation import InvestigationResult, InvestigationStatus
@@ -25,7 +25,7 @@ HUMAN_TOOL = {
     "description": "请求人类提供现有只读工具无法获得的必要背景；暂停调查等待回答，不具备审批权限。",
     "parameters": {
         "type": "object",
-        "properties": {"question": {"type": "string"}},
+        "properties": {"question": {"type": "string", "minLength": 1, "maxLength": 2000}},
         "required": ["question"],
         "additionalProperties": False,
     },
@@ -485,6 +485,15 @@ class Worker:
             identifiers = [c.call_id for c in calls]
             if len(set(identifiers)) != len(identifiers) or any(not identifier for identifier in identifiers):
                 raise RuntimeErrorBase("model_invalid_call_ids")
+            human_questions = {}
+            for call in calls:
+                if call.name == "request_human_input":
+                    try:
+                        human_questions[call.call_id] = HumanInputArguments.model_validate_json(call.arguments).question
+                    except ValidationError:
+                        # Reject malformed JSON/shape/value before any raw input
+                        # enters checkpoint history or exception/audit text.
+                        raise RuntimeErrorBase("invalid_human_request") from None
             checkpoint["response_status"] = response.status
             checkpoint["phase"] = "response_saved"
             checkpoint["pending"] = [
@@ -523,13 +532,10 @@ class Worker:
                     history = self._context(session_id, checkpoint)
                     break
                 if call.name == "request_human_input":
-                    arguments = json.loads(call.arguments)
-                    if set(arguments) != {"question"}:
-                        raise RuntimeErrorBase("invalid_human_request")
                     checkpoint["pending"] = []
                     checkpoint["history"] = []
                     checkpoint["phase"] = "waiting_human"
-                    self.manager.request_human(session_id, claim, arguments["question"], checkpoint)
+                    self.manager.request_human(session_id, claim, human_questions[call.call_id], checkpoint)
                     return
                 result, _ = self._tool(session_id, claim, checkpoint, call)
                 history.append(self.agent.tool_manager.build_output_item(call, result))

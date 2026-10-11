@@ -234,6 +234,7 @@ class IncidentRegressionTests(unittest.TestCase):
             }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]), \
                     patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}), \
                     patch("dotenv.load_dotenv") as load_environment, \
+                    patch("incident_store.IncidentStore", side_effect=lambda path: IncidentStore(self.work / "assembly-incidents.json")) as incident_factory, \
                     patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(self.work / "assembly.sqlite3")), \
                     patch("remediation.store.RemediationStore", side_effect=lambda: RemediationStore(self.work / "assembly-remediations.json")), \
                     patch("monitor.incident_monitor.IncidentMonitor", side_effect=IncidentMonitor) as monitor_factory, \
@@ -248,6 +249,8 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertIsInstance(worker.agent, Agent)
             self.assertIsInstance(monitor_factory.call_args.kwargs["prometheus_client"], PrometheusClient)
             self.assertIsInstance(manager.incident_store, IncidentStore)
+            incident_factory.assert_called_once_with(ROOT / "data" / "incidents.json")
+            self.assertEqual(manager.incident_store.file_path, self.work / "assembly-incidents.json")
             self.assertEqual(manager.store.path, self.work / "assembly.sqlite3")
             self.assertEqual(worker.agent.model_client.client.max_retries, 0)
             self.assertTrue(worker.agent.model_client.client.is_closed())
@@ -255,7 +258,7 @@ class IncidentRegressionTests(unittest.TestCase):
             stop.assert_called_once()
             load_environment.assert_called_once()
             self.assertEqual(get_alerts.call_count, 2)
-            self.assertEqual(json.loads((self.work / "data" / "incidents.json").read_text()), {
+            self.assertEqual(json.loads((self.work / "assembly-incidents.json").read_text()), {
                 "version": 2, "incidents": {}, "active_by_fingerprint": {}
             })
         finally:

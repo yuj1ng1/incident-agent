@@ -45,7 +45,7 @@ def create_app(*, incident_path: Path = ROOT / "data" / "incidents.json",
 
     @app.get("/api/incidents", response_model=IncidentPage)
     def list_incidents(limit: PageLimit = 20, offset: PageOffset = 0,
-                       status: Literal["open", "investigating", "resolved"] | None = None):
+                       status: Literal["investigating", "resolved"] | None = None):
         return queries.incidents(limit=limit, offset=offset, status=status)
 
     @app.get("/api/incidents/{incident_id}", response_model=IncidentDetail)

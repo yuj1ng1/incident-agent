@@ -103,6 +103,18 @@ class HumanCommand(Record):
         return value
 
 
+class HumanInputArguments(Record):
+    """Untrusted tool input, separate from the persisted HumanRequest schema."""
+    question: str = Field(strict=True, min_length=1, max_length=2000)
+
+    @field_validator("question")
+    @classmethod
+    def nonblank_question(cls, value):
+        if not value.strip():
+            raise ValueError("question_required")
+        return value
+
+
 class HumanRequest(Record):
     request_id: str = Field(default_factory=lambda: "req-" + uuid4().hex)
     session_id: str

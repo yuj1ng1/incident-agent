@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 import json
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from config import ALERT_POLL_INTERVAL_SECONDS, RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
-from investigation.models import HumanCommand, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
+from investigation.models import HumanCommand, HumanInputArguments, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
 from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, TERMINAL, budget_exhaustion, exhausted, transition
 from incident_store import RuntimeProjectionResult
 from reinvestigation import reinvestigation_reason, utc_timestamp
@@ -438,11 +440,18 @@ class InvestigationManager:
     def request_human(self, session_id, claim, question, checkpoint):
         with self.store.transaction() as db:
             session = self.store.guard(db, session_id, *claim)
+            try:
+                arguments = HumanInputArguments(question=question)
+                question = HumanInputArguments(question=protect(arguments.question)).question
+            except ValidationError:
+                # Only input validation is a business error. Durable record
+                # validation and HumanRequest construction still fail closed.
+                raise RuntimeErrorBase("invalid_human_request") from None
             if self.store.budget_usage(session, db)["human_requests"] >= self.limits.max_human_requests:
                 raise RuntimeErrorBase("human_request_budget_exhausted")
             request = HumanRequest(
                 session_id=session_id,
-                question=protect(question),
+                question=question,
                 created_at=self.store.clock(),
                 expires_at=self.store.clock() + timedelta(seconds=self.limits.human_timeout_seconds),
             )
