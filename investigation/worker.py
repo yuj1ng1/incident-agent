@@ -201,7 +201,11 @@ class Worker:
             summary="当前有效的工具观测（截至本轮上下文采集时间）",
             observation_id=r["observation_id"],
             collected_at=r["collected_at"],
-            detail=json.dumps(self._observation_summary(r["result"]) if r["name"] == "query_logs" else r["result"], ensure_ascii=False),
+            detail=json.dumps(
+                self._observation_summary(r["result"], r["name"])
+                if r["name"] == "query_logs" else r["result"],
+                ensure_ascii=False,
+            ),
         ) for r in records]
         historical = []
         missing = []
@@ -220,7 +224,7 @@ class Worker:
                 "status": record["result"].get("status"),
                 "expired": not fresh(record, now),
                 "use_for_current_state": False,
-                "result": self._observation_summary(record["result"]),
+                "result": self._observation_summary(record["result"], record["name"]),
             }
             if record in current:
                 observation["context_note"] = "current_observation_omitted_by_size_limit"
@@ -246,7 +250,7 @@ class Worker:
             observation = next((r for r in reversed(checkpoint["records"])
                                 if (r["call_id"] == item["call_id"] or r["observation_id"] == cached_reference)
                                 and r["name"] == item["name"] and r["result"] == output), None)
-            summary = self._observation_summary(output)
+            summary = self._observation_summary(output, item["name"])
             size = len(json.dumps(summary, ensure_ascii=False).encode("utf-8"))
             if call_summary_bytes + size > 16000:
                 summary = {key: summary[key] for key in ("status", "reason") if key in summary} | {"summary_truncated": True}
@@ -284,7 +288,7 @@ class Worker:
         )[0]
 
     @staticmethod
-    def _observation_summary(result):
+    def _observation_summary(result, tool_name=None):
         """Bound summaries, including logs/source, without dropping useful scalar fields."""
         truncated = False
         def bounded(value, depth=0):
@@ -302,7 +306,12 @@ class Worker:
                 truncated |= len(value) > 1000
                 return value[:1000] + (" [summary truncated]" if len(value) > 1000 else "")
             return value
-        summary = bounded(protect(result))
+        protected_result = protect(result)
+        if tool_name == "query_logs" and isinstance(protected_result.get("logs"), list):
+            # query_logs is newest first; only trim the redacted summary copy.
+            truncated = len(protected_result["logs"]) > 3
+            protected_result["logs"] = protected_result["logs"][:3]
+        summary = bounded(protected_result)
         if truncated:
             summary["summary_truncated"] = True
         if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
