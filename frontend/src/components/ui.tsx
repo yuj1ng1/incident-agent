@@ -20,9 +20,10 @@ export function statusTone(value: string) {
     : ['RUNNING', 'investigating', 'QUEUED'].includes(value) ? 'blue' : 'gray';
 }
 
-export function StatusBadge({ value }: { value: string }) {
-  const tone = statusTone(value);
-  return <span className={`badge ${tone}`} title={value}><span className="badge-dot" />{statusLabels[value] || value}</span>;
+export function StatusBadge({ value, label, tone = statusTone(value) }: {
+  value: string; label?: string; tone?: ReturnType<typeof statusTone>;
+}) {
+  return <span className={`badge ${tone}`} title={value}><span className="badge-dot" />{label || statusLabels[value] || value}</span>;
 }
 
 export function PageHeader({ title, description, back, loading, reload, fetchedAt }: {

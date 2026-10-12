@@ -6,6 +6,41 @@ export const SESSION_STATUSES = [
 export type SessionStatus = typeof SESSION_STATUSES[number];
 export type InvestigationStatus = 'completed' | 'max_round_reached' | 'model_incomplete';
 export type HumanRequestStatus = 'pending' | 'answered' | 'consumed' | 'expired' | 'cancelled';
+export type RecoveryStatus = 'alert_firing' | 'pending' | 'running' | 'verified' | 'failed'
+  | 'insufficient' | 'superseded' | 'not_recorded' | 'legacy_only';
+export type RecoveryReason = 'conditions_met' | 'recovery_capability_not_configured' | 'clear_time_invalid'
+  | 'http_status_mismatch' | 'business_condition_mismatch' | 'redirect_refused' | 'timeout'
+  | 'connection_failed' | 'invalid_response' | 'response_too_large' | 'content_encoding_refused'
+  | 'invalid_evidence' | 'lease_expired' | 'alert_changed' | 'configuration_changed' | 'internal_probe_error';
+
+export interface RecoveryCheckView {
+  kind: 'http_status' | 'json_equals' | 'nonempty_object';
+  field: string;
+  matched: boolean;
+}
+
+export interface RecoveryAttemptView {
+  number: number;
+  started_at: string;
+  completed_at: string | null;
+  outcome: 'running' | 'success' | 'failed' | 'insufficient' | 'abandoned';
+  reason: RecoveryReason | null;
+  http_status: number | null;
+  checks: RecoveryCheckView[];
+}
+
+export interface RecoveryVerificationView {
+  status: RecoveryStatus;
+  target_id: string | null;
+  attempt_count: number;
+  max_attempts: number | null;
+  last_attempt_at: string | null;
+  next_retry_at: string | null;
+  reason: RecoveryReason | null;
+  last_http_status: number | null;
+  verified_at: string | null;
+  attempts: RecoveryAttemptView[];
+}
 
 export interface Page<T> {
   items: T[];
@@ -39,6 +74,7 @@ export interface InvestigationAnswer {
 }
 
 export interface IncidentDetail extends IncidentSummary {
+  recovery_verification: RecoveryVerificationView;
   recent_alerts: {
     alertname: string; state: string; metric: string | null;
     value: number | null; threshold: number | null; observed_at: string | null;

@@ -261,6 +261,9 @@
           "title": "Recent Investigations",
           "type": "array"
         },
+        "recovery_verification": {
+          "$ref": "#/components/schemas/RecoveryVerificationView"
+        },
         "recovery_verified_at": {
           "anyOf": [
             {
@@ -300,6 +303,7 @@
         "recovery_verified_at",
         "consecutive_investigation_failures",
         "investigation_suspended_reason",
+        "recovery_verification",
         "recent_alerts",
         "recent_investigations",
         "evidence_count",
@@ -696,6 +700,287 @@
         "evidence_gap"
       ],
       "title": "ProposalGeneration",
+      "type": "object"
+    },
+    "RecoveryAttemptView": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/components/schemas/RecoveryCheckView"
+          },
+          "maxItems": 21,
+          "title": "Checks",
+          "type": "array"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Completed At"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599.0,
+              "minimum": 100.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Http Status"
+        },
+        "number": {
+          "maximum": 5.0,
+          "minimum": 1.0,
+          "title": "Number",
+          "type": "integer"
+        },
+        "outcome": {
+          "enum": [
+            "running",
+            "success",
+            "failed",
+            "insufficient",
+            "abandoned"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "conditions_met",
+                "recovery_capability_not_configured",
+                "clear_time_invalid",
+                "http_status_mismatch",
+                "business_condition_mismatch",
+                "redirect_refused",
+                "timeout",
+                "connection_failed",
+                "invalid_response",
+                "response_too_large",
+                "content_encoding_refused",
+                "invalid_evidence",
+                "lease_expired",
+                "alert_changed",
+                "configuration_changed",
+                "internal_probe_error"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "reason",
+        "http_status",
+        "checks"
+      ],
+      "title": "RecoveryAttemptView",
+      "type": "object"
+    },
+    "RecoveryCheckView": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 80,
+          "title": "Field",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "http_status",
+            "json_equals",
+            "nonempty_object"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "matched": {
+          "title": "Matched",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "field",
+        "matched"
+      ],
+      "title": "RecoveryCheckView",
+      "type": "object"
+    },
+    "RecoveryVerificationView": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_count": {
+          "maximum": 5.0,
+          "minimum": 0.0,
+          "title": "Attempt Count",
+          "type": "integer"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/components/schemas/RecoveryAttemptView"
+          },
+          "maxItems": 5,
+          "title": "Attempts",
+          "type": "array"
+        },
+        "last_attempt_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Attempt At"
+        },
+        "last_http_status": {
+          "anyOf": [
+            {
+              "maximum": 599.0,
+              "minimum": 100.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Http Status"
+        },
+        "max_attempts": {
+          "anyOf": [
+            {
+              "maximum": 5.0,
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max Attempts"
+        },
+        "next_retry_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Retry At"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "conditions_met",
+                "recovery_capability_not_configured",
+                "clear_time_invalid",
+                "http_status_mismatch",
+                "business_condition_mismatch",
+                "redirect_refused",
+                "timeout",
+                "connection_failed",
+                "invalid_response",
+                "response_too_large",
+                "content_encoding_refused",
+                "invalid_evidence",
+                "lease_expired",
+                "alert_changed",
+                "configuration_changed",
+                "internal_probe_error"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "status": {
+          "enum": [
+            "alert_firing",
+            "pending",
+            "running",
+            "verified",
+            "failed",
+            "insufficient",
+            "superseded",
+            "not_recorded",
+            "legacy_only"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target Id"
+        },
+        "verified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verified At"
+        }
+      },
+      "required": [
+        "status",
+        "target_id",
+        "attempt_count",
+        "max_attempts",
+        "last_attempt_at",
+        "next_retry_at",
+        "reason",
+        "last_http_status",
+        "verified_at",
+        "attempts"
+      ],
+      "title": "RecoveryVerificationView",
       "type": "object"
     },
     "RuntimeLimits": {

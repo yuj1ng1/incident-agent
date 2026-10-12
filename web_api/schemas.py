@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from investigation.models import RuntimeLimits, SessionStatus
 from models.investigation import InvestigationStatus
+from models.recovery import Reason as RecoveryReason
 
 
 class PublicModel(BaseModel):
@@ -53,7 +54,40 @@ class AlertSummary(PublicModel):
     observed_at: datetime | None
 
 
+class RecoveryCheckView(PublicModel):
+    kind: Literal["http_status", "json_equals", "nonempty_object"]
+    field: str = Field(max_length=80)
+    matched: bool = Field(strict=True)
+
+
+class RecoveryAttemptView(PublicModel):
+    number: int = Field(ge=1, le=5)
+    started_at: datetime
+    completed_at: datetime | None
+    outcome: Literal["running", "success", "failed", "insufficient", "abandoned"]
+    reason: RecoveryReason | None
+    http_status: int | None = Field(ge=100, le=599)
+    checks: list[RecoveryCheckView] = Field(max_length=21)
+
+
+class RecoveryVerificationView(PublicModel):
+    status: Literal[
+        "alert_firing", "pending", "running", "verified", "failed",
+        "insufficient", "superseded", "not_recorded", "legacy_only",
+    ]
+    target_id: str | None = Field(max_length=120)
+    attempt_count: int = Field(ge=0, le=5)
+    max_attempts: int | None = Field(ge=1, le=5)
+    last_attempt_at: datetime | None
+    next_retry_at: datetime | None
+    reason: RecoveryReason | None
+    last_http_status: int | None = Field(ge=100, le=599)
+    verified_at: datetime | None
+    attempts: list[RecoveryAttemptView] = Field(max_length=5)
+
+
 class IncidentDetail(IncidentSummary):
+    recovery_verification: RecoveryVerificationView
     recent_alerts: list[AlertSummary] = Field(max_length=3)
     recent_investigations: list[InvestigationHistory] = Field(max_length=3)
     evidence_count: int = Field(ge=0)

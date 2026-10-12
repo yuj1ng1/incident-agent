@@ -2,14 +2,30 @@
 from pathlib import Path
 import re
 
+from pydantic import ValidationError
+
 from incident_store import IncidentStore
 from investigation.checkpoint import protect
 from investigation.manager import InvestigationManager
 from investigation.state import RuntimeIntegrityError
 from investigation.store import RuntimeStore
+from models.incident import Incident
+from models.recovery import RecoveryAttempt, RecoveryReceipt, RecoveryVerification
 from web_api.schemas import (
-    AlertSummary, HumanRequestView, IncidentDetail, IncidentPage, IncidentSummary,
-    InvestigationAnswer, InvestigationHistory, Projection, ProposalGeneration, SessionDetail, SessionPage,
+    AlertSummary,
+    HumanRequestView,
+    IncidentDetail,
+    IncidentPage,
+    IncidentSummary,
+    InvestigationAnswer,
+    InvestigationHistory,
+    Projection,
+    ProposalGeneration,
+    RecoveryAttemptView,
+    RecoveryCheckView,
+    RecoveryVerificationView,
+    SessionDetail,
+    SessionPage,
     SessionSummary,
 )
 
@@ -51,6 +67,128 @@ def incident_summary(incident):
     )
 
 
+def recovery_receipt_for_attempt(
+    incident: Incident,
+    state: RecoveryVerification,
+    attempt: RecoveryAttempt,
+) -> RecoveryReceipt | None:
+    """Read bounded, validated observations without re-probing historical health."""
+    receipt = attempt.receipt
+    if attempt.outcome == "success":
+        receipt = None
+        # Successful receipts live in recovery_evidence, not on the attempt.
+        for evidence in reversed(incident.recovery_evidence[-5:]):
+            if (
+                evidence.source != "recovery_http"
+                or evidence.observation_id != attempt.token
+                or evidence.runtime_session_id is not None
+                or evidence.collected_at != incident.recovery_verified_at
+                or len(evidence.detail.encode("utf-8")) > 32768
+            ):
+                continue
+            try:
+                candidate = RecoveryReceipt.model_validate_json(evidence.detail)
+            except ValidationError:
+                continue
+            if candidate.completed_at == evidence.collected_at:
+                receipt = candidate
+                break
+    policy = state.policy
+    if receipt is None or policy is None or attempt.completed_at is None:
+        return None
+    if (
+        receipt.incident_id != incident.incident_id
+        or receipt.service != incident.service
+        or receipt.target_id != policy.target_id
+        or receipt.config_digest != policy.config_digest
+        or receipt.claim_token != attempt.token
+        or receipt.cleared_at != state.cleared_at
+        or receipt.cleared_at != incident.cleared_at
+        or receipt.started_at != attempt.started_at
+        or receipt.completed_at > attempt.completed_at
+        or receipt.outcome != attempt.outcome
+        or receipt.reason != attempt.reason
+        or len(receipt.samples) > policy.successes_required
+    ):
+        return None
+    expected = [check.model_dump() for check in policy.required_checks]
+    for sample in receipt.samples:
+        observed = [check.model_dump(exclude={"matched"}) for check in sample.checks]
+        if observed != expected[:len(observed)]:
+            return None
+        if receipt.outcome == "success" and (
+            observed != expected
+            or sample.http_status != policy.expected_status
+            or not all(check.matched for check in sample.checks)
+        ):
+            return None
+    if receipt.outcome == "success" and (
+        len(receipt.samples) != policy.successes_required
+        or receipt.completed_at != incident.recovery_verified_at
+    ):
+        return None
+    return receipt
+
+
+def recovery_verification_view(incident: Incident) -> RecoveryVerificationView:
+    state = incident.recovery_verification
+    if state is None:
+        status = "legacy_only" if incident.recovery_verified_at else "not_recorded"
+    else:
+        status = state.status
+    reason = state.reason if state else None
+    attempts = []
+    verified_at = None
+    if state is not None:
+        for number, attempt in enumerate(state.attempts, start=1):
+            receipt = recovery_receipt_for_attempt(incident, state, attempt)
+            sample = receipt.samples[-1] if receipt else None
+            invalid = (
+                attempt.outcome == "success" or attempt.receipt is not None
+            ) and receipt is None
+            attempts.append(RecoveryAttemptView(
+                number=number,
+                started_at=attempt.started_at,
+                completed_at=attempt.completed_at,
+                outcome="insufficient" if invalid else attempt.outcome,
+                reason="invalid_evidence" if invalid else attempt.reason,
+                http_status=sample.http_status if sample else None,
+                checks=[RecoveryCheckView(
+                    kind=check.kind,
+                    field=public_text(check.field, 80),
+                    matched=check.matched,
+                ) for check in sample.checks] if sample else [],
+            ))
+            if receipt is not None and receipt.outcome == "success":
+                verified_at = receipt.completed_at
+        if status == "verified" and verified_at is None:
+            status, reason = "insufficient", "invalid_evidence"
+        elif (
+            status != "superseded"
+            and attempts
+            and attempts[-1].reason == "invalid_evidence"
+        ):
+            status, reason = "insufficient", "invalid_evidence"
+        if state.cleared_at != incident.cleared_at:
+            status, reason = "superseded", "alert_changed"
+    if incident.alert_state == "firing":
+        status = "alert_firing"
+    return RecoveryVerificationView(
+        status=status,
+        target_id=public_text(state.policy.target_id, 120)
+        if state and state.policy else None,
+        attempt_count=len(attempts),
+        max_attempts=state.policy.max_attempts if state and state.policy else None,
+        last_attempt_at=attempts[-1].started_at if attempts else None,
+        next_retry_at=state.next_retry_at
+        if state and status in {"failed", "insufficient"} else None,
+        reason=reason,
+        last_http_status=attempts[-1].http_status if attempts else None,
+        verified_at=verified_at if status == "verified" else None,
+        attempts=attempts,
+    )
+
+
 def session_summary(session):
     # Owner/fencing/checkpoint identity and arbitrary extra fields stay internal.
     fields = {name: getattr(session, name) for name in SessionSummary.model_fields}
@@ -80,6 +218,7 @@ class RuntimeQueries:
             raise ValueError("incident_store_identity_mismatch")
         return IncidentDetail(
             **incident_summary(incident).model_dump(),
+            recovery_verification=recovery_verification_view(incident),
             recent_alerts=[AlertSummary(
                 alertname=public_text(a.alertname), state=public_text(a.state, 100),
                 metric=public_text(a.metric), value=a.value, threshold=a.threshold,

@@ -12,6 +12,11 @@ export const incident: IncidentDetail = {
   incident_id: 'inc-fixture', service: 'fixture-service', severity: 'warning', status: 'investigating',
   alert_state: 'firing', last_investigated_at: '2026-10-11T01:01:00Z', cleared_at: null,
   recovery_verified_at: null, consecutive_investigation_failures: 0, investigation_suspended_reason: null,
+  recovery_verification: {
+    status: 'alert_firing', target_id: null, attempt_count: 0, max_attempts: null,
+    last_attempt_at: null, next_retry_at: null, reason: null, last_http_status: null,
+    verified_at: null, attempts: [],
+  },
   recent_alerts: [{ alertname: 'FixtureAlert', state: 'firing', metric: 'fixture_metric', value: null, threshold: 0, observed_at: null }],
   recent_investigations: [{ session_id: session.session_id, investigated_at: session.updated_at, success: null,
     status: 'completed', answer: '测试调查回答', answer_truncated: true, model_rounds: 2, tool_calls: 4 }],
