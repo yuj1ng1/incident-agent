@@ -404,7 +404,7 @@ class IncidentStore:
         return newest == incident.incident_id
 
     def recovery_candidates(self):
-        """Read the hot manifest only; finished jobs never reopen archives."""
+        """Scan durable jobs only; an unregistered historical clear is not a job."""
         result = []
         for key, value in self.load()["incidents"].items():
             if (value.get("status") != "resolved" or value.get("alert_state", "cleared") != "cleared"
@@ -414,7 +414,10 @@ class IncidentStore:
             if incident.incident_id != key:
                 raise ValueError("incident_store_identity_mismatch")
             state = incident.recovery_verification
-            if state is None or state.status in {"pending", "running"} or state.next_retry_at is not None:
+            if state is not None and (
+                state.status in {"pending", "running"}
+                or state.next_retry_at is not None
+            ):
                 result.append(key)
         return result
 
@@ -427,7 +430,11 @@ class IncidentStore:
         self.save(data)
 
     @locked_update
-    def claim_recovery_verification(self, incident_id, policy: RecoveryPolicy | None):
+    def claim_recovery_verification(
+        self,
+        incident_id,
+        policy: RecoveryPolicy | None,
+    ):
         """Commit the attempt before I/O; crashes consume a bounded attempt."""
         data = self.load()
         incident = Incident.model_validate(data["incidents"][incident_id])
@@ -435,28 +442,36 @@ class IncidentStore:
             raise ValueError("incident_store_identity_mismatch")
         if incident.recovery_verified_at is not None:
             return None
-        now = aware_utc(self.clock())
         state = incident.recovery_verification
         if state is None:
-            try:
-                cleared_at = aware_utc(incident.cleared_at)
-            except ValueError:
-                cleared_at = None
-            state = RecoveryVerification(cleared_at=cleared_at, policy=policy)
-            if cleared_at is None or cleared_at > now:
-                state.status, state.reason = "insufficient", "clear_time_invalid"
-                self._save_recovery(data, incident, state)
-                return None
+            # Missing durable intent must not become an implicit upgrade backfill.
+            return None
+        now = aware_utc(self.clock())
+        try:
+            cleared_at = aware_utc(incident.cleared_at)
+        except ValueError:
+            cleared_at = None
+        if cleared_at is None or cleared_at > now:
+            state.status = "insufficient"
+            state.reason = "clear_time_invalid"
+            state.next_retry_at = None
+            self._save_recovery(data, incident, state)
+            return None
         if not self._recovery_context_current(data, incident) or state.cleared_at != incident.cleared_at:
             if state.status != "superseded":
                 state.status, state.reason, state.next_retry_at = "superseded", "alert_changed", None
                 self._save_recovery(data, incident, state)
             return None
+        if policy is not None:
+            policy = RecoveryPolicy.model_validate(policy.model_dump())
+            # Clearing persists intent without importing service configuration.
+            # Freeze the trusted policy when the first attempt is claimed.
+            if state.policy is None and state.status == "pending" and not state.attempts:
+                state.policy = policy
         if policy is None or state.policy is None:
             state.status, state.reason, state.next_retry_at = "insufficient", "recovery_capability_not_configured", None
             self._save_recovery(data, incident, state)
             return None
-        policy = RecoveryPolicy.model_validate(policy.model_dump())
         if state.policy != policy:
             state.status, state.reason, state.next_retry_at = "insufficient", "configuration_changed", None
             self._save_recovery(data, incident, state)
@@ -680,7 +695,13 @@ class IncidentStore:
         self.save(data)
 
     @locked_update
-    def resolve_inactive_incidents(self,active_fingerprints, eligible_fingerprints=None, *, expected_incidents=None):
+    def resolve_inactive_incidents(
+        self,
+        active_fingerprints,
+        eligible_fingerprints=None,
+        *,
+        expected_incidents=None,
+    ):
         data=self.load()
 
         resolved_incidents=[]
@@ -722,9 +743,16 @@ class IncidentStore:
 
             incident_data["status"]="resolved"
             incident_data["alert_state"] = "cleared"
-            incident_data["cleared_at"] = aware_utc(self.clock()).isoformat()
+            cleared_at = aware_utc(self.clock())
+            incident_data["cleared_at"] = cleared_at.isoformat()
             # Clearing the monitoring signal does not attest business recovery.
             incident_data.setdefault("recovery_verified_at", None)
+            # Commit intent with the clear so a restart can resume this episode,
+            # while legacy records without intent remain historical observations.
+            if incident_data.get("recovery_verification") is None:
+                incident_data["recovery_verification"] = RecoveryVerification(
+                    cleared_at=cleared_at,
+                ).model_dump(mode="json")
 
             resolved_incidents.append(
                 incident_id

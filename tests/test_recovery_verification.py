@@ -91,6 +91,41 @@ def env(tmp_path):
                            worker=RecoveryWorker(store, verifier), path=tmp_path)
 
 
+@pytest.fixture
+def real_http_recovery(env):
+    requests_seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests_seen.append(self.path)
+            body = json.dumps(GOOD_BODY).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        definitions = deepcopy(SERVICES)
+        definitions[0]["recovery"]["base_url"] = (
+            f"http://127.0.0.1:{server.server_port}"
+        )
+        yield SimpleNamespace(
+            verifier=RecoveryVerifier(ServiceRegistry(definitions), clock=env.clock),
+            requests_seen=requests_seen,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def seed(env, *, service="order-service", fingerprint=None, cleared=True):
     alert = AlertEvent(service=service, severity="critical", metric="http_5xx_rate", value=0.5, threshold=0.2)
     fp = fingerprint or generate_alert_fingerprint(alert)
@@ -99,6 +134,26 @@ def seed(env, *, service="order-service", fingerprint=None, cleared=True):
     if cleared:
         env.store.resolve_inactive_incidents(set(), {fp})
     return env.store.get_incident(incident.incident_id)
+
+
+def seed_legacy_clear(
+    env,
+    version,
+    marker,
+):
+    env.clock.advance(-86400)
+    incident = seed(env)
+    env.clock.advance(86400)
+    data = env.store.load()
+    record = data["incidents"][incident.incident_id]
+    if marker == "missing":
+        record.pop("recovery_verification", None)
+    else:
+        record["recovery_verification"] = None
+    if version == 1:
+        data = {incident.fingerprint: record}
+    env.store.save(data)
+    return reread(env, incident)
 
 
 def claim(env, incident):
@@ -432,9 +487,178 @@ def test_failed_retries_are_durable_delayed_and_bounded(env):
 
 def test_restart_discovers_cleared_incident_without_queued_memory(env):
     incident = seed(env)
+    # Durable jobs survive downtime; age alone cannot decide eligibility.
+    env.clock.advance(86400)
     restarted = RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier)
     restarted.run_once()
-    assert reread(env, incident).recovery_verified_at is not None
+    saved = reread(env, incident)
+    receipt = RecoveryReceipt.model_validate_json(saved.recovery_evidence[0].detail)
+    assert saved.cleared_at == receipt.cleared_at == incident.cleared_at
+    assert saved.recovery_verified_at == receipt.completed_at == env.clock()
+    assert saved.recovery_verified_at - saved.cleared_at == timedelta(days=1)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("marker", ["missing", "null"])
+def test_first_worker_skips_yesterdays_legacy_clear_without_real_http(
+    env,
+    real_http_recovery,
+    version,
+    marker,
+):
+    incident = seed_legacy_clear(env, version, marker)
+    before = env.store.file_path.read_bytes()
+    restarted_store = IncidentStore(env.store.file_path, clock=env.clock)
+    restarted = RecoveryWorker(restarted_store, real_http_recovery.verifier)
+
+    processed = restarted.run_once()
+    assert real_http_recovery.requests_seen == []
+    assert processed is None
+    assert restarted_store.recovery_candidates() == []
+    assert env.clock() - incident.cleared_at == timedelta(days=1)
+    for _ in range(5):
+        assert restarted.run_once() is None
+    saved = reread(env, incident)
+    assert saved.recovery_verified_at is None
+    assert saved.recovery_evidence == []
+    assert saved.recovery_verification is None
+    assert env.store.file_path.read_bytes() == before
+
+
+def test_background_startup_only_probes_durable_jobs(env, real_http_recovery):
+    historical = seed_legacy_clear(env, 2, "missing")
+    current = seed(env, fingerprint="new-episode")
+    restarted_store = IncidentStore(env.store.file_path, clock=env.clock)
+    restarted = RecoveryWorker(
+        restarted_store,
+        real_http_recovery.verifier,
+        interval=0.01,
+    )
+    restarted.start()
+    try:
+        deadline = time.monotonic() + 3
+        # Share the Worker's read/write lock while its threads are committing.
+        while True:
+            saved = restarted_store.get_incident(
+                current.incident_id,
+                include_history=False,
+            )
+            if saved.recovery_verified_at is not None:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        restarted.stop()
+    assert real_http_recovery.requests_seen == ["/order"]
+    assert reread(env, historical).recovery_verified_at is None
+    assert reread(env, historical).recovery_verification is None
+
+
+@pytest.mark.parametrize("marker", ["missing", "null"])
+def test_direct_claim_does_not_enroll_unregistered_clear(env, marker):
+    incident = seed_legacy_clear(env, 2, marker)
+    before = env.store.file_path.read_bytes()
+    for _ in range(5):
+        assert claim(env, incident) is None
+    assert env.store.file_path.read_bytes() == before
+    env.transport.assert_not_called()
+
+
+@pytest.mark.parametrize("previously_verified", [False, True])
+def test_legacy_clear_preserves_existing_history(env, previously_verified):
+    incident = seed_legacy_clear(env, 2, "missing")
+    data = env.store.load()
+    record = data["incidents"][incident.incident_id]
+    record["recovery_evidence"] = [
+        Evidence(
+            source="historical",
+            summary="legacy observation",
+            detail="{}",
+            collected_at=incident.cleared_at,
+        ).model_dump(mode="json"),
+    ]
+    if previously_verified:
+        record["recovery_verified_at"] = incident.cleared_at.isoformat()
+    env.store.save(data)
+    before = env.store.file_path.read_bytes()
+    for _ in range(5):
+        assert env.worker.run_once() is None
+        assert claim(env, incident) is None
+    saved = reread(env, incident)
+    assert saved.recovery_verification is None
+    assert saved.recovery_evidence[0].source == "historical"
+    assert saved.recovery_verified_at == (
+        incident.cleared_at if previously_verified else None
+    )
+    assert env.store.file_path.read_bytes() == before
+    env.transport.assert_not_called()
+
+
+def test_normal_clear_commits_pending_task_before_first_worker(env):
+    incident = seed(env, cleared=False)
+    assert env.store.resolve_inactive_incidents(set(), {incident.fingerprint}) == [
+        incident.incident_id,
+    ]
+    saved = reread(env, incident)
+    state = saved.recovery_verification
+    assert state.status == "pending"
+    assert state.cleared_at == saved.cleared_at == env.clock()
+    assert state.policy is None and state.attempts == []
+    assert saved.recovery_verified_at is None and saved.recovery_evidence == []
+    assert env.store.recovery_candidates() == [incident.incident_id]
+    before = env.store.file_path.read_bytes()
+    assert env.store.resolve_inactive_incidents(set()) == []
+    assert env.store.file_path.read_bytes() == before
+    env.transport.assert_not_called()
+
+
+def test_pending_task_and_clear_are_committed_atomically(env, monkeypatch):
+    incident = seed(env, cleared=False)
+    before = env.store.file_path.read_bytes()
+
+    def fail_commit(data):
+        raise OSError("isolated_commit_failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(env.store, "save", fail_commit)
+        with pytest.raises(OSError, match="isolated_commit_failure"):
+            env.store.resolve_inactive_incidents(set())
+    assert env.store.file_path.read_bytes() == before
+    assert reread(env, incident).alert_state == "firing"
+    assert reread(env, incident).recovery_verification is None
+    assert env.store.recovery_candidates() == []
+
+
+def test_skipped_history_does_not_block_new_pending_task(env):
+    historical = seed_legacy_clear(env, 2, "missing")
+    current = seed(env, fingerprint="new-episode")
+    assert env.store.recovery_candidates() == [current.incident_id]
+    assert env.worker.run_once() == current.incident_id
+    assert reread(env, historical).recovery_verified_at is None
+    assert reread(env, historical).recovery_verification is None
+    assert reread(env, current).recovery_verified_at is not None
+    env.transport.assert_called_once()
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_firing_record_can_enqueue_when_cleared_after_upgrade(env, version):
+    incident = seed(env, cleared=False)
+    data = env.store.load()
+    record = data["incidents"][incident.incident_id]
+    record.pop("recovery_verification")
+    if version == 1:
+        data = {incident.fingerprint: record}
+    env.store.save(data)
+    assert env.store.resolve_inactive_incidents(set()) == [incident.incident_id]
+    restarted = RecoveryWorker(
+        IncidentStore(env.store.file_path, clock=env.clock),
+        env.verifier,
+    )
+    assert restarted.run_once() == incident.incident_id
+    saved = reread(env, incident)
+    assert saved.recovery_verification.status == "verified"
+    assert saved.recovery_verified_at is not None
+    env.transport.assert_called_once()
 
 
 def test_abrupt_process_exit_recovers_after_lease(env):
@@ -547,7 +771,8 @@ def test_cross_process_reader_failure_is_bounded_and_resumes_safely(env):
         release.touch()
         stdout, stderr = process.communicate(timeout=15)
     assert process.returncode == 0, stderr
-    assert json.loads(stdout)["old_snapshot_has_recovery"] is False
+    # The blocked reader sees the pending task committed with the clear.
+    assert json.loads(stdout)["old_snapshot_has_recovery"] is True
     RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier).run_once()
     assert reread(env, incident).recovery_verified_at is not None
 
@@ -566,6 +791,12 @@ def test_historical_data_remains_readable(env, legacy):
     assert saved.alert_state == "cleared"
     assert saved.recovery_verified_at is None and saved.recovery_verification is None
     assert saved.recovery_evidence == []
+    before = env.store.file_path.read_bytes()
+    for _ in range(5):
+        assert env.worker.run_once() is None
+        assert claim(env, saved) is None
+    assert env.store.file_path.read_bytes() == before
+    env.transport.assert_not_called()
 
 
 def test_probe_runs_outside_file_and_sqlite_locks(env):
@@ -643,33 +874,11 @@ def test_success_count_is_configured_and_partial_results_fail(env):
     assert env.transport.call_count == 4
 
 
-def test_real_http_transport_against_isolated_loopback_server(env):
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            body = json.dumps(GOOD_BODY).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        definitions = deepcopy(SERVICES)
-        definitions[0]["recovery"]["base_url"] = f"http://127.0.0.1:{server.server_port}"
-        verifier = RecoveryVerifier(ServiceRegistry(definitions), clock=env.clock)
-        incident = seed(env)
-        RecoveryWorker(env.store, verifier).run_once()
-        assert reread(env, incident).recovery_verified_at is not None
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+def test_real_http_transport_against_isolated_loopback_server(env, real_http_recovery):
+    incident = seed(env)
+    RecoveryWorker(env.store, real_http_recovery.verifier).run_once()
+    assert reread(env, incident).recovery_verified_at is not None
+    assert real_http_recovery.requests_seen == ["/order"]
 
 
 def test_real_redirect_is_refused_before_library_drains_body(env):
