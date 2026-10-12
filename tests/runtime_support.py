@@ -42,11 +42,18 @@ def call(name="query_metrics", arguments=None, call_id="call-fixture"):
 
 
 class FixtureAgent(Agent):
-    def __init__(self, responses=None, tool_result=None):
+    def __init__(
+        self,
+        responses=None,
+        tool_result=None,
+        *,
+        clock=None,
+    ):
         super().__init__(Mock(), "只读证据调查，不执行修复。")
         self.request_durable_response = Mock(side_effect=responses or [response()])
         self.executions = []
         self.tool_result = tool_result
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.tool_manager.run_tool = self.run_fixture_tool
 
     def run_fixture_tool(self, item, *, session_id=None):
@@ -64,6 +71,16 @@ class FixtureAgent(Agent):
             }
         else:
             result = {"status": "ok", "value": 0.3, "service": json.loads(item.arguments).get("service")}
+        if item.name == "query_metrics" and result.get("status") == "ok":
+            # Default mock metrics represent a current evaluation, not an
+            # observation with unknown time. Explicit historical fields win.
+            timestamp = self.clock().isoformat()
+            result = {
+                "evaluated_at": timestamp,
+                "query_started_at": timestamp,
+                "query_finished_at": timestamp,
+                **result,
+            }
         success = result.get("status") not in {"tool_error", "tool_not_found", "invalid_arguments", "invalid_tool_result"}
         return success, self.tool_manager.build_output_item(item, result), result
 

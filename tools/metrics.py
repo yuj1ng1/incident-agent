@@ -1,7 +1,12 @@
+from datetime import datetime, timezone
 import math
 import requests
 from tools.tool_registry import tool
-from clients.prometheus_client import PrometheusClient
+from clients.prometheus_client import (
+    PrometheusClient,
+    evaluation_is_fresh,
+    parse_evaluated_at,
+)
 from config import PROMETHEUS_URL
 from services.registry import registry, CapabilityUnavailable
 from services.metric_profiles import build_promql
@@ -111,20 +116,77 @@ def query_metrics(service: str, metric: str) -> dict:
             "reason": "metric_not_supported_by_profile",
             "message": "当前监控 profile 不支持该指标",
         }
+    started = datetime.now(timezone.utc)
     try:
         response = prometheus_client.query(promql)
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError) as exc:
         return {
             "status": "no_data",
             "service": service,
             "metric": metric,
             "reason": "metrics_unreachable_or_invalid",
+            "query_started_at": getattr(
+                exc, "query_started_at", started.isoformat()
+            ),
+            "query_finished_at": getattr(
+                exc, "query_finished_at", datetime.now(timezone.utc).isoformat()
+            ),
         }
+    finished = datetime.now(timezone.utc)
+    # Plain-dict test clients need not implement a new interface. Real clients
+    # supply the narrower HTTP interval; fallback times bound the query() call.
+    timing = {
+        "query_started_at": started.isoformat(),
+        "query_finished_at": finished.isoformat(),
+    }
+    if isinstance(response, dict):
+        timing.update({key: response[key] for key in timing if key in response})
+    try:
+        request_time = datetime.fromisoformat(
+            timing["query_started_at"].replace("Z", "+00:00")
+        )
+        reference_time = datetime.fromisoformat(
+            timing["query_finished_at"].replace("Z", "+00:00")
+        )
+        if (
+            request_time.utcoffset() is None
+            or reference_time.utcoffset() is None
+            or reference_time < request_time
+        ):
+            raise ValueError("invalid_query_interval")
+    except (ValueError, TypeError, AttributeError):
+        return {
+            "status": "no_data",
+            "service": service,
+            "metric": metric,
+            "reason": "invalid_query_timing",
+        }
+    timing = {
+        "query_started_at": request_time.astimezone(timezone.utc).isoformat(),
+        "query_finished_at": reference_time.astimezone(timezone.utc).isoformat(),
+    }
+    return _parse_metrics_response(
+        response,
+        service,
+        metric,
+        promql,
+        reference_time,
+    ) | timing
+
+
+def _parse_metrics_response(
+    response,
+    service,
+    metric,
+    promql,
+    reference_time,
+):
     if (
         not isinstance(response, dict)
         or response.get("status") != "success"
         or bool(response.get("warnings"))
         or not isinstance(response.get("data"), dict)
+        or response["data"].get("resultType", "vector") != "vector"
     ):
         return {
             "status": "no_data",
@@ -167,7 +229,10 @@ def query_metrics(service: str, metric: str) -> dict:
         }
 
     try:
-        raw_value = results[0]["value"][1]
+        sample = results[0]["value"]
+        if not isinstance(sample, (list, tuple)) or len(sample) != 2:
+            raise ValueError("invalid_sample_pair")
+        raw_value = sample[1]
         if isinstance(raw_value, bool):
             raise ValueError("invalid_boolean_measurement")
         value = float(raw_value)
@@ -204,10 +269,28 @@ def query_metrics(service: str, metric: str) -> dict:
             "reason": "metric_value_outside_semantic_domain",
         }
 
+    try:
+        evaluated_at = parse_evaluated_at(sample[0])
+    except ValueError as exc:
+        return {
+            "status": "no_data",
+            "service": service,
+            "metric": metric,
+            "reason": str(exc),
+        }
+    if not evaluation_is_fresh(evaluated_at, reference_time):
+        return {
+            "status": "no_data",
+            "service": service,
+            "metric": metric,
+            "reason": "metrics_timestamp_outside_freshness_window",
+        }
+
     return {
         "status": "ok",
         "service": service,
         "metric": metric,
         "value": value,
         "promql": promql,
+        "evaluated_at": evaluated_at.isoformat(),
     }

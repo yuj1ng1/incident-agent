@@ -224,9 +224,20 @@ class RuntimeQualityTests(unittest.TestCase):
         from services.registry import registry, ServiceRegistry
         arguments = {"service": "order-db", "metric": "postgres_up"}
         identity = {"commit_sha": SHA}
-        record = {"name": "query_metrics", "arguments": arguments, "result": {"status": "ok"},
-                  "success": True, "collected_at": self.now.isoformat(), "identity": identity,
-                  "cache_key": cache_key("order-service", "query_metrics", arguments, identity)}
+        record = {
+            "name": "query_metrics",
+            "arguments": arguments,
+            "result": {"status": "ok", "evaluated_at": self.now.isoformat()},
+            "success": True,
+            "collected_at": self.now.isoformat(),
+            "identity": identity,
+            "cache_key": cache_key(
+                "order-service",
+                "query_metrics",
+                arguments,
+                identity,
+            ),
+        }
         self.assertEqual(effective_records([record], identity, self.now, "order-service"), [record])
         definitions = [registry.get(name).model_dump(mode="json") for name in registry.names()]
         next(p for p in definitions if p["name"] == "order-db")["metrics"]["job"] = "new-postgres-job"

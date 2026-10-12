@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 
+from clients.prometheus_client import evaluation_is_fresh
 from investigation.models import utc_now
 from services.registry import registry
 
@@ -59,6 +60,17 @@ def fresh(record, now=None):
         return False
     if age < 0:
         return False
+    if record["name"] == "query_metrics":
+        # Saving/replaying a result cannot renew the Prometheus observation.
+        # Legacy results remain readable, but cannot prove current metric state.
+        try:
+            evaluated = datetime.fromisoformat(
+                record["result"]["evaluated_at"].replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+        if not evaluation_is_fresh(evaluated, now):
+            return False
     return stable(record["name"], record["arguments"]) or age <= TTL[record["name"]]
 
 

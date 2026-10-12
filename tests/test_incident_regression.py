@@ -176,6 +176,10 @@ class IncidentRegressionTests(unittest.TestCase):
         )
         self.enterContext(patch("alert_recovery.datetime", FixedDatetime))
         self.enterContext(patch("reinvestigation.datetime", FixedDatetime))
+        metric_datetime = self.enterContext(patch("tools.metrics.datetime", wraps=datetime))
+        metric_datetime.now.side_effect = (
+            lambda tz=None: self.manager.store.clock().astimezone(tz or timezone.utc)
+        )
 
     def poll(self, *alerts):
         self.prometheus.get_alerts.return_value = {"status": "success", "data": {"alerts": list(alerts)}}
@@ -211,12 +215,20 @@ class IncidentRegressionTests(unittest.TestCase):
         self.store.save_incident(self.fp, incident)
         return incident
 
-    def investigate_with_metrics(self, incident, value=0.27, empty=False):
+    def investigate_with_metrics(
+        self,
+        incident,
+        value=0.27,
+        empty=False,
+    ):
         self.sdk.responses.create.side_effect = [
             model_response(answer=None, calls=[tool_call()], reasoning=True),
             model_response(),
         ]
-        result = [] if empty else [{"metric": {}, "value": [0, str(value)]}]
+        result = [] if empty else [{
+            "metric": {},
+            "value": [self.manager.store.clock().timestamp(), str(value)],
+        }]
         with patch("tools.metrics.prometheus_client.query", return_value={
             "status": "success", "data": {"resultType": "vector", "result": result}
         }) as query:
@@ -317,7 +329,7 @@ class IncidentRegressionTests(unittest.TestCase):
             model_response(answer=None, calls=[tool_call()], reasoning=True), model_response()
         ]
         with patch("tools.metrics.prometheus_client.query", return_value={
-            "status": "success", "data": {"result": [{"value": [0, "0.27"]}]}
+            "status": "success", "data": {"result": [{"value": [NOW.timestamp(), "0.27"]}]}
         }):
             self.poll(raw_alert())
         data = self.store.load()
@@ -434,7 +446,7 @@ class IncidentRegressionTests(unittest.TestCase):
     def test_max_round_result_is_failure_and_is_saved(self):
         self.sdk.responses.create.return_value = model_response(answer=None, calls=[tool_call()])
         with patch("tools.metrics.prometheus_client.query", return_value={
-            "status": "success", "data": {"result": [{"value": [0, "0.27"]}]}
+            "status": "success", "data": {"result": [{"value": [NOW.timestamp(), "0.27"]}]}
         }) as query:
             self.poll(raw_alert())
         self.assertEqual(self.sdk.responses.create.call_count, MAX_AGENT_LOOPS)
@@ -500,7 +512,11 @@ class IncidentRegressionTests(unittest.TestCase):
             tool_call(call_id="first"),
             tool_call(call_id="second", arguments={"metric": "http_5xx_rate", "service": "order-service"}),
         ]), model_response()]
-        with patch.dict(tool_registry["query_metrics"], {"func": Mock(return_value={"status": "ok", "value": 0.27})}):
+        with patch.dict(tool_registry["query_metrics"], {"func": Mock(return_value={
+            "status": "ok",
+            "value": 0.27,
+            "evaluated_at": NOW.isoformat(),
+        })}):
             self.run_investigation(incident)
         self.assertEqual(self.manager.store.list_sessions()[-1].cache_hits, 1)
         self.assertEqual(len(incident.evidence), 1)
@@ -570,7 +586,7 @@ class IncidentRegressionTests(unittest.TestCase):
             model_response(answer=None, calls=[tool_call()]), RuntimeError("test model failed after evidence")
         ]
         with patch("tools.metrics.prometheus_client.query", return_value={
-            "status": "success", "data": {"result": [{"value": [0, "0.27"]}]}
+            "status": "success", "data": {"result": [{"value": [NOW.timestamp(), "0.27"]}]}
         }), self.assertLogs("agent", level="ERROR"):
             self.poll(raw_alert())
         incident = self.store.get_active_incident(self.fp)
@@ -621,6 +637,7 @@ class MetricsRegressionTests(unittest.TestCase):
         from services.registry import ServiceRegistry
         from copy import deepcopy
 
+        self.enterContext(patch("tools.metrics.datetime", FixedDatetime))
         self.definitions = deepcopy(SERVICES)
         self.definitions.append(
             {
@@ -642,17 +659,29 @@ class MetricsRegressionTests(unittest.TestCase):
                     "status": "success",
                     "data": {
                         "resultType": "vector",
-                        "result": [{"value": [0, "1"]}],
+                        "result": [{"value": [NOW.timestamp(), "1"]}],
                     },
                 },
             )
         )
 
-    def assert_query(self, metric, promql, service="order-db"):
+    def assert_query(
+        self,
+        metric,
+        promql,
+        service="order-db",
+    ):
         result = query_metrics(service, metric)
         self.query.assert_called_once_with(promql)
         self.assertEqual(result, {
-            "status": "ok", "service": service, "metric": metric, "value": 1.0, "promql": promql,
+            "status": "ok",
+            "service": service,
+            "metric": metric,
+            "value": 1.0,
+            "promql": promql,
+            "evaluated_at": NOW.astimezone(timezone.utc).isoformat(),
+            "query_started_at": NOW.astimezone(timezone.utc).isoformat(),
+            "query_finished_at": NOW.astimezone(timezone.utc).isoformat(),
         })
         return result
 
@@ -691,7 +720,7 @@ class MetricsRegressionTests(unittest.TestCase):
         ))
 
     def test_postgres_connection_usage_preserves_fraction(self):
-        self.query.return_value["data"]["result"] = [{"value": [0, "0.12"]}]
+        self.query.return_value["data"]["result"] = [{"value": [NOW.timestamp(), "0.12"]}]
         result = query_metrics("order-db", "postgres_connection_usage")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["value"], 0.12)
@@ -722,7 +751,7 @@ class MetricsRegressionTests(unittest.TestCase):
         ))
 
     def test_postgres_lock_waits_zero_is_valid_data(self):
-        self.query.return_value["data"]["result"] = [{"value": [0, "0"]}]
+        self.query.return_value["data"]["result"] = [{"value": [NOW.timestamp(), "0"]}]
         result = query_metrics("order-db", "postgres_lock_waits")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["value"], 0.0)
@@ -816,7 +845,7 @@ class MetricsRegressionTests(unittest.TestCase):
     def test_non_finite_prometheus_values_return_no_data(self):
         for value in ("NaN", "Infinity", "+Infinity", "-Infinity", "+Inf", "-Inf"):
             with self.subTest(value=value):
-                self.query.return_value["data"]["result"] = [{"value": [0, value]}]
+                self.query.return_value["data"]["result"] = [{"value": [NOW.timestamp(), value]}]
                 result = query_metrics("order-db", "postgres_connection_usage")
                 self.assertEqual(result["status"], "no_data")
                 self.assertNotIn("value", result)
@@ -828,7 +857,7 @@ class MetricsRegressionTests(unittest.TestCase):
             ("postgres_max_connections", "100"), ("postgres_connection_usage", "0.12"),
         ):
             with self.subTest(metric=metric, value=value):
-                self.query.return_value["data"]["result"] = [{"value": [0, value]}]
+                self.query.return_value["data"]["result"] = [{"value": [NOW.timestamp(), value]}]
                 result = query_metrics("order-db", metric)
                 self.assertEqual(result["status"], "ok")
                 self.assertEqual(result["value"], float(value))
@@ -836,8 +865,8 @@ class MetricsRegressionTests(unittest.TestCase):
 
     def test_multiple_results_are_rejected_instead_of_taking_first(self):
         self.query.return_value["data"]["result"] = [
-            {"metric": {"job": "postgres", "instance": "first"}, "value": [0, "1"]},
-            {"metric": {"job": "postgres", "instance": "second"}, "value": [0, "0"]},
+            {"metric": {"job": "postgres", "instance": "first"}, "value": [NOW.timestamp(), "1"]},
+            {"metric": {"job": "postgres", "instance": "second"}, "value": [NOW.timestamp(), "0"]},
         ]
         for metric in (
             "postgres_up", "postgres_max_connections", "postgres_connection_usage", "postgres_lock_waits",

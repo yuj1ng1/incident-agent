@@ -253,7 +253,17 @@ class Worker:
             summary = self._observation_summary(output, item["name"])
             size = len(json.dumps(summary, ensure_ascii=False).encode("utf-8"))
             if call_summary_bytes + size > 16000:
-                summary = {key: summary[key] for key in ("status", "reason") if key in summary} | {"summary_truncated": True}
+                keys = ("status", "reason")
+                if item["name"] == "query_metrics":
+                    keys += (
+                        "metric",
+                        "evaluated_at",
+                        "query_started_at",
+                        "query_finished_at",
+                    )
+                summary = {
+                    key: summary[key] for key in keys if key in summary
+                } | {"summary_truncated": True}
             else:
                 call_summary_bytes += size
             call_results.append({
@@ -316,6 +326,14 @@ class Worker:
             summary["summary_truncated"] = True
         if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
             keys = ("status", "reason", "service", "dependency", "value", "reachable", "ref", "commit_sha")
+            if tool_name == "query_metrics":
+                keys += (
+                    "metric",
+                    "promql",
+                    "evaluated_at",
+                    "query_started_at",
+                    "query_finished_at",
+                )
             if tool_name == "query_logs":
                 keys += ("query_range", "evidence_scope", "log_count", "limit", "truncated", "out_of_range_count", "truncation_reason")
             return {key: summary[key] for key in keys if key in summary} | {"summary_truncated": True}

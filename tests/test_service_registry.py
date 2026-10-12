@@ -1,5 +1,6 @@
 """Configuration-only onboarding and capability isolation; no external I/O."""
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import os
 from types import SimpleNamespace
@@ -327,7 +328,9 @@ class ObservationTests(unittest.TestCase):
                 return_value={
                     "status": "success",
                     "data": {
-                        "result": [{"value": [0, "1"]}],
+                        "result": [
+                            {"value": [datetime.now(timezone.utc).timestamp(), "1"]},
+                        ],
                     },
                 },
             )
