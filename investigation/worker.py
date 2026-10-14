@@ -38,6 +38,25 @@ METRIC_RANGE_CONTEXT_FIELDS = (
     "query_finished_at",
 )
 
+METRICS_ALIGNED_CONTEXT_FIELDS = (
+    "status",
+    "reason",
+    "service",
+    "evidence_scope",
+    "use_for_current_state",
+    "requested_metrics",
+    "requested_evaluation_time",
+    "evaluation_time",
+    "timestamp_resolution",
+    "evaluation_time_adjustment_ns",
+    "comparison_complete",
+    "results",
+    "consistency_warnings",
+    "limitations",
+    "query_started_at",
+    "query_finished_at",
+)
+
 HUMAN_TOOL = {
     "type": "function",
     "name": "request_human_input",
@@ -282,6 +301,8 @@ class Worker:
                     )
                 elif item["name"] == "query_metric_range":
                     keys = METRIC_RANGE_CONTEXT_FIELDS
+                elif item["name"] == "query_metrics_aligned":
+                    keys = METRICS_ALIGNED_CONTEXT_FIELDS
                 summary = {
                     key: summary[key] for key in keys if key in summary
                 } | {"summary_truncated": True}
@@ -314,7 +335,9 @@ class Worker:
         }, ensure_ascii=False)
         chain_fresh = all(
             r in current
-            for r in checkpoint["records"] if r.get("result", {}).get("status") == "ok"
+            for r in checkpoint["records"]
+            if r.get("result", {}).get("status") == "ok"
+            or r["name"] == "query_metrics_aligned"
         )
         return restore_context(
             checkpoint.get("history", []),
@@ -327,6 +350,8 @@ class Worker:
         """Bound summaries, including logs/source, without dropping useful scalar fields."""
         if tool_name == "query_metric_range":
             return Worker._metric_range_summary(result)
+        if tool_name == "query_metrics_aligned":
+            return Worker._metrics_aligned_summary(result)
         truncated = False
         def bounded(value, depth=0):
             nonlocal truncated
@@ -364,6 +389,35 @@ class Worker:
             if tool_name == "query_logs":
                 keys += ("query_range", "evidence_scope", "log_count", "limit", "truncated", "out_of_range_count", "truncation_reason")
             return {key: summary[key] for key in keys if key in summary} | {"summary_truncated": True}
+        return summary
+
+    @staticmethod
+    def _metrics_aligned_summary(result):
+        """Keep every aligned observation; omit only the full query/label metadata."""
+        protected = protect(result)
+        summary = {
+            key: protected[key]
+            for key in METRICS_ALIGNED_CONTEXT_FIELDS
+            if key in protected and key != "results"
+        }
+        fields = (
+            "status",
+            "reason",
+            "metric",
+            "value",
+            "evaluated_at",
+            "observed_evaluated_at",
+            "query_started_at",
+            "query_finished_at",
+            "request_executed",
+        )
+        summary["results"] = {
+            metric: {key: item[key] for key in fields if key in item}
+            for metric, item in protected.get("results", {}).items()
+        }
+        summary["summary_truncated"] = any(
+            set(item) - set(fields) for item in protected.get("results", {}).values()
+        )
         return summary
 
     @staticmethod

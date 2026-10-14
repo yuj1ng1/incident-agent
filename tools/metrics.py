@@ -2,19 +2,34 @@ from datetime import datetime, timedelta, timezone
 import json
 import math
 import re
+import time
 import requests
 from tools.tool_registry import tool
 from clients.prometheus_client import (
     PrometheusClient,
     MAX_RANGE_POINTS,
     MAX_RANGE_RESPONSE_BYTES,
+    MAX_ALIGNED_METRICS,
+    MAX_ALIGNED_LOOKBACK_DAYS,
+    MAX_ALIGNED_RESPONSE_BYTES,
+    ALIGNED_TOTAL_TIMEOUT_SECONDS,
     evaluation_is_fresh,
     parse_evaluated_at,
     parse_metric_range,
+    parse_metric_evaluation_time,
 )
 from config import PROMETHEUS_URL
 from services.registry import registry, CapabilityUnavailable
 from services.metric_profiles import build_promql
+
+
+ALIGNED_LIMITATIONS = [
+    "相同评估时间不保证底层指标抓取时间相同；rate 等表达式仍使用各自窗口样本。",
+    "多个 HTTP 查询不具有事务级原子性，迟到数据或后端变化可能影响观测。",
+    "指定时刻的历史观测不能证明当前健康，数值组合提示不代表根因或因果关系。",
+]
+MAX_ALIGNED_PROMQL_BYTES = 4096
+MAX_ALIGNED_LABEL_BYTES = 2048
 
 
 prometheus_client=PrometheusClient(
@@ -438,6 +453,255 @@ def query_metric_range(
             "truncated": True,
         }
     return result
+
+
+@tool
+def query_metrics_aligned(
+    service: str,
+    metrics: str,
+    at: str,
+) -> dict:
+    """比较同一已授权目标在同一评估时刻的受控指标，仅作为历史关联证据。
+
+    Args:
+        service: 已登记 metrics 能力的服务或依赖，仍受 Session 目标权限限制
+        metrics: 英文逗号分隔的 2～4 个不同 MetricProfile 指标名，最多 259 字符，不接受 PromQL
+        at: 带明确时区的 RFC3339 时间，最多 9 位小数，不晚于当前时间且最多回溯 15 天；向下对齐毫秒并记录偏移
+    """
+    result = {
+        "status": "no_data",
+        "service": service if isinstance(service, str) and len(service) <= 120 else None,
+        "evidence_scope": "time_window",
+        "use_for_current_state": False,
+        "requested_metrics": [],
+        "comparison_complete": False,
+        "results": {},
+        "consistency_warnings": [],
+        "limitations": list(ALIGNED_LIMITATIONS),
+        "limits": {
+            "max_metrics": MAX_ALIGNED_METRICS,
+            "max_lookback_days": MAX_ALIGNED_LOOKBACK_DAYS,
+            "response_bytes_per_metric": MAX_ALIGNED_RESPONSE_BYTES,
+            "total_timeout_seconds": ALIGNED_TOTAL_TIMEOUT_SECONDS,
+        },
+        "query_started_at": None,
+        "query_finished_at": None,
+    }
+    started = datetime.now(timezone.utc)
+    try:
+        if not isinstance(service, str) or not 1 <= len(service) <= 120:
+            raise ValueError("invalid_aligned_metric_target")
+        requested = _parse_aligned_metric_names(metrics)
+        evaluated_at, adjustment = parse_metric_evaluation_time(at, started)
+    except ValueError as exc:
+        return result | {"status": "invalid_arguments", "reason": str(exc)}
+    result.update(
+        requested_metrics=requested,
+        requested_evaluation_time=at,
+        evaluation_time=evaluated_at.isoformat(),
+        timestamp_resolution="1ms",
+        evaluation_time_adjustment_ns=adjustment,
+    )
+    try:
+        settings = registry.require_capability(service, "metrics")
+    except CapabilityUnavailable as exc:
+        return result | {"reason": exc.reason}
+    expressions = {}
+    for metric in requested:
+        promql = build_promql(service, settings, metric)
+        if promql is None:
+            return result | {
+                "status": "invalid_arguments",
+                "reason": "metric_not_supported_by_profile",
+            }
+        if (
+            len(json.dumps(promql, ensure_ascii=False).encode("utf-8"))
+            > MAX_ALIGNED_PROMQL_BYTES
+        ):
+            return result | {"reason": "metric_aligned_promql_size_limit"}
+        expressions[metric] = promql
+
+    deadline = time.monotonic() + ALIGNED_TOTAL_TIMEOUT_SECONDS
+    result["query_started_at"] = started.isoformat()
+    for metric, promql in expressions.items():
+        if time.monotonic() >= deadline:
+            observation = {
+                "status": "no_data",
+                "reason": "metric_aligned_total_timeout",
+                "metric": metric,
+                "promql": promql,
+                "query_started_at": None,
+                "query_finished_at": None,
+                "request_executed": False,
+            }
+        else:
+            observation = _query_aligned_metric(
+                metric,
+                promql,
+                evaluated_at,
+                deadline,
+            )
+        result["results"][metric] = observation
+    result["query_finished_at"] = datetime.now(timezone.utc).isoformat()
+    successful = sum(item["status"] == "ok" for item in result["results"].values())
+    result["comparison_complete"] = successful == len(requested)
+    if result["comparison_complete"]:
+        result["status"] = "ok"
+        rate = result["results"].get("http_request_rate", {})
+        errors = result["results"].get("http_5xx_rate", {})
+        if rate.get("value") == 0 and errors.get("value", 0) > 0:
+            result["consistency_warnings"].append({
+                "code": "zero_request_rate_with_positive_5xx_ratio",
+                "metrics": ["http_request_rate", "http_5xx_rate"],
+                "message": "同一评估时刻出现零请求速率与正 5xx 比例，建议进一步核查样本和后端一致性；不能据此认定根因。",
+            })
+    else:
+        result["status"] = "incomplete" if successful else "no_data"
+        result["reason"] = "aligned_comparison_incomplete"
+    return result
+
+
+def _parse_aligned_metric_names(metrics):
+    if not isinstance(metrics, str) or not 1 <= len(metrics) <= 259:
+        raise ValueError("invalid_aligned_metric_names")
+    names = [name.strip() for name in metrics.split(",")]
+    if not 2 <= len(names) <= MAX_ALIGNED_METRICS:
+        raise ValueError("aligned_metric_count_out_of_bounds")
+    if any(re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name) is None for name in names):
+        raise ValueError("invalid_aligned_metric_names")
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate_aligned_metrics")
+    return names
+
+
+def _query_aligned_metric(
+    metric,
+    promql,
+    evaluated_at,
+    deadline,
+):
+    started = datetime.now(timezone.utc)
+    result = {
+        "status": "no_data",
+        "metric": metric,
+        "promql": promql,
+        "query_started_at": started.isoformat(),
+        "request_executed": True,
+    }
+    try:
+        response = prometheus_client.query_at(
+            promql,
+            at=evaluated_at.isoformat(),
+            deadline=deadline,
+        )
+    except (requests.RequestException, ValueError, RecursionError) as exc:
+        reasons = {
+            "metric_aligned_response_size_limit",
+            "metric_aligned_redirect_refused",
+            "metric_aligned_content_encoding_refused",
+            "invalid_metric_aligned_content_length",
+            "invalid_metric_aligned_json",
+        }
+        return result | {
+            "reason": (
+                str(exc) if str(exc) in reasons
+                else "metrics_aligned_unreachable_or_invalid"
+            ),
+            "query_started_at": getattr(exc, "query_started_at", started.isoformat()),
+            "query_finished_at": getattr(
+                exc, "query_finished_at", datetime.now(timezone.utc).isoformat()
+            ),
+        }
+    finished = datetime.now(timezone.utc)
+    result["query_finished_at"] = finished.isoformat()
+    try:
+        timing = {}
+        for key, fallback in (
+            ("query_started_at", started),
+            ("query_finished_at", finished),
+        ):
+            raw = (
+                response.get(key, fallback.isoformat())
+                if isinstance(response, dict) else fallback.isoformat()
+            )
+            stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if stamp.utcoffset() is None:
+                raise ValueError
+            timing[key] = stamp.astimezone(timezone.utc)
+        if timing["query_finished_at"] < timing["query_started_at"]:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return result | {"reason": "invalid_query_timing"}
+    result.update({key: value.isoformat() for key, value in timing.items()})
+    if time.monotonic() > deadline:
+        return result | {"reason": "metric_aligned_total_timeout"}
+    return result | _parse_aligned_metric_response(response, metric, evaluated_at)
+
+
+def _parse_aligned_metric_response(
+    response,
+    metric,
+    evaluated_at,
+):
+    try:
+        if (
+            not isinstance(response, dict)
+            or response.get("status") != "success"
+            or response.get("warnings", []) != []
+            or response.get("infos", []) != []
+            or not isinstance(response.get("data"), dict)
+            or response["data"].get("resultType") != "vector"
+            or not isinstance(response["data"].get("result"), list)
+        ):
+            raise ValueError("invalid_aligned_metrics_response")
+        series = response["data"]["result"]
+        if not series:
+            raise ValueError("no_samples_at_evaluation_time")
+        if len(series) != 1:
+            raise ValueError("multiple_metric_series")
+        item = series[0]
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"metric", "value"}
+            or not isinstance(item["metric"], dict)
+            or not isinstance(item["value"], list)
+            or len(item["value"]) != 2
+        ):
+            raise ValueError("invalid_aligned_metric_sample")
+        labels = item["metric"]
+        if len(labels) > 32 or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            or len(key) > 128 or len(value) > 256
+            for key, value in labels.items()
+        ):
+            raise ValueError("invalid_aligned_metric_labels")
+        if (
+            len(json.dumps(labels, ensure_ascii=False).encode("utf-8"))
+            > MAX_ALIGNED_LABEL_BYTES
+        ):
+            raise ValueError("metric_aligned_label_size_limit")
+        timestamp, raw_value = item["value"]
+        observed_at = parse_evaluated_at(timestamp)
+        if timestamp != observed_at.timestamp():
+            raise ValueError("metric_aligned_timestamp_precision_loss")
+        if observed_at != evaluated_at:
+            return {
+                "status": "no_data",
+                "reason": "metric_evaluation_time_mismatch",
+                "observed_evaluated_at": observed_at.isoformat(),
+            }
+        value = _metric_range_value(metric, raw_value)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "invalid_metric_range_value":
+            reason = "invalid_aligned_metric_value"
+        return {"status": "no_data", "reason": reason}
+    return {
+        "status": "ok",
+        "value": value,
+        "evaluated_at": observed_at.isoformat(),
+        "series_labels": labels,
+    }
 
 
 def _metric_range_value(metric, raw):

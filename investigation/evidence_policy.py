@@ -12,6 +12,7 @@ TTL = {
     "query_metrics": 15,
     # Collection TTL permits reuse of this exact window, never current health.
     "query_metric_range": 30,
+    "query_metrics_aligned": 30,
     "check_service_health": 15,
     "check_dependency_health": 15,
     "check_scrape_target": 15,
@@ -86,7 +87,7 @@ def effective_records(records, identity=None, now=None, service=None):
         # A newly fetched alert window remains evidence about that interval.
         # Its collection TTL permits caching, not a claim about current health.
         and not (
-            record["name"] == "query_metric_range"
+            record["name"] in {"query_metric_range", "query_metrics_aligned"}
             or record["result"].get("evidence_scope") == "time_window"
             or (
                 record["name"] == "query_logs" and (
