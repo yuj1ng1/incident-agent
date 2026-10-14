@@ -19,6 +19,25 @@ from models.investigation import InvestigationResult, InvestigationStatus
 from services.registry import registry
 from tools.tool_registry import tool_registry
 
+METRIC_RANGE_CONTEXT_FIELDS = (
+    "status",
+    "reason",
+    "service",
+    "metric",
+    "evidence_scope",
+    "use_for_current_state",
+    "requested_range",
+    "query_range",
+    "step_seconds",
+    "point_limit",
+    "expected_point_count",
+    "sample_count",
+    "missing_point_count",
+    "truncated",
+    "query_started_at",
+    "query_finished_at",
+)
+
 HUMAN_TOOL = {
     "type": "function",
     "name": "request_human_input",
@@ -261,6 +280,8 @@ class Worker:
                         "query_started_at",
                         "query_finished_at",
                     )
+                elif item["name"] == "query_metric_range":
+                    keys = METRIC_RANGE_CONTEXT_FIELDS
                 summary = {
                     key: summary[key] for key in keys if key in summary
                 } | {"summary_truncated": True}
@@ -280,7 +301,11 @@ class Worker:
             "historical_observations": list(reversed(historical)),
             "failed_or_missing_observations": list(reversed(missing)),
             "recent_function_call_results": call_results,
-            "evidence_usage": "只有当前有效证据用于当前状态判断；历史观测只说明采集时的状态，固定 SHA 是版本参考。人类线索尚未验证。",
+            "evidence_usage": (
+                "只有当前有效证据用于当前状态判断；time_window 历史指标或日志"
+                "只说明请求区间的观测，不能证明当前健康。其他历史观测只说明"
+                "采集时的状态，固定 SHA 是版本参考。人类线索尚未验证。"
+            ),
             "context_collected_at": now.isoformat(),
             "remaining_session_budget": {
                 "models": self.manager.limits.max_model_requests - session.total_model_requests,
@@ -300,6 +325,8 @@ class Worker:
     @staticmethod
     def _observation_summary(result, tool_name=None):
         """Bound summaries, including logs/source, without dropping useful scalar fields."""
+        if tool_name == "query_metric_range":
+            return Worker._metric_range_summary(result)
         truncated = False
         def bounded(value, depth=0):
             nonlocal truncated
@@ -337,6 +364,42 @@ class Worker:
             if tool_name == "query_logs":
                 keys += ("query_range", "evidence_scope", "log_count", "limit", "truncated", "out_of_range_count", "truncation_reason")
             return {key: summary[key] for key in keys if key in summary} | {"summary_truncated": True}
+        return summary
+
+    @staticmethod
+    def _metric_range_summary(result):
+        """Select real points across the window; never interpolate or fill gaps."""
+        protected = protect(result)
+        summary = {
+            key: protected[key] for key in METRIC_RANGE_CONTEXT_FIELDS if key in protected
+        }
+        samples = protected.get("samples", [])
+        if len(samples) > 12:
+            indices = [index * (len(samples) - 1) // 11 for index in range(12)]
+            selected = [samples[index] for index in indices]
+        else:
+            selected = samples
+        summary.update(
+            samples=selected,
+            summary_point_count=len(selected),
+            summary_selection="evenly_selected_observed_points_no_interpolation",
+            summary_truncated=len(selected) < len(samples),
+        )
+        if samples:
+            summary["statistics"] = {
+                "min": min(sample["value"] for sample in samples),
+                "max": max(sample["value"] for sample in samples),
+                "first": samples[0],
+                "last": samples[-1],
+            }
+        missing = protected.get("missing_evaluated_at", [])
+        summary["missing_evaluated_at"] = missing[:3]
+        summary["missing_timestamps_truncated"] = len(missing) > 3
+        summary["summary_truncated"] |= len(missing) > 3
+        if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
+            summary = {
+                key: summary[key] for key in METRIC_RANGE_CONTEXT_FIELDS if key in summary
+            } | {"summary_truncated": True}
         return summary
 
     def _validate_tool(self, name, arguments, service):

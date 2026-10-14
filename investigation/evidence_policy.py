@@ -10,6 +10,8 @@ from services.registry import registry
 
 TTL = {
     "query_metrics": 15,
+    # Collection TTL permits reuse of this exact window, never current health.
+    "query_metric_range": 30,
     "check_service_health": 15,
     "check_dependency_health": 15,
     "check_scrape_target": 15,
@@ -61,6 +63,8 @@ def fresh(record, now=None):
     if age < 0:
         return False
     if record["name"] == "query_metrics":
+        if record["result"].get("evidence_scope") == "time_window":
+            return False
         # Saving/replaying a result cannot renew the Prometheus observation.
         # Legacy results remain readable, but cannot prove current metric state.
         try:
@@ -82,11 +86,13 @@ def effective_records(records, identity=None, now=None, service=None):
         # A newly fetched alert window remains evidence about that interval.
         # Its collection TTL permits caching, not a claim about current health.
         and not (
-            record["name"] == "query_logs"
-            and (
-                record["arguments"].get("start") is not None
-                or record["arguments"].get("end") is not None
-                or record["result"].get("evidence_scope") == "time_window"
+            record["name"] == "query_metric_range"
+            or record["result"].get("evidence_scope") == "time_window"
+            or (
+                record["name"] == "query_logs" and (
+                    record["arguments"].get("start") is not None
+                    or record["arguments"].get("end") is not None
+                )
             )
         )
         and (

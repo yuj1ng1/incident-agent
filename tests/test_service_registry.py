@@ -701,6 +701,7 @@ class ToolBoundaryTests(unittest.TestCase):
             "query_logs",
             "query_metrics",
             "check_scrape_target",
+            "query_metric_range",
             "check_service_health",
             "get_service_dependencies",
             "check_dependency_health",

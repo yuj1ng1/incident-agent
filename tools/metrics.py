@@ -1,11 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
 import math
+import re
 import requests
 from tools.tool_registry import tool
 from clients.prometheus_client import (
     PrometheusClient,
+    MAX_RANGE_POINTS,
+    MAX_RANGE_RESPONSE_BYTES,
     evaluation_is_fresh,
     parse_evaluated_at,
+    parse_metric_range,
 )
 from config import PROMETHEUS_URL
 from services.registry import registry, CapabilityUnavailable
@@ -293,4 +298,261 @@ def _parse_metrics_response(
         "value": value,
         "promql": promql,
         "evaluated_at": evaluated_at.isoformat(),
+    }
+
+
+@tool
+def query_metric_range(
+    service: str,
+    metric: str,
+    start: str,
+    end: str,
+    step_seconds: int,
+) -> dict:
+    """查询受控单指标历史序列，仅证明指定时段的观测，不能判断当前健康状态。
+
+    Args:
+        service: 已在 ServiceRegistry 登记 metrics 能力的服务或依赖
+        metric: 现有 HTTP/PostgreSQL MetricProfile 支持的单个指标名，不接受 PromQL
+        start: 带明确时区的 RFC3339 时间，最多 9 位小数；区间向内对齐到毫秒精度，包含实际起点
+        end: 带明确时区的 RFC3339 时间，晚于 start 且不得在未来，跨度最多 6 小时，包含终点
+        step_seconds: 整数 15～300 秒，包含端点的预计采样数最多 120；缺口不填零
+    """
+    result = {
+        "status": "no_data",
+        "service": service,
+        "metric": metric,
+        "evidence_scope": "time_window",
+        "use_for_current_state": False,
+        "samples": [],
+        "sample_count": 0,
+        "missing_point_count": None,
+        "missing_evaluated_at": [],
+        "truncated": None,
+        "point_limit": MAX_RANGE_POINTS,
+        "query_started_at": None,
+        "query_finished_at": None,
+    }
+    started = datetime.now(timezone.utc)
+    try:
+        if not isinstance(service, str) or not isinstance(metric, str):
+            raise ValueError("invalid_metric_range_target")
+        start_time, end_time, expected_points = parse_metric_range(
+            start,
+            end,
+            step_seconds,
+            started,
+        )
+    except ValueError as exc:
+        return result | {"status": "invalid_arguments", "reason": str(exc)}
+    result.update(
+        requested_range={"start": start, "end": end},
+        query_range={
+            "start": start_time.isoformat(),
+            "end": end_time.isoformat(),
+            "bounds": "[start, end]",
+        },
+        step_seconds=step_seconds,
+        expected_point_count=expected_points,
+    )
+    try:
+        settings = registry.require_capability(service, "metrics")
+    except CapabilityUnavailable as exc:
+        return result | {"reason": exc.reason}
+    promql = build_promql(service, settings, metric)
+    if promql is None:
+        return result | {"reason": "metric_not_supported_by_profile"}
+
+    try:
+        response = prometheus_client.query_range(
+            promql,
+            start=start_time.isoformat(),
+            end=end_time.isoformat(),
+            step_seconds=step_seconds,
+        )
+    except (requests.RequestException, ValueError, RecursionError) as exc:
+        # Publish controlled categories, never backend URLs or exception bodies.
+        reasons = {
+            "metric_range_response_size_limit",
+            "metric_range_redirect_refused",
+            "metric_range_content_encoding_refused",
+            "invalid_metric_range_content_length",
+            "invalid_metric_range_json",
+        }
+        reason = (
+            str(exc) if str(exc) in reasons else "metrics_range_unreachable_or_invalid"
+        )
+        return result | {
+            "reason": reason,
+            "truncated": True if reason == "metric_range_response_size_limit" else None,
+            "query_started_at": getattr(exc, "query_started_at", started.isoformat()),
+            "query_finished_at": getattr(
+                exc, "query_finished_at", datetime.now(timezone.utc).isoformat()
+            ),
+        }
+    finished = datetime.now(timezone.utc)
+    try:
+        timing = {}
+        for key, fallback in (
+            ("query_started_at", started),
+            ("query_finished_at", finished),
+        ):
+            raw = (
+                response.get(key, fallback.isoformat())
+                if isinstance(response, dict) else fallback.isoformat()
+            )
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.utcoffset() is None:
+                raise ValueError("invalid_query_timing")
+            timing[key] = parsed.astimezone(timezone.utc)
+        if timing["query_finished_at"] < timing["query_started_at"]:
+            raise ValueError("invalid_query_timing")
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return result | {"reason": "invalid_query_timing"}
+    result.update({key: value.isoformat() for key, value in timing.items()})
+    parsed = _parse_metric_range_response(
+        response,
+        metric,
+        start_time,
+        end_time,
+        step_seconds,
+        expected_points,
+    )
+    result.update(parsed)
+    # Profile expressions are trusted but configured label lengths still need
+    # to respect the existing Runtime tool-payload limit.
+    if result["status"] == "ok":
+        result["promql"] = promql
+    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(encoded) > MAX_RANGE_RESPONSE_BYTES:
+        return {
+            key: value for key, value in result.items()
+            if key not in {"samples", "series_labels", "promql", "missing_evaluated_at"}
+        } | {
+            "status": "no_data",
+            "reason": "metric_range_result_size_limit",
+            "samples": [],
+            "sample_count": 0,
+            "missing_point_count": None,
+            "missing_evaluated_at": [],
+            "truncated": True,
+        }
+    return result
+
+
+def _metric_range_value(metric, raw):
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raise ValueError("invalid_metric_range_value")
+    if isinstance(raw, str) and re.fullmatch(
+        r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+        raw,
+    ) is None:
+        raise ValueError("invalid_metric_range_value")
+    try:
+        value = float(raw)
+    except (ValueError, OverflowError):
+        raise ValueError("invalid_metric_range_value") from None
+    if not math.isfinite(value):
+        raise ValueError("invalid_metric_range_value")
+    if (
+        value < 0
+        or (
+            metric in {"service_scrape_up", "exporter_scrape_up", "postgres_up"}
+            and value not in {0, 1}
+        )
+        or (
+            metric in {"http_5xx_rate", "postgres_connection_usage"}
+            and value > 1
+        )
+    ):
+        raise ValueError("metric_value_outside_semantic_domain")
+    return value
+
+
+def _parse_metric_range_response(
+    response,
+    metric,
+    start,
+    end,
+    step_seconds,
+    expected_points,
+):
+    try:
+        if (
+            not isinstance(response, dict)
+            or response.get("status") != "success"
+            or response.get("warnings", []) != []
+            or response.get("infos", []) != []
+            or not isinstance(response.get("data"), dict)
+            or response["data"].get("resultType") != "matrix"
+            or not isinstance(response["data"].get("result"), list)
+        ):
+            raise ValueError("invalid_metrics_range_response")
+        series = response["data"]["result"]
+        if len(series) > 1:
+            raise ValueError("multiple_metric_series")
+        samples = []
+        labels = {}
+        if series:
+            item = series[0]
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"metric", "values"}
+                or not isinstance(item["metric"], dict)
+                or not isinstance(item["values"], list)
+            ):
+                raise ValueError("invalid_metrics_range_series")
+            labels = item["metric"]
+            if len(labels) > 32 or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                or len(key) > 128 or len(value) > 256
+                for key, value in labels.items()
+            ):
+                raise ValueError("invalid_metrics_range_labels")
+            values = item["values"]
+            if len(values) > MAX_RANGE_POINTS or len(values) > expected_points:
+                raise ValueError("metric_range_response_point_limit")
+            previous = None
+            for pair in values:
+                if not isinstance(pair, list) or len(pair) != 2:
+                    raise ValueError("invalid_metrics_range_sample")
+                stamp = parse_evaluated_at(pair[0])
+                # datetime rounds to microseconds. Never let that rounding move
+                # an outside/off-grid observation onto a valid query boundary.
+                if pair[0] != stamp.timestamp():
+                    raise ValueError("metric_range_timestamp_precision_loss")
+                if not start <= stamp <= end:
+                    raise ValueError("metric_range_sample_outside_window")
+                if previous is not None and stamp <= previous:
+                    raise ValueError("metric_range_samples_not_strictly_ordered")
+                if (stamp - start) % timedelta(seconds=step_seconds) != timedelta(0):
+                    raise ValueError("metric_range_sample_outside_step_grid")
+                samples.append({
+                    "evaluated_at": stamp.isoformat(),
+                    "value": _metric_range_value(metric, pair[1]),
+                })
+                previous = stamp
+    except ValueError as exc:
+        return {
+            "status": "no_data",
+            "reason": str(exc),
+            "truncated": (
+                True if str(exc) == "metric_range_response_point_limit" else None
+            ),
+        }
+    observed = {sample["evaluated_at"] for sample in samples}
+    expected_times = [
+        (start + timedelta(seconds=index * step_seconds)).isoformat()
+        for index in range(expected_points)
+    ]
+    missing = [stamp for stamp in expected_times if stamp not in observed]
+    return {
+        "status": "ok" if samples else "no_data",
+        **({"reason": "no_samples_in_metric_range"} if not samples else {}),
+        "series_labels": labels,
+        "samples": samples,
+        "sample_count": len(samples),
+        "missing_point_count": len(missing),
+        "missing_evaluated_at": missing,
+        "truncated": False,
     }

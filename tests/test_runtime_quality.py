@@ -163,7 +163,9 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertEqual(len([e for e in self.store.events(saved.session_id) if e["event_type"] == "tool_reserved"]), 1)
 
     def test_real_agent_prompt_and_thirteen_distinct_calls_share_same_budget(self):
-        fixture = FixtureAgent()
+        # This budget test freezes Runtime time; keep mock metric evaluations
+        # on that clock so slower SQLite I/O cannot create future evidence.
+        fixture = FixtureAgent(clock=self.store.clock)
         agent = Agent(Mock(), "只读")
         agent.tool_manager.run_tool = fixture.run_fixture_tool
         calls = [call(arguments={"service": "order-service", "metric": f"metric-{i}"}, call_id=f"call-{i}") for i in range(13)]
