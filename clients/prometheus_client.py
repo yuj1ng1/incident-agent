@@ -263,6 +263,7 @@ class PrometheusClient:
     ):
         """Shared bounded transport; preserve the range query's wire contract."""
         finished = None
+        request_attempted = False
         began = time.monotonic()
         request_deadline = began + timeout_seconds
         if deadline is not None:
@@ -271,6 +272,8 @@ class PrometheusClient:
             remaining = request_deadline - began
             if remaining <= 0:
                 raise requests.Timeout(f"{category}_request_timeout")
+            # Entering the HTTP client records an attempt, not server receipt.
+            request_attempted = True
             with requests.get(
                 f"{self.base_url}/api/v1/{endpoint}",
                 params=params,
@@ -315,10 +318,12 @@ class PrometheusClient:
         except (requests.RequestException, ValueError, RecursionError) as exc:
             if category != "metric_range" and str(exc) == "invalid_metric_range_json":
                 exc = ValueError(f"invalid_{category}_json")
-            exc.query_started_at = started.isoformat()
+            exc._request_attempted = request_attempted
+            exc.query_started_at = started.isoformat() if request_attempted else None
             exc.query_finished_at = (
-                finished or self.clock().astimezone(timezone.utc)
-            ).isoformat()
+                (finished or self.clock().astimezone(timezone.utc)).isoformat()
+                if request_attempted else None
+            )
             raise exc
         return result | {
             "query_started_at": started.isoformat(),

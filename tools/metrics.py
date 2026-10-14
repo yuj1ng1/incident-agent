@@ -585,8 +585,9 @@ def _query_aligned_metric(
         "status": "no_data",
         "metric": metric,
         "promql": promql,
-        "query_started_at": started.isoformat(),
-        "request_executed": True,
+        "query_started_at": None,
+        "query_finished_at": None,
+        "request_executed": False,
     }
     try:
         response = prometheus_client.query_at(
@@ -595,6 +596,7 @@ def _query_aligned_metric(
             deadline=deadline,
         )
     except (requests.RequestException, ValueError, RecursionError) as exc:
+        request_attempted = getattr(exc, "_request_attempted", False) is True
         reasons = {
             "metric_aligned_response_size_limit",
             "metric_aligned_redirect_refused",
@@ -607,11 +609,16 @@ def _query_aligned_metric(
                 str(exc) if str(exc) in reasons
                 else "metrics_aligned_unreachable_or_invalid"
             ),
-            "query_started_at": getattr(exc, "query_started_at", started.isoformat()),
-            "query_finished_at": getattr(
-                exc, "query_finished_at", datetime.now(timezone.utc).isoformat()
+            "request_executed": request_attempted,
+            "query_started_at": (
+                getattr(exc, "query_started_at", None) if request_attempted else None
+            ),
+            "query_finished_at": (
+                getattr(exc, "query_finished_at", None) if request_attempted else None
             ),
         }
+    result["request_executed"] = True
+    result["query_started_at"] = started.isoformat()
     finished = datetime.now(timezone.utc)
     result["query_finished_at"] = finished.isoformat()
     try:

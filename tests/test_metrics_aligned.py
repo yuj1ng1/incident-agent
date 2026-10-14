@@ -114,6 +114,7 @@ def test_all_http_requests_use_one_validated_evaluation_time(prometheus, count):
         assert item["evaluated_at"] == result["evaluation_time"]
         assert item["query_started_at"] == NOW.isoformat()
         assert item["query_finished_at"] == NOW.isoformat()
+        assert item["request_executed"] is True
         assert request.args == ("http://prometheus.invalid/api/v1/query",)
         assert request.kwargs["params"] == {
             "query": build_promql(
@@ -365,9 +366,13 @@ def test_partial_network_failure_preserves_times_without_private_details(
     prometheus,
     error,
 ):
-    prometheus.pending.extend([vector(), error("private credentials and backend URL")])
+    failure = error("private credentials and backend URL")
+    prometheus.pending.extend([vector(), failure])
     result = query_metrics_aligned(**ARGUMENTS)
     assert_incomplete(result)
+    assert prometheus.get.call_count == 3
+    assert failure._request_attempted is True
+    assert result["results"][NAMES[1]]["request_executed"] is True
     assert result["results"][NAMES[1]]["query_started_at"] == NOW.isoformat()
     assert result["results"][NAMES[1]]["query_finished_at"] == NOW.isoformat()
     assert "private" not in json.dumps(result)
@@ -430,6 +435,8 @@ def test_transport_safety_limits_do_not_discard_other_metrics(
         result = query_metrics_aligned(**ARGUMENTS)
     read.assert_not_called()
     assert_incomplete(result)
+    assert prometheus.get.call_count == 3
+    assert result["results"][NAMES[1]]["request_executed"] is True
     assert result["results"][NAMES[1]]["reason"] == reason
 
 
@@ -454,9 +461,52 @@ def test_total_deadline_shrinks_timeouts_and_stops_unsent_requests(prometheus):
     assert result["results"][NAMES[0]]["status"] == "ok"
     assert result["results"][NAMES[1]]["status"] == "ok"
     assert result["results"][NAMES[2]]["status"] == "no_data"
+    assert result["results"][NAMES[2]]["request_executed"] is True
     assert result["results"][NAMES[3]]["reason"] == "metric_aligned_total_timeout"
     assert result["results"][NAMES[3]]["request_executed"] is False
     assert result["results"][NAMES[3]]["query_started_at"] is None
+    assert result["results"][NAMES[3]]["query_finished_at"] is None
+
+
+@pytest.mark.parametrize("expired_at", [10.0, 10.1])
+def test_deadline_expires_between_caller_and_transport_checks(
+    prometheus,
+    expired_at,
+):
+    # Deadline=10; the caller passes at 9.9, but transport sees expiry.
+    monotonic = Mock(side_effect=[0.0, 9.9, expired_at, expired_at, expired_at])
+    with (
+        patch("clients.prometheus_client.time.monotonic", monotonic),
+        patch.object(
+            prometheus.client,
+            "query_at",
+            wraps=prometheus.client.query_at,
+        ) as query,
+    ):
+        result = query_metrics_aligned(**ARGUMENTS)
+    query.assert_called_once()
+    prometheus.get.assert_not_called()
+    assert result["status"] == "no_data"
+    assert result["comparison_complete"] is False
+    assert result["results"][NAMES[0]]["reason"] == (
+        "metrics_aligned_unreachable_or_invalid"
+    )
+    assert result["results"][NAMES[1]]["reason"] == "metric_aligned_total_timeout"
+    for item in result["results"].values():
+        assert item["request_executed"] is False
+        assert item["query_started_at"] is None
+        assert item["query_finished_at"] is None
+
+
+def test_client_time_validation_failure_is_not_a_request_attempt(prometheus):
+    prometheus.client.clock = lambda: AT - timedelta(seconds=1)
+    result = query_metrics_aligned(**ARGUMENTS)
+    prometheus.get.assert_not_called()
+    assert result["status"] == "no_data"
+    for item in result["results"].values():
+        assert item["request_executed"] is False
+        assert item["query_started_at"] is None
+        assert item["query_finished_at"] is None
 
 
 def test_all_missing_is_not_reported_as_a_success(prometheus):
@@ -467,13 +517,21 @@ def test_all_missing_is_not_reported_as_a_success(prometheus):
     assert result["comparison_complete"] is False
     assert len(result["results"]) == 3
     assert all("value" not in item for item in result["results"].values())
+    assert prometheus.get.call_count == 3
+    assert all(item["request_executed"] is True for item in result["results"].values())
 
 
 def test_server_fields_cannot_forge_local_request_times(prometheus):
     prometheus.pending.extend([
-        vector() | {"query_started_at": "forged", "query_finished_at": "forged"},
+        vector() | {
+            "query_started_at": "forged",
+            "query_finished_at": "forged",
+            "request_executed": False,
+            "_request_attempted": False,
+        },
     ])
     result = query_metrics_aligned(**ARGUMENTS)
+    assert result["results"][NAMES[0]]["request_executed"] is True
     assert result["results"][NAMES[0]]["query_started_at"] == NOW.isoformat()
     assert result["results"][NAMES[0]]["query_finished_at"] == NOW.isoformat()
 
@@ -550,17 +608,19 @@ def test_client_revalidates_time_before_http(prometheus, at):
     prometheus.get.assert_not_called()
 
 
-def test_expired_shared_deadline_does_not_start_http(prometheus):
-    with patch("clients.prometheus_client.time.monotonic", return_value=10):
+@pytest.mark.parametrize("expired_at", [10.0, 10.1])
+def test_expired_shared_deadline_does_not_start_http(prometheus, expired_at):
+    with patch("clients.prometheus_client.time.monotonic", return_value=expired_at):
         with pytest.raises(requests.Timeout) as error:
             prometheus.client.query_at(
                 "trusted-profile-expression",
                 AT.isoformat(),
                 deadline=10,
             )
-    assert error.value.query_started_at == NOW.isoformat()
-    assert error.value.query_finished_at == NOW.isoformat()
     prometheus.get.assert_not_called()
+    assert error.value._request_attempted is False
+    assert error.value.query_started_at is None
+    assert error.value.query_finished_at is None
 
 
 def test_oversized_trusted_expression_is_rejected_before_all_io(prometheus):
@@ -620,6 +680,78 @@ def test_successful_cache_ttl_never_grants_current_health_qualification(promethe
     assert effective_records([record], record["identity"], NOW, "order-service") == []
     without_scope = record | {"result": {"status": "ok"}}
     assert effective_records([without_scope], record["identity"], NOW) == []
+
+
+@pytest.mark.parametrize("attempted", [False, True])
+def test_failed_request_audit_survives_checkpoint_without_changing_budget_or_cache(
+    tmp_path,
+    prometheus,
+    attempted,
+):
+    manager = create_runtime(tmp_path, clock=lambda: NOW)
+    create_session(manager)
+    session = manager.store.claim("audit-owner", manager.limits)
+    claim = (session.owner_token, session.fencing_token)
+    checkpoint = manager.store.load_checkpoint(session)
+    worker = Worker(manager, Agent(Mock(), "只读"))
+    item = SimpleNamespace(
+        name="query_metrics_aligned",
+        arguments=json.dumps(ARGUMENTS),
+        call_id="audit-first",
+    )
+    if attempted:
+        prometheus.pending.extend([vector(), requests.Timeout("private timeout")])
+        result, cached = worker._tool(session.session_id, claim, checkpoint, item)
+    else:
+        query_at = prometheus.client.query_at
+        monotonic = Mock(return_value=0.0)
+
+        def expire_before_transport(*args, **kwargs):
+            monotonic.return_value = kwargs["deadline"]
+            return query_at(*args, **kwargs)
+
+        with (
+            patch("clients.prometheus_client.time.monotonic", monotonic),
+            patch.object(
+                prometheus.client,
+                "query_at",
+                side_effect=expire_before_transport,
+            ),
+        ):
+            result, cached = worker._tool(session.session_id, claim, checkpoint, item)
+    assert cached is False
+    assert result["status"] == ("incomplete" if attempted else "no_data")
+    assert prometheus.get.call_count == (3 if attempted else 0)
+    assert manager.store.get(session.session_id).total_tool_executions == 1
+    assert not fresh(aligned_record(result), NOW)
+    reopened = RuntimeStore(manager.store.path, clock=lambda: NOW)
+    restored = reopened.load_checkpoint(reopened.get(session.session_id))
+    assert restored["schema_version"] == 1
+    assert restored["records"][0]["result"] == result
+    failed_metric = NAMES[1] if attempted else NAMES[0]
+    summary = worker._observation_summary(result, "query_metrics_aligned")
+    for output in (restored["records"][0]["result"], summary):
+        audit = output["results"][failed_metric]
+        assert audit["request_executed"] is attempted
+        assert audit["query_started_at"] == (NOW.isoformat() if attempted else None)
+        assert audit["query_finished_at"] == (NOW.isoformat() if attempted else None)
+
+    item.call_id = "audit-retry"
+    successful, cached = worker._tool(session.session_id, claim, restored, item)
+    assert successful["status"] == "ok"
+    assert cached is False
+    assert prometheus.get.call_count == (6 if attempted else 3)
+    assert manager.store.get(session.session_id).total_tool_executions == 2
+    assert len(restored["records"]) == 2
+    item.call_id = "audit-cached"
+    reused, cached = worker._tool(session.session_id, claim, restored, item)
+    assert reused == successful
+    assert cached is True
+    assert prometheus.get.call_count == (6 if attempted else 3)
+    saved = manager.store.get(session.session_id)
+    assert saved.total_tool_executions == 2
+    assert saved.total_model_requests == 0
+    assert saved.cache_hits == 1
 
 
 def test_cache_key_isolates_metric_set_time_target_profile_and_runtime_identity():
