@@ -1,4 +1,4 @@
-"""P5.3b.1 baseline characterization, not a repair of the Responses chain.
+"""P5.3b.1 measurements retained as P5.3b.2 replacement regressions.
 
 Every scenario makes at most seven calls to an in-memory Mock Provider through
 the real Agent/ModelClient boundary. All stores and optional measurements are
@@ -127,6 +127,8 @@ def run_scenario(
     root,
     scenario,
     reference_encoder,
+    *,
+    analysis_transform=None,
 ):
     clock = SimpleNamespace(now=COLLECTED)
     holder = SimpleNamespace(manager=create_runtime(root, clock=lambda: clock.now))
@@ -207,6 +209,11 @@ def run_scenario(
                     for source in report["source_observation_ids"]
                 }) for item in projected
             ],
+            "rebuild_user_message_fingerprints": [
+                hashlib.sha256(json_text(item).encode()).hexdigest()
+                for item in body["input"]
+                if any("recovery" in payload for payload in analyses([item]))
+            ],
             "input_json_bytes": len(text.encode("utf-8")),
             "request_json_bytes": len(request_text.encode("utf-8")),
             "reference_o200k_input_json_tokens": (
@@ -218,6 +225,7 @@ def run_scenario(
                 if reference_encoder else None
             ),
             "provider_usage_tokens": None,
+            "valid_input_chain": valid_chain(body["input"]),
             "valid_saved_chain": valid_chain(checkpoint.get("history", [])),
             "chain_fresh": all(
                 record in current for record in checkpoint["records"]
@@ -243,9 +251,17 @@ def run_scenario(
             ),
         }
         assert row["function_calls"] == row["function_outputs"]
+        assert row["valid_input_chain"]
         # Complete-chain inputs must retain each real item byte-for-byte.
-        if row["runtime_supplements"]:
-            assert body["input"][:-1] == checkpoint["history"]
+        if (
+            row["valid_saved_chain"] and row["chain_fresh"]
+            and scenario != "unverified"
+        ):
+            retained = body["input"][:-1] if row["runtime_supplements"] else body["input"]
+            assert retained == [
+                item for item in checkpoint["history"]
+                if not Worker._is_runtime_metric_analysis_message(item)
+            ]
             assert function_items(body["input"]) == function_items(
                 checkpoint["history"],
             )
@@ -282,6 +298,15 @@ def run_scenario(
         )
         if scenario == "disabled":
             worker._metric_analysis_context = Mock(return_value=None)
+        if analysis_transform is not None:
+            original_analysis = worker._metric_analysis_context
+
+            def transformed_analysis(service, records):
+                return analysis_transform(
+                    original_analysis(service, records), len(rows) + 1,
+                )
+
+            worker._metric_analysis_context = transformed_analysis
         finished = worker.run_once()
         executions.extend(fixture.executions)
         if finished.status != SessionStatus.WAITING_RETRY:
@@ -340,12 +365,14 @@ def run_scenario(
 @pytest.mark.parametrize(
     "scenario, counts, tools, hits",
     [
-        ("fresh", [0, 1, 2, 3, 4, 5, 6], 2, 5),
+        # P5.3b.1 measured 0,1,2,3,4,5,6; complete-chain supplements now replace.
+        ("fresh", [0, 1, 1, 1, 1, 1, 1], 2, 5),
         ("disabled", [0, 0, 0, 0, 0, 0, 0], 2, 5),
         ("unverified", [0, 1, 1, 1, 1, 1, 1], 2, 5),
         ("historical", [0, 1, 1, 1, 1, 1, 1], 2, 5),
-        ("expired", [0, 1, 2, 1, 1, 1, 1], 3, 4),
-        ("retry", [0, 1, 2, 3, 1, 2, 3], 3, 4),
+        ("expired", [0, 1, 1, 1, 1, 1, 1], 3, 4),
+        # The unmarked rebuild user message remains intact after a new attempt.
+        ("retry", [0, 1, 1, 1, 1, 2, 2], 3, 4),
     ],
 )
 def test_seven_round_context_growth_characterization(
@@ -372,22 +399,25 @@ def test_seven_round_context_growth_characterization(
             assert row["function_calls"] == expected
             assert row["chain_fresh"]
             assert row["valid_saved_chain"] == (row["round"] > 1)
-        assert report["rows"][-1]["identical_analysis_copies_beyond_first"] == (
-            5 if scenario == "fresh" else 0
-        )
+        assert report["rows"][-1]["identical_analysis_copies_beyond_first"] == 0
     if scenario == "fresh":
         assert all(
             len(set(map(tuple, row["source_observation_ids"]))) == 1
             for row in report["rows"][1:]
         )
         assert len(function_items(checkpoint["history"])) == 12
+        assert report["final"]["analysis_messages"] == 1
+        assert [row["runtime_supplements"] for row in report["rows"]] == counts
     if scenario == "retry":
         assert report["attempts"] == 2
         assert [row["attempt_round"] for row in report["rows"]] == [1, 2, 3, 4, 1, 2, 3]
-        assert report["rows"][3]["checkpoint_after_failure"]["analysis_messages"] == 2
+        assert report["rows"][3]["checkpoint_after_failure"]["analysis_messages"] == 1
         assert report["rows"][4]["function_calls"] == []
         assert report["rows"][5]["function_calls"] == ["metric-5"]
         assert report["rows"][6]["function_calls"] == ["metric-5", "metric-6"]
+        assert [row["runtime_supplements"] for row in report["rows"]] == [
+            0, 1, 1, 1, 0, 1, 1,
+        ]
         metric_records = [
             record for record in checkpoint["records"]
             if record["name"] == "query_metrics"
@@ -399,24 +429,136 @@ def test_seven_round_context_growth_characterization(
         } == {metric_records[0]["observation_id"]}
 
 
-def test_synthetic_checkpoint_margin_can_be_consumed_by_repeated_analysis(
+@pytest.mark.parametrize("change", ["revised", "absent"])
+def test_worker_delivers_latest_analysis_with_same_observation_and_persists_it(
+    tmp_path,
+    offline,
+    reference_encoder,
+    change,
+):
+    expected = {}
+
+    def transform(analysis, round_number):
+        if analysis is not None:
+            analysis = deepcopy(analysis)
+            if change == "absent" and round_number >= 4:
+                analysis = None
+            else:
+                analysis["reason"] = f"fixture_reanalysis_round_{round_number}"
+        expected[round_number] = analysis
+        return analysis
+
+    report, _, _, checkpoint = run_scenario(
+        tmp_path, "fresh", reference_encoder, analysis_transform=transform,
+    )
+    for row in report["rows"]:
+        latest = expected[row["round"]]
+        assert row["runtime_supplements"] == (latest is not None)
+        assert row["analysis_messages"] == (latest is not None)
+        assert row["analysis_fingerprints"] == (
+            {hashlib.sha256(json_text(latest).encode()).hexdigest(): 1}
+            if latest is not None else {}
+        )
+        assert row["valid_input_chain"]
+        assert row["function_calls"] == [
+            f"metric-{n}" for n in range(1, row["round"])
+        ]
+    sources = {
+        source for row in report["rows"]
+        for ids in row["source_observation_ids"] for source in ids
+    }
+    assert len(sources) == 1
+    # Model input and reopened Checkpoints contain the JSON form of dataclass
+    # reports, whose in-memory tuples serialize as arrays.
+    latest = json.loads(json_text(expected[7]))
+    assert [item["metric_analysis"] for item in analyses(checkpoint["history"])] == (
+        [latest] if latest is not None else []
+    )
+    assert len(function_items(checkpoint["history"])) == 12
+    assert (report["model_requests"], report["tool_executions"], report["cache_hits"]) == (
+        7, 2, 5,
+    )
+
+
+def test_retry_preserves_original_rebuild_user_while_latest_runtime_input_replaces(
+    tmp_path,
+    monkeypatch,
+    offline,
+    reference_encoder,
+):
+    expected = {}
+
+    def transform(analysis, round_number):
+        if analysis is not None:
+            analysis = deepcopy(analysis)
+            analysis["reason"] = f"fixture_reanalysis_round_{round_number}"
+        expected[round_number] = analysis
+        return analysis
+
+    if output := os.environ.get("INCIDENT_P53B1_REPORT_DIR"):
+        monkeypatch.setenv(
+            "INCIDENT_P53B1_REPORT_DIR", str(Path(output) / "revised-retry"),
+        )
+    report, _, _, checkpoint = run_scenario(
+        tmp_path, "retry", reference_encoder, analysis_transform=transform,
+    )
+    assert report["attempts"] == 2
+    assert [row["analysis_messages"] for row in report["rows"]] == [
+        0, 1, 1, 1, 1, 2, 2,
+    ]
+    assert [row["runtime_supplements"] for row in report["rows"]] == [
+        0, 1, 1, 1, 0, 1, 1,
+    ]
+    original_rebuild = report["rows"][4]["rebuild_user_message_fingerprints"]
+    assert len(original_rebuild) == 1
+    assert all(
+        row["rebuild_user_message_fingerprints"] == original_rebuild
+        for row in report["rows"][5:]
+    )
+    for row in report["rows"][5:]:
+        assert row["analysis_fingerprints"] == {
+            hashlib.sha256(json_text(expected[5]).encode()).hexdigest(): 1,
+            hashlib.sha256(json_text(expected[row["round"]]).encode()).hexdigest(): 1,
+        }
+        assert row["valid_input_chain"] and row["chain_fresh"]
+    final = analyses(checkpoint["history"])
+    assert "context_origin" not in final[0] and "recovery" in final[0]
+    assert final[0]["metric_analysis"] == json.loads(json_text(expected[5]))
+    assert final[1]["context_origin"] == "runtime_derived_metric_analysis"
+    assert final[1]["metric_analysis"] == json.loads(json_text(expected[7]))
+    assert final[0]["metric_analysis"] != final[1]["metric_analysis"]
+    assert report["rows"][5]["function_calls"] == ["metric-5"]
+    assert report["rows"][6]["function_calls"] == ["metric-5", "metric-6"]
+    assert len(function_items(checkpoint["history"])) == 4
+    assert (report["model_requests"], report["tool_executions"], report["cache_hits"]) == (
+        7, 3, 4,
+    )
+
+
+def test_synthetic_checkpoint_margin_is_recovered_by_replacing_repeated_analysis(
     tmp_path,
     offline,
     reference_encoder,
 ):
-    report, manager, finished, repeated = run_scenario(
+    report, manager, finished, current = run_scenario(
         tmp_path, "fresh", reference_encoder,
     )
-    reduced = deepcopy(repeated)
-    # Diagnostic counterfactual only; the production Worker is unchanged.
-    last = max(
-        index for index, item in enumerate(reduced["history"])
-        if analyses([item]) and analyses([item])[0].get("context_origin")
+    assert len(analyses(current["history"])) == 1
+    # Reconstruct P5.3b.1's six supplements on a temporary copy only, then use
+    # the production context builder to clean that legacy complete chain.
+    repeated = deepcopy(current)
+    supplement = next(
+        item for item in repeated["history"]
+        if Worker._is_runtime_metric_analysis_message(item)
     )
-    reduced["history"] = [
-        item for index, item in enumerate(reduced["history"])
-        if index == last or not analyses([item])
-    ]
+    repeated["history"] += [deepcopy(supplement) for _ in range(5)]
+    reduced = deepcopy(repeated)
+    worker = Worker(
+        manager, FixtureAgent(clock=lambda: COLLECTED), provider_verified=True,
+    )
+    reduced["history"] = worker._context(finished.session_id, reduced)
+    assert len(analyses(reduced["history"])) == 1
+    assert len(analyses(repeated["history"])) == 6
     assert function_items(reduced["history"]) == function_items(repeated["history"])
     assert valid_chain(reduced["history"])
     extra = len(encode(repeated).encode()) - len(encode(reduced).encode())
@@ -452,6 +594,8 @@ def test_synthetic_checkpoint_margin_can_be_consumed_by_repeated_analysis(
             "reduced_checkpoint_bytes": len(encode(reduced).encode()),
             "repeated_checkpoint_bytes": len(json_text(repeated).encode()),
             "duplicate_delta_bytes": extra,
+            "production_context_replaced_legacy_supplements": True,
+            "normal_run_analysis_messages": report["final"]["analysis_messages"],
             "rejected": "checkpoint_size_limit",
             "previous_checkpoint_preserved": True,
         }), encoding="utf-8")

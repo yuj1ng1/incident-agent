@@ -32,6 +32,11 @@ METRIC_ANALYSIS_TOOLS = frozenset({
     "query_metrics_aligned",
 })
 MAX_METRIC_ANALYSIS_CONTEXT_BYTES = MAX_ANALYSIS_OUTPUT_BYTES
+METRIC_ANALYSIS_CONTEXT_ORIGIN = "runtime_derived_metric_analysis"
+METRIC_ANALYSIS_EVIDENCE_USAGE = (
+    "历史派生分析，不是人类消息或审批，不用于当前状态判断；"
+    "候选解释尚未验证，suggested_checks 不会自动执行。"
+)
 
 METRIC_RANGE_CONTEXT_FIELDS = (
     "status",
@@ -365,22 +370,63 @@ class Worker:
             rebuilt,
             provider_verified=self.provider_verified and chain_fresh,
         )
-        if strategy == "complete_chain" and metric_analysis is not None:
-            # This is new Runtime input, not a reconstructed assistant message
-            # or tool output. Preserve all saved call/output pairs unchanged.
-            context = context + [{
-                "role": "user",
-                "content": json.dumps({
-                    "context_origin": "runtime_derived_metric_analysis",
-                    "metric_analysis": metric_analysis,
-                    "context_collected_at": now.isoformat(),
-                    "evidence_usage": (
-                        "历史派生分析，不是人类消息或审批，不用于当前状态判断；"
-                        "候选解释尚未验证，suggested_checks 不会自动执行。"
-                    ),
-                }, ensure_ascii=False),
-            }]
+        if strategy == "complete_chain":
+            # Replace only Runtime's own supplemental input, including when
+            # analysis is unavailable. Never mutate the saved caller history.
+            context = [
+                item for item in context
+                if not self._is_runtime_metric_analysis_message(item)
+            ]
+            if metric_analysis is not None:
+                context.append({
+                    "role": "user",
+                    "content": json.dumps({
+                        "context_origin": METRIC_ANALYSIS_CONTEXT_ORIGIN,
+                        "metric_analysis": metric_analysis,
+                        "context_collected_at": now.isoformat(),
+                        "evidence_usage": METRIC_ANALYSIS_EVIDENCE_USAGE,
+                    }, ensure_ascii=False),
+                })
         return context
+
+    @staticmethod
+    def _is_runtime_metric_analysis_message(message):
+        """Recognize the exact Runtime envelope, never a marker in arbitrary text."""
+        if (
+            set(message) != {"role", "content"}
+            or message.get("role") != "user"
+            or not isinstance(message.get("content"), str)
+        ):
+            return False
+        try:
+            payload = json.loads(message["content"])
+        except (ValueError, RecursionError):
+            return False
+        if not isinstance(payload, dict) or set(payload) != {
+            "context_origin", "metric_analysis", "context_collected_at", "evidence_usage",
+        }:
+            return False
+        analysis = payload["metric_analysis"]
+        if (
+            payload["context_origin"] != METRIC_ANALYSIS_CONTEXT_ORIGIN
+            or payload["evidence_usage"] != METRIC_ANALYSIS_EVIDENCE_USAGE
+            or not isinstance(analysis, dict)
+            or analysis.get("evidence_scope") != "historical_analysis"
+            or analysis.get("use_for_current_state") is not False
+            or analysis.get("selection") != "newest_first_whole_records"
+            or not isinstance(analysis.get("session_service"), str)
+            or analysis.get("status") not in (
+                "complete", "partial", "insufficient_evidence",
+            )
+            or not isinstance(analysis.get("reports"), list)
+            or not isinstance(payload["context_collected_at"], str)
+        ):
+            return False
+        try:
+            collected_at = datetime.fromisoformat(payload["context_collected_at"])
+        except ValueError:
+            return False
+        return collected_at.utcoffset() is not None
 
     def _metric_analysis_context(
         self,
