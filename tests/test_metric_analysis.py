@@ -181,13 +181,47 @@ def codes(report, field="limitations"):
     return {item.code for item in getattr(report, field)}
 
 
+@pytest.mark.parametrize("as_records", [False, True])
+def test_complete_historical_snapshots_at_different_times_remain_complete(as_records):
+    snapshots = [
+        aligned("first", AT),
+        aligned("second", LATER, (0.0, 0.0, 1.0)),
+    ]
+    inputs = [record(item) for item in snapshots] if as_records else snapshots
+    report = analyze(*inputs)
+    assert report.status == "complete"
+    assert len(report.confirmed_observations) == 6
+    assert "time_not_aligned" not in codes(report)
+    assert "evaluation_times_differ" not in codes(report, "temporal_findings")
+    assert "obtain_same_evaluation_metrics" not in codes(report, "suggested_checks")
+    for code in ("aligned_comparison_complete", "strict_time_alignment"):
+        groups = [item for item in report.temporal_findings if item.code == code]
+        assert len(groups) == 2
+        for group, snapshot in zip(groups, snapshots):
+            assert group.source_observation_ids == (snapshot.observation_id,)
+            assert group.evaluated_times == (snapshot.result["evaluation_time"],)
+            assert group.strict_time_alignment is True
+            assert set(group.metrics) == set(NAMES)
+
+
 def test_two_historical_snapshots_are_separate_and_missing_is_not_zero():
     first = aligned("first", AT)
     second = aligned("second", LATER, (0.0, None, 1.0))
     report = analyze(first, second)
     assert report.status == "partial"
-    assert "time_not_aligned" in codes(report)
+    assert "time_not_aligned" not in codes(report)
     assert "missing_metric_sample" in codes(report)
+    assert "obtain_same_evaluation_metrics" not in codes(report, "suggested_checks")
+    incomplete = [
+        item for item in report.temporal_findings
+        if item.code == "aligned_comparison_incomplete"
+    ]
+    assert len(incomplete) == 1
+    assert incomplete[0].comparison_complete is False
+    assert incomplete[0].strict_time_alignment is False
+    assert incomplete[0].missing_metrics == ("http_5xx_rate",)
+    assert incomplete[0].source_observation_ids == ("second",)
+    assert incomplete[0].comparison_time == LATER.isoformat()
     groups = [
         item for item in report.temporal_findings
         if item.code == "strict_time_alignment"
@@ -220,6 +254,7 @@ def test_original_misaligned_pair_has_no_contradiction_or_causal_hypothesis():
     errors = instant("errors", "http_5xx_rate", 1.0, AT)
     rate = instant("rate", "http_request_rate", 0.0, LATER)
     report = analyze(errors, rate)
+    assert report.status == "partial"
     assert len(report.confirmed_observations) == 2
     assert "time_not_aligned" in codes(report)
     assert "evaluation_times_differ" in codes(report, "temporal_findings")
@@ -227,8 +262,26 @@ def test_original_misaligned_pair_has_no_contradiction_or_causal_hypothesis():
     assert "same_time_value_or_expression_conflict" not in codes(
         report, "temporal_findings",
     )
+    assert "strict_time_alignment" not in codes(report, "temporal_findings")
     assert report.hypotheses_to_verify == ()
     assert "obtain_same_evaluation_metrics" in codes(report, "suggested_checks")
+
+
+def test_historical_snapshot_does_not_hide_a_misaligned_independent_metric():
+    separate = instant("separate", "http_request_rate", 0.0, LATER)
+    separate.result.update(evidence_scope="time_window", use_for_current_state=False)
+    report = analyze(aligned("snapshot", AT), separate)
+    assert report.status == "partial"
+    assert "time_not_aligned" in codes(report)
+    assert "evaluation_times_differ" in codes(report, "temporal_findings")
+    assert "obtain_same_evaluation_metrics" in codes(report, "suggested_checks")
+    groups = [
+        item for item in report.temporal_findings
+        if item.code == "strict_time_alignment"
+    ]
+    assert len(groups) == 1
+    assert groups[0].source_observation_ids == ("snapshot",)
+    assert groups[0].evaluated_times == (AT.isoformat(),)
 
 
 def test_exact_same_instant_may_raise_only_a_consistency_question():

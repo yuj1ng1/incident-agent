@@ -677,7 +677,12 @@ def _comparisons(observations):
     for items in timelines.values():
         times = tuple(sorted({item.samples[0].evaluated_at for item in items}))
         metrics = tuple(sorted({item.metric for item in items}))
-        if len(times) > 1 and len(metrics) > 1:
+        # Aligned calls validate their own evaluation time and missing metrics.
+        # Separate historical snapshots do not imply a mixed-time comparison.
+        if (
+            len(times) > 1 and len(metrics) > 1
+            and any(item.name == "query_metrics" for item in items)
+        ):
             findings.append(ComparisonFinding(
                 "evaluation_times_differ",
                 tuple(sorted({item.observation_id for item in items})),
