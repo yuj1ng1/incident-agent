@@ -284,6 +284,55 @@ def test_historical_snapshot_does_not_hide_a_misaligned_independent_metric():
     assert groups[0].evaluated_times == (AT.isoformat(),)
 
 
+@pytest.mark.parametrize("as_records", [False, True])
+@pytest.mark.parametrize("extra_metric", [False, True])
+def test_same_time_independent_metric_does_not_mix_complete_snapshots(
+    as_records,
+    extra_metric,
+):
+    separate = instant(
+        "separate",
+        "http_latency_p95_seconds" if extra_metric else "http_request_rate",
+        0.0,
+        LATER,
+    )
+    separate.result.update(evidence_scope="time_window", use_for_current_state=False)
+    inputs = [aligned("first", AT), aligned("second", LATER, (0.0, 0.0, 1.0)), separate]
+    if as_records:
+        inputs = [record(item) for item in inputs]
+    report = analyze(*inputs)
+    assert report.status == "complete"
+    assert "time_not_aligned" not in codes(report)
+    assert "evaluation_times_differ" not in codes(report, "temporal_findings")
+    assert "obtain_same_evaluation_metrics" not in codes(report, "suggested_checks")
+    groups = [
+        item for item in report.temporal_findings
+        if item.code == "strict_time_alignment"
+    ]
+    assert len(groups) == 2
+    assert groups[0].source_observation_ids == ("first",)
+    assert groups[1].source_observation_ids == ("second", "separate")
+    assert groups[1].evaluated_times == (LATER.isoformat(),)
+
+
+@pytest.mark.parametrize("boundary", ["uncovered_time", "incomplete", "other_identity"])
+def test_snapshot_coverage_cannot_hide_an_unaligned_independent_point(boundary):
+    second = aligned("second", LATER)
+    separate = instant("separate", at=LATER)
+    if boundary == "uncovered_time":
+        separate = instant("separate", at=LATER + timedelta(milliseconds=300))
+    elif boundary == "incomplete":
+        second = aligned("second", LATER, (0.0, None, 1.0))
+    separate.result.update(evidence_scope="time_window", use_for_current_state=False)
+    inputs = [record(aligned("first", AT)), record(second), record(separate)]
+    if boundary == "other_identity":
+        inputs[1]["identity"] = {"commit_sha": "b" * 40}
+    report = analyze(*inputs)
+    assert report.status == "partial"
+    assert "time_not_aligned" in codes(report)
+    assert "obtain_same_evaluation_metrics" in codes(report, "suggested_checks")
+
+
 def test_exact_same_instant_may_raise_only_a_consistency_question():
     report = analyze(
         instant("errors", "http_5xx_rate", 1.0),

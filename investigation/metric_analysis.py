@@ -657,7 +657,7 @@ def _range(evidence, service):
     return observations, [finding], notes
 
 
-def _comparisons(observations):
+def _comparisons(observations, complete_snapshot_ids):
     groups = {}
     timelines = {}
     findings, notes, hypotheses = [], [], []
@@ -677,11 +677,20 @@ def _comparisons(observations):
     for items in timelines.values():
         times = tuple(sorted({item.samples[0].evaluated_at for item in items}))
         metrics = tuple(sorted({item.metric for item in items}))
+        complete_times = {
+            item.samples[0].evaluated_at for item in items
+            if item.observation_id in complete_snapshot_ids
+        }
         # Aligned calls validate their own evaluation time and missing metrics.
-        # Separate historical snapshots do not imply a mixed-time comparison.
+        # An independent point at a complete snapshot's own time does not turn
+        # separate historical snapshots into a mixed-time comparison.
         if (
             len(times) > 1 and len(metrics) > 1
-            and any(item.name == "query_metrics" for item in items)
+            and any(
+                item.name == "query_metrics"
+                and item.samples[0].evaluated_at not in complete_times
+                for item in items
+            )
         ):
             findings.append(ComparisonFinding(
                 "evaluation_times_differ",
@@ -838,7 +847,15 @@ def analyze_metric_evidence(
             ))
     if sum(len(item.samples) for item in confirmed) > MAX_ANALYSIS_SAMPLES:
         return _insufficient("analysis_sample_limit_exceeded", tuple(sorted(ids)))
-    comparisons, comparison_notes, hypotheses = _comparisons(confirmed)
+    complete_snapshot_ids = {
+        source_id for finding in findings
+        if finding.code == "aligned_comparison_complete"
+        for source_id in finding.source_observation_ids
+    }
+    comparisons, comparison_notes, hypotheses = _comparisons(
+        confirmed,
+        complete_snapshot_ids,
+    )
     findings.extend(comparisons)
     notes.extend(comparison_notes)
     checks = []

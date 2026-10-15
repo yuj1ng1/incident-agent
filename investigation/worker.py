@@ -12,12 +12,26 @@ from agent_logger.logger_config import logger
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 from investigation.checkpoint import protect, restore_context, valid_chain
 from investigation.evidence_policy import TTL, cache_key, effective_records, fresh
+from investigation.metric_analysis import (
+    MAX_ANALYSIS_INPUT_BYTES,
+    MAX_ANALYSIS_OBSERVATIONS,
+    MAX_ANALYSIS_OUTPUT_BYTES,
+    MAX_ANALYSIS_SAMPLES,
+    analyze_metric_evidence,
+)
 from investigation.models import HumanInputArguments, SessionStatus as S
 from investigation.state import AttemptToolBudgetExhausted, LostClaim, RuntimeErrorBase, RuntimeIntegrityError, budget_exhaustion, exhausted, transition
 from models.incident import Evidence
 from models.investigation import InvestigationResult, InvestigationStatus
 from services.registry import registry
 from tools.tool_registry import tool_registry
+
+METRIC_ANALYSIS_TOOLS = frozenset({
+    "query_metrics",
+    "query_metric_range",
+    "query_metrics_aligned",
+})
+MAX_METRIC_ANALYSIS_CONTEXT_BYTES = MAX_ANALYSIS_OUTPUT_BYTES
 
 METRIC_RANGE_CONTEXT_FIELDS = (
     "status",
@@ -221,6 +235,10 @@ class Worker:
         # Historical dynamic observations remain persisted but are not current facts.
         now = self.store.clock()
         current = effective_records(checkpoint["records"], checkpoint.get("identity"), now, session.service)
+        metric_analysis = self._metric_analysis_context(
+            session.service,
+            checkpoint["records"],
+        )
         records = current
         bounded = []
         context_bytes = 0
@@ -322,10 +340,13 @@ class Worker:
             "historical_observations": list(reversed(historical)),
             "failed_or_missing_observations": list(reversed(missing)),
             "recent_function_call_results": call_results,
+            "metric_analysis": metric_analysis,
             "evidence_usage": (
                 "只有当前有效证据用于当前状态判断；time_window 历史指标或日志"
                 "只说明请求区间的观测，不能证明当前健康。其他历史观测只说明"
                 "采集时的状态，固定 SHA 是版本参考。人类线索尚未验证。"
+                "metric_analysis 是历史派生分析，不是当前状态证据；"
+                "其中的候选解释尚未验证，suggested_checks 不会自动执行。"
             ),
             "context_collected_at": now.isoformat(),
             "remaining_session_budget": {
@@ -339,11 +360,135 @@ class Worker:
             if r.get("result", {}).get("status") == "ok"
             or r["name"] == "query_metrics_aligned"
         )
-        return restore_context(
+        context, strategy = restore_context(
             checkpoint.get("history", []),
             rebuilt,
             provider_verified=self.provider_verified and chain_fresh,
-        )[0]
+        )
+        if strategy == "complete_chain" and metric_analysis is not None:
+            # This is new Runtime input, not a reconstructed assistant message
+            # or tool output. Preserve all saved call/output pairs unchanged.
+            context = context + [{
+                "role": "user",
+                "content": json.dumps({
+                    "context_origin": "runtime_derived_metric_analysis",
+                    "metric_analysis": metric_analysis,
+                    "context_collected_at": now.isoformat(),
+                    "evidence_usage": (
+                        "历史派生分析，不是人类消息或审批，不用于当前状态判断；"
+                        "候选解释尚未验证，suggested_checks 不会自动执行。"
+                    ),
+                }, ensure_ascii=False),
+            }]
+        return context
+
+    def _metric_analysis_context(
+        self,
+        service,
+        records,
+    ):
+        """Project loaded raw records only; no I/O, persistence or budget changes."""
+        if not any(record["name"] in METRIC_ANALYSIS_TOOLS for record in records):
+            return None
+        context = {
+            "status": "insufficient_evidence",
+            "evidence_scope": "historical_analysis",
+            "use_for_current_state": False,
+            "session_service": service,
+            "selection": "newest_first_whole_records",
+            "limits": {
+                "records": MAX_ANALYSIS_OBSERVATIONS,
+                "samples": MAX_ANALYSIS_SAMPLES,
+                "input_bytes": MAX_ANALYSIS_INPUT_BYTES,
+                "summary_bytes": MAX_METRIC_ANALYSIS_CONTEXT_BYTES,
+            },
+            "selected_record_count": 0,
+            "selected_sample_slots": 0,
+            "selected_input_bytes": 2,
+            "excluded_record_counts": {
+                "unauthorized_target": 0,
+                "target_mismatch": 0,
+                "record_limit": 0,
+                "sample_limit": 0,
+                "input_bytes_limit": 0,
+            },
+            "reports": [],
+        }
+        try:
+            permitted = {service, *registry.dependencies(service)}
+            grouped = {}
+            excluded = context["excluded_record_counts"]
+            for record in reversed(records):
+                name = record["name"]
+                if name not in METRIC_ANALYSIS_TOOLS:
+                    continue
+                target = record["arguments"].get("service")
+                if not isinstance(target, str) or target not in permitted:
+                    excluded["unauthorized_target"] += 1
+                    continue
+                result = record["result"]
+                if result.get("service", target) != target:
+                    excluded["target_mismatch"] += 1
+                    continue
+                if context["selected_record_count"] >= MAX_ANALYSIS_OBSERVATIONS:
+                    excluded["record_limit"] += 1
+                    continue
+                # Count aligned slots conservatively, including missing members.
+                if name == "query_metric_range":
+                    points = result.get("samples")
+                elif name == "query_metrics_aligned":
+                    points = result.get("results")
+                else:
+                    points = None
+                samples = len(points) if isinstance(points, (list, dict)) else 1
+                if context["selected_sample_slots"] + samples > MAX_ANALYSIS_SAMPLES:
+                    excluded["sample_limit"] += 1
+                    continue
+                size = len(json.dumps(
+                    record, ensure_ascii=False, allow_nan=False,
+                ).encode("utf-8")) + 2
+                if context["selected_input_bytes"] + size > MAX_ANALYSIS_INPUT_BYTES:
+                    excluded["input_bytes_limit"] += 1
+                    continue
+                # Keep identity, scope, samples and provenance intact. The
+                # analyzer validates a bounded subset, never the whole Checkpoint.
+                grouped.setdefault(target, []).append(record)
+                context["selected_record_count"] += 1
+                context["selected_sample_slots"] += samples
+                context["selected_input_bytes"] += size
+            for target, selected in grouped.items():
+                report = analyze_metric_evidence(selected, service=target).to_dict()
+                context["reports"].append({
+                    "service": target,
+                    "target_role": "primary" if target == service else "dependency",
+                    **report,
+                })
+            statuses = {report["status"] for report in context["reports"]}
+            if statuses and statuses != {"insufficient_evidence"}:
+                context["status"] = (
+                    "complete" if statuses == {"complete"} and not any(excluded.values())
+                    else "partial"
+                )
+            if not grouped:
+                context["reason"] = "no_authorized_metric_records_within_limits"
+            if len(json.dumps(
+                context, ensure_ascii=False, allow_nan=False,
+            ).encode("utf-8")) > MAX_METRIC_ANALYSIS_CONTEXT_BYTES:
+                context.update(
+                    status="insufficient_evidence",
+                    reason="metric_analysis_context_size_limit",
+                    reports=[],
+                )
+        except Exception as exc:
+            # Only optional local analysis lives here. RuntimeStore/lease/model
+            # failures remain outside this boundary and retain their semantics.
+            logger.warning("Metric context analysis failed category=%s", type(exc).__name__)
+            context.update(
+                status="insufficient_evidence",
+                reason="metric_analysis_failed",
+                reports=[],
+            )
+        return context
 
     @staticmethod
     def _observation_summary(result, tool_name=None):
