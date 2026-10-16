@@ -102,7 +102,14 @@ def test_finish_refresh_interruption_semantics(runtime, interruption, refresh_st
         assert recovered.total_tool_executions == 2
         next_agent.request_durable_response.assert_not_called()
         assert next_agent.executions == []
-        assert manager.store.load_checkpoint(recovered)["result"] == checkpoint["result"]
+        recovered_checkpoint = manager.store.load_checkpoint(recovered)
+        assert recovered_checkpoint["result"] == checkpoint["result"] | {
+            "model_rounds": recovered.total_model_requests,
+            "tool_calls": recovered.total_tool_executions,
+        }
+        assert recovered_checkpoint["history"] == checkpoint["history"]
+        assert recovered_checkpoint["records"] == checkpoint["records"]
+        assert recovered_checkpoint["trace"] == checkpoint["trace"]
         assert "worker_recovered" in [e["event_type"] for e in manager.store.events(result.session_id)]
     else:
         assert "worker_claim_lost" not in events

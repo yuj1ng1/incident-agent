@@ -18,7 +18,14 @@ from investigation.state import RuntimeErrorBase
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence, HistoryArchive
+from p53c1_support import (
+    PRESET_ANSWER,
+    finish_and_reopen,
+    source_call,
+    start_runtime,
+)
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
+from test_metric_analysis import LATER, aligned
 from web_api.app import create_app
 from web_api.__main__ import main as web_main
 
@@ -63,6 +70,37 @@ def test_queries_match_existing_persisted_result_and_budget(api):
     assert detail["projection"] == {"projected": True, "blocked": False, "error_category": None, "retry_at": None}
     assert detail["proposal_generation"]["status"] == "not_pending"
     assert detail["human_requests"] == []
+
+
+def test_mock_investigation_totals_match_the_http_results(tmp_path):
+    first = aligned("http-first")
+    second = aligned("http-second", LATER, values=(0.0, None, 1.0))
+    run = start_runtime(tmp_path, [
+        response(answer="", calls=[source_call(first)]),
+        response(answer="", calls=[source_call(second)]),
+        response(answer=PRESET_ANSWER),
+    ], [first, second])
+    run.worker.run_once()
+    finish_and_reopen(run, models=3, tools=3)
+    with TestClient(
+        create_app(
+            incident_path=tmp_path / "incidents.json",
+            runtime_path=run.manager.store.path,
+        ),
+        base_url="http://127.0.0.1",
+    ) as client:
+        session_response = client.get(f"/api/sessions/{run.session_id}")
+        history_response = client.get(f"/api/incidents/{run.incident_id}")
+    assert session_response.status_code == history_response.status_code == 200
+    detail = session_response.json()
+    result = detail["investigation_result"]
+    assert (result["model_rounds"], result["tool_calls"]) == (3, 3)
+    assert (
+        detail["session"]["total_model_requests"],
+        detail["session"]["total_tool_executions"],
+    ) == (3, 3)
+    answer = history_response.json()["recent_investigations"][0]
+    assert (answer["model_rounds"], answer["tool_calls"]) == (3, 3)
 
 
 def test_human_request_and_proposal_generation_are_queryable(api):

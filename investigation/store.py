@@ -289,6 +289,17 @@ class RuntimeStore:
 
     def checkpoint(self, session, payload, db, keep=4, *, acknowledge=False):
         Checkpoint.model_validate(payload)
+        if (
+            session.status in {S.COMPLETED, S.FAILED, S.EXHAUSTED}
+            and payload.get("result")
+            and self.get(session.session_id, db).status not in TERMINAL
+        ):
+            # Freeze Session totals after any proposal refresh, in the terminal
+            # transaction. Later projection/ack writes must preserve old results.
+            payload["result"].update(
+                model_rounds=session.total_model_requests,
+                tool_calls=session.total_tool_executions,
+            )
         if not acknowledge:
             payload["projected"] = bool(payload.get("projected")) and (
                 payload.get("projection_digest") == projection_digest(session, payload)

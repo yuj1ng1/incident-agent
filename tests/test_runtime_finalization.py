@@ -1,6 +1,6 @@
 """Publication races use real temporary stores and explicit synchronization."""
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import threading
 import sqlite3
 from types import SimpleNamespace
@@ -11,7 +11,9 @@ import pytest
 from investigation.models import RuntimeLimits, SessionStatus as S
 from investigation.state import transition
 from investigation.worker import Worker
+from models.investigation import InvestigationRecord
 from runtime_support import FixtureAgent, call, create_runtime, create_session
+from web_api.queries import RuntimeQueries
 
 
 def test_recovery_snapshot_cannot_publish_after_worker_checkpoint(tmp_path):
@@ -152,3 +154,125 @@ def test_expired_claim_exhaustion_projects_without_model_result(tmp_path):
     assert len(incident.investigations) == incident.consecutive_investigation_failures == 1
     assert incident.investigations[0].answer == "调查停止：session_resume_budget_exhausted"
     worker.agent.request_durable_response.assert_not_called()
+
+
+def test_recovery_exhaustion_freezes_the_saved_result_totals(tmp_path):
+    class Crash(BaseException):
+        pass
+
+    clock = SimpleNamespace(now=datetime.now(timezone.utc))
+    manager = create_runtime(
+        tmp_path,
+        clock=lambda: clock.now,
+        limits=RuntimeLimits(max_resumes=0),
+    )
+    session = create_session(manager)
+
+    def crash(phase, session_id):
+        if phase == "model_checkpoint_committed":
+            raise Crash()
+
+    agent = FixtureAgent()
+    with pytest.raises(Crash):
+        Worker(manager, agent, boundary_hook=crash).run_once()
+    interrupted = manager.store.get(session.session_id)
+    before = manager.store.load_checkpoint(interrupted)
+    clock.now += timedelta(seconds=manager.limits.lease_seconds + 1)
+    manager.recover()
+    saved = manager.store.get(session.session_id)
+    checkpoint = manager.store.load_checkpoint(saved)
+    assert saved.status == S.EXHAUSTED
+    assert saved.last_error_category == "session_resume_budget_exhausted"
+    assert checkpoint["result"] == before["result"] | {
+        "model_rounds": 1, "tool_calls": 1,
+    }
+    assert checkpoint["history"] == before["history"]
+    assert checkpoint["records"] == before["records"]
+    assert agent.request_durable_response.call_count == 1
+    assert agent.executions == ["get_running_version"]
+    unused = FixtureAgent()
+    assert Worker(manager, unused).run_once() is None
+    unused.request_durable_response.assert_not_called()
+    assert unused.executions == []
+    view = RuntimeQueries(
+        incident_path=manager.incident_store.file_path,
+        runtime_path=manager.store.path,
+    ).session(session.session_id)
+    assert (
+        view.investigation_result.model_rounds,
+        view.investigation_result.tool_calls,
+    ) == (1, 1)
+    incident = manager.incident_store.get_incident(session.incident_id)
+    assert (
+        incident.investigations[0].model_rounds,
+        incident.investigations[0].tool_calls,
+    ) == (1, 1)
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_legacy_terminal_counts_are_immutable_during_projection(tmp_path, archived):
+    now = datetime.now(timezone.utc)
+    manager = create_runtime(tmp_path, clock=lambda: now)
+    session = create_session(manager)
+    store = manager.store
+    legacy_result = {
+        "success": False,
+        "status": "model_incomplete",
+        "answer": "调查停止：ValueError",
+        "model_rounds": 0,
+        "tool_calls": 0,
+    }
+    with store.transaction() as db:
+        current = store.get(session.session_id, db)
+        transition(current, S.FAILED)
+        current.total_model_requests = 3
+        current.total_tool_executions = 4
+        current.attempt_count = 1
+        current.completed_at = now
+        # Model a row already committed by the old version. This is not a new
+        # terminal transition; projection must keep its original result bytes.
+        store.save(current, db)
+        checkpoint = store.load_checkpoint(current, db)
+        checkpoint["result"] = dict(legacy_result)
+        store.checkpoint(current, checkpoint, db)
+        store.save(current, db)
+    manager.sync_incident(session.session_id)
+    if archived:
+        incident = manager.incident_store.get_incident(session.incident_id)
+        for index in range(4):
+            incident.investigations.append(InvestigationRecord(
+                session_id=f"newer-{index}",
+                investigated_at=now + timedelta(seconds=index + 1),
+                status="completed",
+                answer="newer",
+            ))
+        manager.incident_store.save_incident(incident.fingerprint, incident)
+        hot = manager.incident_store.get_incident(
+            session.incident_id, include_history=False,
+        )
+        assert session.session_id in hot.history_archives[0].session_ids
+    archives = {
+        path: path.read_bytes() for path in (tmp_path / "history").glob("*.json")
+    }
+    with store.transaction() as db:
+        current = store.get(session.session_id, db)
+        checkpoint = store.load_checkpoint(current, db)
+        checkpoint["projected"] = False
+        store.checkpoint(current, checkpoint, db)
+        store.save(current, db)
+    manager.sync_incident(session.session_id)
+    saved = store.get(session.session_id)
+    assert store.load_checkpoint(saved)["result"] == legacy_result
+    assert store.load_checkpoint(saved)["projected"]
+    incident = manager.incident_store.get_incident(session.incident_id)
+    record = next(
+        r for r in incident.investigations if r.session_id == session.session_id
+    )
+    assert (record.model_rounds, record.tool_calls) == (3, 4)
+    assert all(path.read_bytes() == content for path, content in archives.items())
+    before = (store.path.read_bytes(), manager.incident_store.file_path.read_bytes())
+    manager.recover()
+    manager.sync_incident(session.session_id)
+    assert before == (
+        store.path.read_bytes(), manager.incident_store.file_path.read_bytes(),
+    )
