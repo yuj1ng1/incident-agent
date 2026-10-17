@@ -1,16 +1,18 @@
-"""P5.3c.2 isolated preflight; default mode never constructs a network client.
+"""P5.3c.2c isolated preflight; default mode never constructs a network client.
 
-Paid mode is reserved for a later, explicitly approved run. No production entry
+Paid mode requires explicit approval flags. No production entry
 point or background service is imported. Artifacts stay in a fresh OS temp dir.
 """
 import argparse
 from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import socket
@@ -32,39 +34,293 @@ MODEL_TIMEOUT_SECONDS = 30
 WALL_TIMEOUT_SECONDS = 90
 OFFLINE_ANSWER = "[离线传输占位回答；未调用真实模型，不证明模型理解指标。]"
 TASK = """
-这是固定历史案例复核，不是当前故障调查。A 为 P5.3c.1 两个历史 aligned
-快照，B 为其独立指标时间错位案例；相同数值在两案出现不是独立佐证。
-本次只做一次证据解释，最终回答采用以下五段，替代通用调查报告栏目：
-【历史事实】【时间与可比性】【有效零、缺失与失败】
-【未确认信息与根因】【后续验证】。
-使用简体中文，全文约 500～800 汉字，每段用简短语句，不用表格，
-不重复展开原始数据、规则或分析过程。关键事实就近引用输入中真实存在的
-observation_id，不编造来源、数值或时间。区分每组评估时间和不可比较项，
-说明历史证据对当前健康与恢复判断的限制，明确未经验证的信息与根因。
-通用证据规则：未知不等于相同，也不等于不同。缺失时间字段不能用于证明
-两个事件之间的具体时间关系。
-逐条核对以下规则，再按上述五段输出，不另行展开规则清单：
-1. 每条记录的 observation_id、collected_at、evaluated_at 和 status 独立，
-   包括同一工具内各指标的状态与时间；不能从相邻记录补全字段。
-2. collected_at 是证据采集时间，不自动等于 Prometheus 的评估时间；
-   评估时间只按该记录实际提供的 evaluated_at 或 evaluation_time 解释。
-3. 某记录或指标缺少 evaluated_at 时，其样本评估时间保持未知；若提供
-   evaluation_time，可说明查询评估时点，但不能据此虚构缺失样本的时间，
-   更不得继承其他记录的时间。
-4. 不同工具、不同来源的记录不因属于同一 Incident 就视为同刻采集。
-5. 使用“所有记录”“全部观测”等全称描述前，逐条核实范围内记录均支持
-   该结论；否则用来源 ID 或工具与记录分组明确限定范围，分别交代例外。
-6. 所有关键事实都要就近引用真实 observation_id，包括数值、有效零、
-   no_data、工具失败和版本探测；引用其他指标不能代替版本记录的引用。
-   输入未提供来源 ID 时明确其输入字段来源，不得为满足引用要求杜撰 ID。
-7. no_data 不等于有效零，不证明业务服务不存在、已经停止或已经恢复；
-   未取得版本或身份信息只说明证据缺失，不能断言版本或身份不存在。
-8. 不将历史指标、版本探测和告警值拼成某一时刻的当前状态；共享评估
-   时间也不证明共享抓取时间或多次查询具有原子性。
-9. 未验证根因保持假设，历史证据不能确认当前健康或恢复。
-10. 不编造工具输出、时间、来源 ID 或缺失字段；无法确定就明确未知。
-后续验证建议最多三项，只描述验证方向，不请求或执行工具、修复或人工操作。
+复核固定历史案例。A/B 中重复数值不是独立佐证。本次以如下两部分 JSON
+替代通用报告，只输出一个可解析对象，不用代码围栏，不输出内部推理过程。
+第一部分 sources：覆盖 evidence_index 全部来源，每项仅含 observation_id、
+collected_at、has_evaluation_time（原始查询字段是否存在）、evaluation_time、
+status、samples。samples 每项仅含 metric、status、value、evaluated_at；
+无指标的来源用 []。时间逐字保留，原始缺失字段在回答中用 null，null 不是零。
+collected_at 只表示采集；evaluation_time 只表示查询目标；evaluated_at
+只归属于该具体样本，缺失时不继承查询或邻项时间。
+第二部分 conclusion：confirmed、time_comparison、missing_vs_zero、unconfirmed、
+next_checks 五个非空数组，每项仅含 text（简短中文）和 observation_ids（实际
+来源 ID 数组）。分别说明事实、可比及不可比时间、有效零与缺失、未确认根因、
+最多三项进一步取证方向。每项就近引用支持它的来源，不把历史当当前状态，
+不把 no_data 当服务不存在或恢复，不添加无基线支持的定性判断。
+conclusion 总计约 250～350 汉字；不复述整个索引，不执行工具或修复。
 """
+
+
+def runtime_observations(model_input):
+    """Read only the isolated entry's actual evidence-rebuild envelope."""
+    payloads = []
+    for message in model_input:
+        if message.get("role") != "user" or not isinstance(message.get("content"), str):
+            continue
+        try:
+            payload = json.loads(message["content"].rsplit("\n", 1)[-1])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(payload, dict) and "recovery" in payload and all(
+            key in payload for key in (
+                "historical_observations", "failed_or_missing_observations",
+                "metric_analysis", "context_collected_at",
+            )
+        ):
+            payloads.append(payload)
+    if len(payloads) != 1:
+        raise ValueError("preflight_requires_one_runtime_evidence_rebuild")
+    payload = payloads[0]
+    return (
+        payload["historical_observations"]
+        + payload["failed_or_missing_observations"]
+    )
+
+
+def build_evidence_index(records, observations):
+    """Extract fields, preserving absence. Never infer times or metric analysis.
+
+    historical_only means Runtime disallows current-state use, including missing
+    version evidence; it does not classify that version probe as a metric.
+    Unknown tools/shapes remain explicit unsupported entries, not guessed data.
+    """
+    ids = [item["observation_id"] for item in records]
+    observed_ids = [item["observation_id"] for item in observations]
+    if (
+        any(not isinstance(item, str) or not item for item in ids)
+        or len(set(ids)) != len(ids)
+        or len(set(observed_ids)) != len(observed_ids)
+        or set(ids) != set(observed_ids)
+    ):
+        raise ValueError("preflight_evidence_source_mismatch")
+    observed = {item["observation_id"]: item for item in observations}
+    sources = []
+    for record in records:
+        context = observed[record["observation_id"]]
+        for key in ("name", "collected_at", "arguments"):
+            if context[key] != record[key]:
+                raise ValueError("preflight_runtime_source_field_mismatch")
+        if type(context.get("use_for_current_state")) is not bool:
+            raise ValueError("preflight_runtime_usage_missing")
+        result = record["result"]
+        if context["status"] != result.get("status"):
+            raise ValueError("preflight_runtime_status_mismatch")
+        entry = {
+            "observation_id": record["observation_id"],
+            "name": record["name"],
+            "collected_at": record["collected_at"],
+            "status": result.get("status"),
+            "historical_only": not context["use_for_current_state"],
+            "data_missing": None,
+            "extraction_status": "supported",
+            "samples": [],
+        }
+        for key in ("evaluation_time", "evaluated_at"):
+            if key in result:
+                entry[key] = deepcopy(result[key])
+        samples = []
+        if record["name"] == "query_metrics_aligned" and isinstance(
+            result.get("results"), dict,
+        ):
+            samples = list(result["results"].items())
+            requested = result.get("requested_metrics")
+            if (
+                not samples
+                or not isinstance(requested, list)
+                or set(requested) != set(result["results"])
+                or result.get("status") not in {"ok", "incomplete", "no_data"}
+            ):
+                entry["extraction_status"] = "unsupported"
+        elif record["name"] == "query_metrics" and isinstance(
+            result.get("metric"), str,
+        ):
+            samples = [(result["metric"], result)]
+            if result.get("status") not in {"ok", "no_data"}:
+                entry["extraction_status"] = "unsupported"
+        elif (
+            record["name"] != "get_running_version"
+            or result.get("status") != "no_data"
+        ):
+            # Only the local no-identity version result is supported here.
+            # This experiment is not a general version-result interpreter.
+            entry["extraction_status"] = "unsupported"
+        for metric, sample in samples:
+            if (
+                not isinstance(sample, dict)
+                or sample.get("metric") != metric
+                or not isinstance(sample.get("status"), str)
+            ):
+                entry["extraction_status"] = "unsupported"
+                continue
+            extracted = {"metric": metric, "status": sample["status"]}
+            for key in ("value", "evaluated_at"):
+                if key in sample:
+                    extracted[key] = deepcopy(sample[key])
+            entry["samples"].append(extracted)
+            if sample["status"] == "ok":
+                value = sample.get("value")
+                if type(value) not in (int, float) or (
+                    type(value) is float and not math.isfinite(value)
+                ):
+                    entry["extraction_status"] = "unsupported"
+            elif sample["status"] == "no_data" and (
+                "value" in sample or "evaluated_at" in sample
+            ):
+                # Retain the contradictory raw fields, but refuse paid use.
+                entry["extraction_status"] = "unsupported"
+        if not isinstance(entry["status"], str):
+            entry["extraction_status"] = "unsupported"
+        if entry["extraction_status"] == "supported":
+            entry["data_missing"] = entry["status"] == "no_data" or any(
+                item["status"] == "no_data" for item in entry["samples"]
+            )
+        else:
+            entry["unsupported_reason"] = "tool_or_result_shape_not_supported"
+        sources.append(entry)
+    return {
+        "schema_version": 1,
+        "provenance": "preflight_deterministic_derived",
+        "sources": sources,
+    }
+
+
+def validate_model_answer(answer, evidence_index):
+    """Check mechanical facts only. Never rewrite answers or grade reasoning."""
+    errors = []
+    if any(
+        item["extraction_status"] != "supported"
+        for item in evidence_index["sources"]
+    ):
+        errors.append("unsupported_evidence_index")
+
+    def unique_object(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate_json_key")
+            obj[key] = value
+        return obj
+
+    def invalid_constant(value):
+        raise ValueError("nonfinite_json_number")
+
+    def same(actual, expected):
+        if type(expected) in (int, float):
+            return (
+                type(actual) in (int, Decimal)
+                and (type(actual) is int or actual.is_finite())
+                and actual == Decimal(str(expected))
+            )
+        return type(actual) is type(expected) and actual == expected
+
+    try:
+        parsed = json.loads(
+            answer, object_pairs_hook=unique_object, parse_constant=invalid_constant,
+            parse_float=Decimal,
+        )
+    except (ValueError, TypeError, RecursionError, InvalidOperation):
+        parsed = None
+        errors.append("invalid_json")
+    if not isinstance(parsed, dict) or set(parsed) != {"sources", "conclusion"}:
+        errors.append("invalid_root_structure")
+    else:
+        expected = {item["observation_id"]: item for item in evidence_index["sources"]}
+        rows = parsed["sources"]
+        seen = set()
+        if not isinstance(rows, list):
+            errors.append("sources_not_array")
+            rows = []
+        fields = {
+            "observation_id", "collected_at", "has_evaluation_time",
+            "evaluation_time", "status", "samples",
+        }
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != fields:
+                errors.append("invalid_source_structure")
+                continue
+            source_id = row["observation_id"]
+            if not isinstance(source_id, str) or source_id not in expected:
+                errors.append("unknown_observation_id")
+                continue
+            if source_id in seen:
+                errors.append("duplicate_observation_id")
+            seen.add(source_id)
+            source = expected[source_id]
+            facts = {
+                "collected_at": source["collected_at"],
+                "has_evaluation_time": "evaluation_time" in source,
+                "evaluation_time": source.get("evaluation_time"),
+                "status": source["status"],
+            }
+            for key, value in facts.items():
+                if not same(row[key], value):
+                    errors.append(f"{source_id}.{key}:mismatch")
+            samples = row["samples"]
+            wanted = {item["metric"]: item for item in source["samples"]}
+            found = set()
+            if not isinstance(samples, list):
+                errors.append(f"{source_id}.samples:not_array")
+                samples = []
+            for sample in samples:
+                if not isinstance(sample, dict) or set(sample) != {
+                    "metric", "status", "value", "evaluated_at",
+                }:
+                    errors.append(f"{source_id}.sample:invalid_structure")
+                    continue
+                metric = sample["metric"]
+                if (
+                    not isinstance(metric, str)
+                    or metric not in wanted
+                    or metric in found
+                ):
+                    errors.append(f"{source_id}.sample:unknown_or_duplicate_metric")
+                    continue
+                found.add(metric)
+                for key in ("status", "value", "evaluated_at"):
+                    if not same(sample[key], wanted[metric].get(key)):
+                        errors.append(f"{source_id}.{metric}.{key}:mismatch")
+            if found != set(wanted):
+                errors.append(f"{source_id}.samples:missing_metrics")
+        if seen != set(expected):
+            errors.append("missing_observation_ids")
+        conclusion = parsed["conclusion"]
+        sections = {
+            "confirmed", "time_comparison", "missing_vs_zero", "unconfirmed",
+            "next_checks",
+        }
+        if not isinstance(conclusion, dict) or set(conclusion) != sections:
+            errors.append("invalid_conclusion_structure")
+        else:
+            for section in sections:
+                statements = conclusion[section]
+                if not isinstance(statements, list) or not statements:
+                    errors.append(f"{section}:nonempty_array_required")
+                    continue
+                if section == "next_checks" and len(statements) > 3:
+                    errors.append("too_many_next_checks")
+                for statement in statements:
+                    if not isinstance(statement, dict) or set(statement) != {
+                        "text", "observation_ids",
+                    }:
+                        errors.append(f"{section}:invalid_statement")
+                        continue
+                    refs = statement["observation_ids"]
+                    if (
+                        not isinstance(statement["text"], str)
+                        or not statement["text"].strip()
+                    ):
+                        errors.append(f"{section}:empty_text")
+                    if not isinstance(refs, list) or not refs or any(
+                        not isinstance(ref, str) or ref not in expected for ref in refs
+                    ):
+                        errors.append(f"{section}:invalid_references")
+    return {
+        "fact_check": "failed" if errors else "passed",
+        "errors": errors,
+        "manual_reasoning_review": "required",
+        "strict_acceptance": "failed" if errors else "pending",
+        "answer_rewritten": False,
+    }
 
 
 def write_json(
@@ -161,6 +417,9 @@ class BoundedProvider:
         self.requests = 0
         self.real_requests = 0
         self.options = None
+        self.load_records = None
+        self.evidence_index = None
+        self.answer_validation = None
         self.deadline = time.monotonic() + WALL_TIMEOUT_SECONDS
 
     def with_options(self, *, max_retries, timeout):
@@ -179,6 +438,31 @@ class BoundedProvider:
         if set(body) != {"model", "input", "instructions", "tools"}:
             raise ValueError("preflight_request_fields_not_allowed")
         body = deepcopy(body)
+        if self.load_records is not None:
+            # The bootstrap version record and model reservation have already
+            # committed. Read this request's actual persisted records now.
+            records = self.load_records()
+            self.evidence_index = build_evidence_index(
+                records, runtime_observations(body["input"]),
+            )
+            write_json(self.root, "evidence-index.json", self.evidence_index)
+            write_json(self.root, "request-source-records.json", records)
+            write_json(self.root, "runtime-input.json", body["input"])
+            if any(
+                item["extraction_status"] != "supported"
+                for item in self.evidence_index["sources"]
+            ):
+                raise ValueError("preflight_unsupported_evidence_shape")
+            body["input"].append({
+                "role": "user",
+                "content": json.dumps({
+                    "context_origin": "preflight_deterministic_derived",
+                    "scope": "independent_entry_only_not_runtime_history",
+                    "field_absence": "omitted index fields were absent in raw results",
+                    "raw_records": records,
+                    "evidence_index": self.evidence_index,
+                }, ensure_ascii=False, allow_nan=False),
+            })
         body.update(
             max_output_tokens=MAX_OUTPUT_TOKENS,
             reasoning={"effort": "none"},
@@ -213,6 +497,15 @@ class BoundedProvider:
             clean = redact_credential(serialized)
             if clean != serialized:
                 response = type(response).model_validate_json(clean)
+            if self.evidence_index is not None:
+                self.answer_validation = validate_model_answer(
+                    response.output_text, self.evidence_index,
+                )
+                if response.status != "completed":
+                    self.answer_validation["fact_check"] = "failed"
+                    self.answer_validation["strict_acceptance"] = "failed"
+                    self.answer_validation["errors"].append("response_not_completed")
+                write_json(self.root, "answer-validation.json", self.answer_validation)
             return response
         except Exception as exc:
             write_json(self.root, "provider-error.json", {
@@ -307,6 +600,9 @@ def run_case(
     provider = BoundedProvider(sdk, root, live)
     manager = create_runtime(root, limits=limits)
     session = create_session(manager)
+    provider.load_records = lambda: deepcopy(manager.store.load_checkpoint(
+        manager.store.get(session.session_id),
+    )["records"])
     # Import raw historical inputs, not invented model tool calls/outputs or
     # executions. The event and artifact record this provenance explicitly.
     with manager.store.transaction() as db:
@@ -358,6 +654,14 @@ def run_case(
             "openai", "httpx2", "pydantic", "python-dotenv", "pytest"
         )},
         "manual_reasoning_review": "pending" if live else "not_run",
+        "structured_fact_check": (
+            provider.answer_validation["fact_check"]
+            if provider.answer_validation else "not_available"
+        ),
+        "strict_acceptance": (
+            provider.answer_validation["strict_acceptance"]
+            if provider.answer_validation else "failed"
+        ),
         "production_data_used": False,
         "prometheus_used": False,
         "remediation_planner": None,
@@ -408,7 +712,7 @@ def main():
     args = parser.parse_args()
     if args.run_live != args.approve_paid_model_run:
         parser.error("paid mode requires both flags AND prior explicit human approval")
-    root = Path(tempfile.mkdtemp(prefix="incident-p53c2-"))
+    root = Path(tempfile.mkdtemp(prefix="incident-p53c2c-"))
     # Supervise only our own child; terminate it on total deadline. Retain the
     # temp files (including request intent) after failure for manual inspection.
     code = (
@@ -453,7 +757,9 @@ def main():
         return 2
     summary = json.loads(path.read_text(encoding="utf-8"))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0 if summary["session_status"] == "COMPLETED" else 2
+    complete = summary["session_status"] == "COMPLETED"
+    facts_valid = not args.run_live or summary["structured_fact_check"] == "passed"
+    return 0 if complete and facts_valid else 2
 
 
 if __name__ == "__main__":

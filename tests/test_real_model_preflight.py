@@ -243,9 +243,9 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert body["reasoning"] == {"effort": "none"}
     assert body["tool_choice"] == "none"
     assert preflight.TASK in body["instructions"]
-    assert "全文约 500～800 汉字" in body["instructions"]
-    assert "后续验证建议最多三项" in body["instructions"]
-    assert "未知不等于相同，也不等于不同" in body["instructions"]
+    assert "conclusion 总计约 250～350 汉字" in body["instructions"]
+    assert "最多三项进一步取证方向" in body["instructions"]
+    assert "缺失时不继承查询或邻项时间" in body["instructions"]
     assert len(json.dumps(body, ensure_ascii=False).encode()) <= 98304
     payloads = analyses(body["input"])
     observations = request_observations(body)
@@ -319,26 +319,21 @@ def test_generic_task_rules_reach_request_without_case_answers(
     task = preflight.TASK
     assert task in body["instructions"]
     required_rules = (
-        "每条记录的 observation_id、collected_at、evaluated_at 和 status 独立",
-        "collected_at 是证据采集时间，不自动等于 Prometheus 的评估时间",
-        "不能据此虚构缺失样本的时间",
-        "不因属于同一 Incident 就视为同刻采集",
-        "全称描述前",
-        "引用其他指标不能代替版本记录的引用",
-        "no_data 不等于有效零",
-        "不证明业务服务不存在、已经停止或已经恢复",
-        "不将历史指标、版本探测和告警值拼成某一时刻的当前状态",
-        "未验证根因保持假设",
-        "不编造工具输出、时间、来源 ID 或缺失字段",
+        "覆盖 evidence_index 全部来源",
+        "has_evaluation_time（原始查询字段是否存在）",
+        "原始缺失字段在回答中用 null，null 不是零",
+        "collected_at 只表示采集",
+        "evaluation_time 只表示查询目标",
+        "只归属于该具体样本，缺失时不继承查询或邻项时间",
+        "不把历史当当前状态",
+        "不把 no_data 当服务不存在或恢复",
+        "不添加无基线支持的定性判断",
     )
     assert all(rule in body["instructions"] for rule in required_rules)
-    assert all(f"{number}. " in task for number in range(1, 11))
-    for heading in (
-        "【历史事实】", "【时间与可比性】", "【有效零、缺失与失败】",
-        "【未确认信息与根因】", "【后续验证】",
-    ):
-        assert heading in task
-    assert "全文约 500～800 汉字" in task
+    assert not any(f"{number}. " in task for number in range(1, 11))
+    for field in ("confirmed", "time_comparison", "missing_vs_zero", "unconfirmed", "next_checks"):
+        assert field in task
+    assert "conclusion 总计约 250～350 汉字" in task
     assert re.search(r"\d{4}-\d{2}-\d{2}", task) is None
     case = read_json(tmp_path, "case.json")
     assert all(item["observation_id"] not in task for item in case["records"])
