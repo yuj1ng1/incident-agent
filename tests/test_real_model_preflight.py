@@ -1,8 +1,11 @@
 """P5.3c.2 safety and persistence checks, without a real model request."""
+from copy import deepcopy
+from datetime import timedelta
 import importlib
 import json
 import logging
 from pathlib import Path
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -40,6 +43,45 @@ def artifact_text(root):
         for item in root.rglob("*")
         if item.is_file() and item.suffix in {".json", ".txt", ".log"}
     )
+
+
+def request_observations(body):
+    payloads = analyses(body["input"])
+    assert len(payloads) == 1
+    return {
+        item["observation_id"]: item
+        for field in ("historical_observations", "failed_or_missing_observations")
+        for item in payloads[0][field]
+    }
+
+
+def review_citations(answer, records):
+    """Check source IDs only; no natural-language statement is graded as true.
+
+    Known IDs must occur as complete tokens. Unknown IDs can be detected only
+    when explicitly written as ``[observation_id=...]``; other citation formats,
+    attribution, timing, quantifiers and meaning always need human review.
+    """
+    source_ids = {item["observation_id"] for item in records}
+    cited = {
+        source_id for source_id in source_ids
+        if re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(source_id)}(?![A-Za-z0-9_-])",
+            answer,
+        )
+    }
+    explicit = set(re.findall(r"\[observation_id=([A-Za-z0-9_-]+)\]", answer))
+    missing = source_ids - cited
+    unknown = explicit - source_ids
+    failed = bool(missing or unknown)
+    return {
+        "cited_observation_ids": sorted(cited),
+        "missing_observation_ids": sorted(missing),
+        "unknown_explicit_observation_ids": sorted(unknown),
+        "citation_check": "failed" if failed else "complete",
+        "semantic_review": "required",
+        "strict_acceptance": "failed" if failed else "pending",
+    }
 
 
 def fake_sdk(
@@ -185,6 +227,9 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert version["arguments"] == {"service": "order-service"}
     assert version["result"]["status"] == "no_data"
     assert "commit_sha" not in version["result"]
+    assert version["collected_at"] != COLLECTED.isoformat()
+    assert "evaluated_at" not in version["result"]
+    assert "evaluation_time" not in version["result"]
     assert checkpoint["budget"]["model_requests"] == 1
     assert checkpoint["budget"]["tool_executions"] == 1
     assert checkpoint["result"]["answer"] == preflight.OFFLINE_ANSWER
@@ -203,12 +248,7 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert "未知不等于相同，也不等于不同" in body["instructions"]
     assert len(json.dumps(body, ensure_ascii=False).encode()) <= 98304
     payloads = analyses(body["input"])
-    assert len(payloads) == 1
-    observations = {
-        item["observation_id"]: item
-        for field in ("historical_observations", "failed_or_missing_observations")
-        for item in payloads[0][field]
-    }
+    observations = request_observations(body)
     assert set(observations) == {
         item["observation_id"] for item in checkpoint["records"]
     }
@@ -220,7 +260,25 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
         assert observed["result"] == expected_result
         assert observed["arguments"] == source["arguments"]
         assert observed["collected_at"] == source["collected_at"]
+        assert observed["status"] == source["result"]["status"]
         assert observed["use_for_current_state"] is False
+    version_in_request = observations[version["observation_id"]]
+    assert version_in_request["collected_at"] == version["collected_at"]
+    assert "evaluated_at" not in version_in_request
+    assert "evaluation_time" not in version_in_request
+    assert "evaluated_at" not in version_in_request["result"]
+    assert "evaluation_time" not in version_in_request["result"]
+    second_snapshot = observations[checkpoint["records"][1]["observation_id"]]
+    assert second_snapshot["result"]["evaluation_time"] == LATER.isoformat()
+    missing_sample = second_snapshot["result"]["results"]["http_5xx_rate"]
+    assert missing_sample["status"] == "no_data"
+    assert "value" not in missing_sample
+    assert "evaluated_at" not in missing_sample
+    zero_sample = second_snapshot["result"]["results"]["http_request_rate"]
+    assert zero_sample["status"] == "ok"
+    assert zero_sample["value"] == 0.0
+    assert zero_sample["evaluated_at"] == LATER.isoformat()
+    assert COLLECTED.isoformat() != zero_sample["evaluated_at"]
     analysis = payloads[0]["metric_analysis"]
     assert analysis["use_for_current_state"] is False
     assert analysis["evidence_scope"] == "historical_analysis"
@@ -250,6 +308,174 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
         for item in events
     )
     assert secret not in artifact_text(root)
+
+
+def test_generic_task_rules_reach_request_without_case_answers(
+    preflight,
+    tmp_path,
+):
+    preflight.run_case(tmp_path)
+    body = read_json(tmp_path, "request.json")
+    task = preflight.TASK
+    assert task in body["instructions"]
+    required_rules = (
+        "每条记录的 observation_id、collected_at、evaluated_at 和 status 独立",
+        "collected_at 是证据采集时间，不自动等于 Prometheus 的评估时间",
+        "不能据此虚构缺失样本的时间",
+        "不因属于同一 Incident 就视为同刻采集",
+        "全称描述前",
+        "引用其他指标不能代替版本记录的引用",
+        "no_data 不等于有效零",
+        "不证明业务服务不存在、已经停止或已经恢复",
+        "不将历史指标、版本探测和告警值拼成某一时刻的当前状态",
+        "未验证根因保持假设",
+        "不编造工具输出、时间、来源 ID 或缺失字段",
+    )
+    assert all(rule in body["instructions"] for rule in required_rules)
+    assert all(f"{number}. " in task for number in range(1, 11))
+    for heading in (
+        "【历史事实】", "【时间与可比性】", "【有效零、缺失与失败】",
+        "【未确认信息与根因】", "【后续验证】",
+    ):
+        assert heading in task
+    assert "全文约 500～800 汉字" in task
+    assert re.search(r"\d{4}-\d{2}-\d{2}", task) is None
+    case = read_json(tmp_path, "case.json")
+    assert all(item["observation_id"] not in task for item in case["records"])
+    serialized = json.dumps(body, ensure_ascii=False)
+    assert '"expected"' not in serialized
+    assert '"grading"' not in serialized
+    assert all(
+        value not in serialized
+        for name, value in case["expected"].items()
+        if name != "citations"
+    )
+
+
+def test_request_preserves_each_historical_collection_date_without_inheritance(
+    preflight,
+    tmp_path,
+    monkeypatch,
+):
+    case = deepcopy(preflight.build_case())
+    original_results = deepcopy([item["result"] for item in case["records"]])
+    for index, item in enumerate(case["records"]):
+        item["collected_at"] = (
+            COLLECTED + timedelta(days=index % 3)
+        ).isoformat()
+    monkeypatch.setattr(preflight, "build_case", lambda: deepcopy(case))
+    preflight.run_case(tmp_path)
+    body = read_json(tmp_path, "request.json")
+    observations = request_observations(body)
+    checkpoint = read_json(tmp_path, "checkpoint.json")
+    assert len({item["collected_at"][:10] for item in case["records"]}) == 3
+    assert [item["result"] for item in checkpoint["records"][:4]] == original_results
+    for source in case["records"]:
+        observed = observations[source["observation_id"]]
+        assert observed["collected_at"] == source["collected_at"]
+        expected = source["result"]
+        if source["name"] == "query_metrics_aligned":
+            expected = {**expected, "summary_truncated": False}
+        assert observed["result"] == expected
+        assert observed["use_for_current_state"] is False
+    version = checkpoint["records"][-1]
+    observed_version = observations[version["observation_id"]]
+    assert observed_version["collected_at"] == version["collected_at"]
+    assert "evaluated_at" not in observed_version["result"]
+    assert "evaluation_time" not in observed_version["result"]
+    payload = analyses(body["input"])[0]
+    assert payload["metric_analysis"]["use_for_current_state"] is False
+    assert payload["metric_analysis"]["evidence_scope"] == "historical_analysis"
+    assert "不能证明当前健康" in payload["evidence_usage"]
+
+
+@pytest.mark.parametrize(
+    "answer_kind,expected_citations,expected_acceptance",
+    [
+        ("omitted_version", "failed", "failed"),
+        ("unsupported_all_records", "complete", "pending"),
+        ("correctly_scoped", "complete", "pending"),
+        ("fabricated_source", "failed", "failed"),
+        ("partial_source_id", "failed", "failed"),
+    ],
+)
+def test_completed_answers_keep_raw_text_and_require_semantic_review(
+    preflight,
+    tmp_path,
+    monkeypatch,
+    answer_kind,
+    expected_citations,
+    expected_acceptance,
+):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-test-key")
+    captured = {}
+    sdk = fake_sdk()
+
+    def answer_request(**body):
+        observations = request_observations(body)
+        version = next(
+            item for item in observations.values()
+            if item["name"] == "get_running_version"
+        )
+        metric_ids = sorted(set(observations) - {version["observation_id"]})
+        metric_refs = " ".join(
+            f"[observation_id={source_id}]" for source_id in metric_ids
+        )
+        version_ref = f"[observation_id={version['observation_id']}]"
+        if answer_kind == "omitted_version":
+            answer = f"历史指标 {metric_refs}。版本探测 no_data，版本未知。"
+        elif answer_kind == "unsupported_all_records":
+            answer = (
+                f"所有记录采集时间均为 {COLLECTED.isoformat()}，"
+                f"评估时间均为 {AT.isoformat()}。{metric_refs} {version_ref}"
+            )
+        elif answer_kind == "correctly_scoped":
+            answer = (
+                f"四条历史指标记录采集于 {COLLECTED.isoformat()}：{metric_refs}。"
+                f"它们的样本评估时点按各自字段区分；缺失样本未给出评估时间。"
+                f"版本探测采集于 {version['collected_at']}，"
+                f"状态 no_data，未提供 evaluated_at 或 evaluation_time，"
+                f"其评估时间未知 {version_ref}。当前健康与根因均未确认。"
+            )
+        elif answer_kind == "fabricated_source":
+            answer = (
+                f"历史指标 {metric_refs}，版本未知 {version_ref}。"
+                "额外证据 [observation_id=obs-fabricated-source]。"
+            )
+        else:
+            answer = (
+                f"历史指标 {metric_refs}，版本未知 "
+                f"[observation_id={version['observation_id'][:-1]}]。"
+            )
+        result = response(answer=answer)
+        raw_text = result.model_dump_json() + "\n"
+        captured.update(answer=answer, raw_text=raw_text, version=version)
+        return SimpleNamespace(text=raw_text, parse=lambda: result)
+
+    sdk.responses.with_raw_response.create.side_effect = answer_request
+    summary = preflight.run_case(tmp_path, live=True, sdk=sdk)
+    checkpoint = read_json(tmp_path, "checkpoint.json")
+    saved_answer = checkpoint["result"]["answer"]
+    review = review_citations(saved_answer, checkpoint["records"])
+    assert summary["session_status"] == "COMPLETED"
+    assert summary["manual_reasoning_review"] == "pending"
+    assert review["citation_check"] == expected_citations
+    assert review["semantic_review"] == "required"
+    assert review["strict_acceptance"] == expected_acceptance
+    assert saved_answer == captured["answer"]
+    assert (tmp_path / "response.raw.json").read_text(encoding="utf-8") == (
+        captured["raw_text"]
+    )
+    if answer_kind in {"omitted_version", "partial_source_id"}:
+        assert review["missing_observation_ids"] == [
+            captured["version"]["observation_id"],
+        ]
+    elif answer_kind == "fabricated_source":
+        assert review["unknown_explicit_observation_ids"] == ["obs-fabricated-source"]
+    else:
+        assert not review["missing_observation_ids"]
+        assert not review["unknown_explicit_observation_ids"]
+    sdk.responses.with_raw_response.create.assert_called_once()
 
 
 def test_injected_sdk_keeps_raw_output_and_exact_evidence_references(
