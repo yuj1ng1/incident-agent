@@ -117,7 +117,7 @@ def test_real_mock_runtime_indexes_all_five_persisted_sources(
 ):
     body, records, index = delivered
     observations = request_observations(body)
-    assert index["schema_version"] == 1
+    assert index["schema_version"] == 2
     assert index["provenance"] == "preflight_deterministic_derived"
     assert len(records) == len(index["sources"]) == 5
     assert {item["observation_id"] for item in index["sources"]} == set(
@@ -137,7 +137,12 @@ def test_real_mock_runtime_indexes_all_five_persisted_sources(
     assert "evidence_index" not in json.dumps(history)
     assert "preflight_deterministic_derived" not in json.dumps(history)
     originals = deepcopy(records), deepcopy(list(observations.values()))
-    rebuilt = preflight.build_evidence_index(records, list(observations.values()))
+    rebuilt = preflight.build_evidence_index(
+        records,
+        list(observations.values()),
+        runtime_input=body["input"][:-1],
+        source_snapshot=read_json(tmp_path, "request-source-snapshot.json"),
+    )
     assert rebuilt == index
     assert (records, list(observations.values())) == originals
     for item in index["sources"]:
@@ -312,7 +317,7 @@ def test_authoritative_fact_view_is_mechanically_reversible_and_read_only(
     _, _, index = delivered
     original = deepcopy(index)
     view = preflight.build_authoritative_fact_view(index)
-    assert view["schema_version"] == 1
+    assert view["schema_version"] == index["schema_version"]
     assert view["provenance"] == "preflight_authoritative_fact_view"
     assert len(view["sources"]) == len(index["sources"]) == 5
     for shown, source in zip(view["sources"], index["sources"]):

@@ -1,4 +1,4 @@
-"""P5.3c.2d isolated preflight; default mode never constructs a network client.
+"""P5.3c.2e isolated preflight; default mode never constructs a network client.
 
 Paid mode requires explicit approval flags. No production entry
 point or background service is imported. Artifacts stay in a fresh OS temp dir.
@@ -36,10 +36,15 @@ TASK = """
 复核所提供的历史证据。权威事实由 Python 根据 evidence_index 生成，
 模型只输出解释、局限、假设和取证建议，不再生成 sources 事实副本。
 只输出一个 JSON 对象，唯一顶层字段 claims 为 1～10 项数组，每项仅含
-kind、text、observation_ids。kind 只能为 confirmed、limitation、hypothesis、
+kind、text、observation_ids，可另含 context_refs。kind 只能为 confirmed、limitation、hypothesis、
 next_check；text 为简短中文，每项最多 600 字、总计最多 2400 字，建议总计
 约 250～350 汉字；next_check 最多三项进一步取证方向。observation_ids
-为非空、不重复的实际来源 ID 数组；引用存在不代表引用支持相应陈述。
+为不重复的实际工具 observation_id 数组；context_refs 为不重复的
+{type, id} 数组，type 和 id 必须对应 reference_context.context_sources 中的
+source_type 和 reference_id。每项至少有一个工具或上下文引用。
+告警、能力/依赖配置、身份关联和集合范围分别引用对应上下文，不归入工具 ID。
+能力不代表已经执行，身份关联不认证当前部署；集合仅覆盖所注明的持久化快照，
+未保存某类结果不代表现实中不存在该证据。引用存在不代表引用支持相应陈述。
 只解释证据关系，不复述 collected_at、evaluation_time、evaluated_at 或
 原始指标数值表。collected_at 只表示采集；evaluation_time 只表示查询目标；
 evaluated_at 只归属于具体样本，缺失时不继承查询或邻项时间。
@@ -76,7 +81,13 @@ def runtime_observations(model_input):
     )
 
 
-def build_evidence_index(records, observations):
+def build_evidence_index(
+    records,
+    observations,
+    *,
+    runtime_input=None,
+    source_snapshot=None,
+):
     """Extract fields, preserving absence. Never infer times or metric analysis.
 
     historical_only means Runtime disallows current-state use, including missing
@@ -86,7 +97,10 @@ def build_evidence_index(records, observations):
     ids = [item["observation_id"] for item in records]
     observed_ids = [item["observation_id"] for item in observations]
     if (
-        any(not isinstance(item, str) or not item for item in ids)
+        any(
+            not isinstance(item, str) or not item or item.startswith("context:")
+            for item in ids
+        )
         or len(set(ids)) != len(ids)
         or len(set(observed_ids)) != len(observed_ids)
         or set(ids) != set(observed_ids)
@@ -176,11 +190,95 @@ def build_evidence_index(records, observations):
         else:
             entry["unsupported_reason"] = "tool_or_result_shape_not_supported"
         sources.append(entry)
-    return {
+    index = {
         "schema_version": 1,
         "provenance": "preflight_deterministic_derived",
         "sources": sources,
     }
+    if runtime_input is not None or source_snapshot is not None:
+        from scripts.preflight_evidence_refs import build_reference_context
+
+        index["reference_context"] = build_reference_context(
+            records, runtime_input, source_snapshot,
+        )
+        index["schema_version"] = 2
+        for source in sources:
+            source["source_type"] = "observation"
+            source["evidence_permissions"] = {
+                "may_support": ["persisted_tool_observation_fields"],
+                "use_for_current_state": not source["historical_only"],
+                "cannot_establish": ["claim_semantic_support_by_id_alone"],
+            }
+    return index
+
+
+def verify_index_references(
+    evidence_index,
+    *,
+    runtime_input=None,
+    source_snapshot=None,
+):
+    """Recheck catalogue integrity; external sources also recheck provenance.
+
+    Without external inputs the caller trusts the Python-built index, as in v1.
+    A digest is not a signature or proof that a supplied source is authentic.
+    """
+    version = evidence_index.get("schema_version")
+    if type(version) is not int or version not in {1, 2}:
+        raise ValueError("preflight_invalid_evidence_schema")
+    ids = [source["observation_id"] for source in evidence_index["sources"]]
+    if (
+        any(
+            not isinstance(ref, str) or not ref or ref.startswith("context:")
+            for ref in ids
+        )
+        or len(set(ids)) != len(ids)
+    ):
+        raise ValueError("preflight_invalid_observation_namespace")
+    if version == 1:
+        if "reference_context" in evidence_index:
+            raise ValueError("preflight_invalid_evidence_schema")
+        if runtime_input is not None or source_snapshot is not None:
+            if runtime_input is None or not isinstance(source_snapshot, dict):
+                raise ValueError("preflight_reference_external_sources_incomplete")
+            rebuilt = build_evidence_index(
+                source_snapshot["records"], runtime_observations(runtime_input),
+            )
+            if rebuilt != evidence_index:
+                raise ValueError("preflight_evidence_source_binding_mismatch")
+        return
+    if any(
+        source.get("source_type") != "observation"
+        or type(source.get("historical_only")) is not bool
+        or source.get("evidence_permissions") != {
+            "may_support": ["persisted_tool_observation_fields"],
+            "use_for_current_state": not source["historical_only"],
+            "cannot_establish": ["claim_semantic_support_by_id_alone"],
+        }
+        for source in evidence_index["sources"]
+    ):
+        raise ValueError("preflight_invalid_observation_type")
+    from scripts.preflight_evidence_refs import verify_reference_context
+
+    verify_reference_context(
+        evidence_index.get("reference_context"),
+        ids,
+        records=(
+            source_snapshot.get("records")
+            if isinstance(source_snapshot, dict) else None
+        ),
+        runtime_input=runtime_input,
+        source_snapshot=source_snapshot,
+    )
+    if runtime_input is not None and source_snapshot is not None:
+        rebuilt = build_evidence_index(
+            source_snapshot["records"],
+            runtime_observations(runtime_input),
+            runtime_input=runtime_input,
+            source_snapshot=source_snapshot,
+        )
+        if rebuilt != evidence_index:
+            raise ValueError("preflight_evidence_source_binding_mismatch")
 
 
 def build_authoritative_fact_view(evidence_index):
@@ -189,6 +287,7 @@ def build_authoritative_fact_view(evidence_index):
     A present null remains provided=True. No neighboring field is a fallback.
     Unsupported extraction is rejected rather than presented as trusted facts.
     """
+    verify_index_references(evidence_index)
     if not evidence_index["sources"] or any(
         source["extraction_status"] != "supported"
         for source in evidence_index["sources"]
@@ -208,11 +307,14 @@ def build_authoritative_fact_view(evidence_index):
         for raw_sample, sample in zip(original["samples"], source["samples"]):
             for key in ("value", "evaluated_at"):
                 sample[key] = field(raw_sample, key)
-    return {
-        "schema_version": 1,
+    view = {
+        "schema_version": evidence_index["schema_version"],
         "provenance": "preflight_authoritative_fact_view",
         "sources": sources,
     }
+    if "reference_context" in evidence_index:
+        view["reference_context"] = deepcopy(evidence_index["reference_context"])
+    return view
 
 
 def json_sha256(value):
@@ -220,15 +322,30 @@ def json_sha256(value):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def validate_model_answer(answer, evidence_index):
+def validate_model_answer(
+    answer,
+    evidence_index,
+    *,
+    runtime_input=None,
+    source_snapshot=None,
+):
     """Validate the claims contract, never natural-language truth or support."""
     errors = []
+    try:
+        verify_index_references(
+            evidence_index,
+            runtime_input=runtime_input,
+            source_snapshot=source_snapshot,
+        )
+    except (ValueError, TypeError, KeyError):
+        errors.append("invalid_reference_context")
     supported = bool(evidence_index["sources"]) and all(
         item["extraction_status"] == "supported"
         for item in evidence_index["sources"]
     )
     if not supported:
         errors.append("unsupported_evidence_index")
+    supported = supported and "invalid_reference_context" not in errors
 
     def unique_object(pairs):
         obj = {}
@@ -264,12 +381,21 @@ def validate_model_answer(answer, evidence_index):
         errors.append("invalid_claim_count")
     if isinstance(claims, list):
         expected = {item["observation_id"] for item in evidence_index["sources"]}
+        contexts = {}
+        if "invalid_reference_context" not in errors:
+            contexts = {
+                item["reference_id"]: item["source_type"]
+                for item in evidence_index.get("reference_context", {}).get(
+                    "context_sources", [],
+                )
+            }
         next_checks = 0
         text_length = 0
         for claim in claims:
-            if not isinstance(claim, dict) or set(claim) != {
-                "kind", "text", "observation_ids",
-            }:
+            if not isinstance(claim, dict) or set(claim) not in (
+                {"kind", "text", "observation_ids"},
+                {"kind", "text", "observation_ids", "context_refs"},
+            ):
                 errors.append("invalid_claim_structure")
                 continue
             kind = claim["kind"]
@@ -288,12 +414,34 @@ def validate_model_answer(answer, evidence_index):
             refs = claim["observation_ids"]
             if (
                 not isinstance(refs, list)
-                or not 1 <= len(refs) <= len(expected)
+                or len(refs) > len(expected)
                 or any(not isinstance(ref, str) or ref not in expected for ref in refs)
             ):
                 errors.append("invalid_claim_references")
             elif len(set(refs)) != len(refs):
                 errors.append("duplicate_claim_references")
+            context_refs = claim.get("context_refs", [])
+            if (
+                not isinstance(context_refs, list)
+                or (
+                    "context_refs" in claim
+                    and not 1 <= len(context_refs) <= len(contexts)
+                )
+                or any(
+                    not isinstance(ref, dict)
+                    or set(ref) != {"type", "id"}
+                    or not isinstance(ref["id"], str)
+                    or not isinstance(ref["type"], str)
+                    or ref["id"] not in contexts
+                    or contexts[ref["id"]] != ref["type"]
+                    for ref in context_refs
+                )
+            ):
+                errors.append("invalid_claim_context_references")
+            elif len({ref["id"] for ref in context_refs}) != len(context_refs):
+                errors.append("duplicate_claim_context_references")
+            if refs == [] and context_refs == []:
+                errors.append("invalid_claim_references")
         if next_checks > 3:
             errors.append("too_many_next_checks")
         if text_length > 2400:
@@ -301,6 +449,12 @@ def validate_model_answer(answer, evidence_index):
     return {
         "output_structure": "failed" if errors else "passed",
         "errors": errors,
+        "reference_source_check": (
+            "failed" if "invalid_reference_context" in errors
+            else "passed_external_rebuild"
+            if runtime_input is not None and source_snapshot is not None
+            else "trusted_index_internal_integrity_only"
+        ),
         "manual_reasoning_review": "required",
         "model_reasoning_correctness": "pending",
         "strict_acceptance": "failed" if errors else "pending",
@@ -362,9 +516,10 @@ def compose_preflight_report(
         seen = set()
         failed = False
         for row in review["claim_reviews"]:
-            if not isinstance(row, dict) or set(row) != {
-                "claim_index", "verdict", "reason", "observation_ids",
-            }:
+            if not isinstance(row, dict) or set(row) not in (
+                {"claim_index", "verdict", "reason", "observation_ids"},
+                {"claim_index", "verdict", "reason", "observation_ids", "context_refs"},
+            ):
                 raise ValueError("preflight_incomplete_reasoning_review")
             number = row["claim_index"]
             if (
@@ -376,6 +531,11 @@ def compose_preflight_report(
                 or not isinstance(row["reason"], str)
                 or not row["reason"].strip()
                 or row["observation_ids"] != model_claims[number]["observation_ids"]
+                or (
+                    ("context_refs" in row)
+                    != ("context_refs" in model_claims[number])
+                )
+                or row.get("context_refs") != model_claims[number].get("context_refs")
             ):
                 raise ValueError("preflight_incomplete_reasoning_review")
             seen.add(number)
@@ -399,6 +559,9 @@ def compose_preflight_report(
             "claims": deepcopy(model_claims),
             "mechanical_validation": mechanical,
             "mechanical_errors": deepcopy(validation["errors"]),
+            "reference_source_check": validation.get(
+                "reference_source_check", "not_recorded",
+            ),
             "manual_reasoning_review": "required",
             "semantic_review": semantic_review,
             "reasoning_review": deepcopy(reasoning_review),
@@ -507,7 +670,9 @@ class BoundedProvider:
         self.requests = 0
         self.real_requests = 0
         self.options = None
-        self.load_records = None
+        self.load_snapshot = None
+        self.source_snapshot = None
+        self.runtime_input = None
         self.evidence_index = None
         self.fact_view = None
         self.answer_validation = None
@@ -529,15 +694,25 @@ class BoundedProvider:
         if set(body) != {"model", "input", "instructions", "tools"}:
             raise ValueError("preflight_request_fields_not_allowed")
         body = deepcopy(body)
-        if self.load_records is not None:
+        if self.load_snapshot is not None:
             # The bootstrap version record and model reservation have already
             # committed. Read this request's actual persisted records now.
-            records = self.load_records()
+            self.source_snapshot = self.load_snapshot()
+            records = self.source_snapshot["records"]
+            self.runtime_input = deepcopy(body["input"])
             self.evidence_index = build_evidence_index(
                 records, runtime_observations(body["input"]),
+                runtime_input=self.runtime_input,
+                source_snapshot=self.source_snapshot,
+            )
+            verify_index_references(
+                self.evidence_index,
+                runtime_input=self.runtime_input,
+                source_snapshot=self.source_snapshot,
             )
             write_json(self.root, "evidence-index.json", self.evidence_index)
             write_json(self.root, "request-source-records.json", records)
+            write_json(self.root, "request-source-snapshot.json", self.source_snapshot)
             write_json(self.root, "runtime-input.json", body["input"])
             if any(
                 item["extraction_status"] != "supported"
@@ -594,6 +769,8 @@ class BoundedProvider:
             if self.evidence_index is not None:
                 self.answer_validation = validate_model_answer(
                     response.output_text, self.evidence_index,
+                    runtime_input=self.runtime_input,
+                    source_snapshot=self.source_snapshot,
                 )
                 if response.status != "completed":
                     self.answer_validation["output_structure"] = "failed"
@@ -694,9 +871,22 @@ def run_case(
     provider = BoundedProvider(sdk, root, live)
     manager = create_runtime(root, limits=limits)
     session = create_session(manager)
-    provider.load_records = lambda: deepcopy(manager.store.load_checkpoint(
-        manager.store.get(session.session_id),
-    )["records"])
+
+    def load_request_snapshot():
+        # Session identity and records must come from the same read transaction.
+        with manager.store.transaction() as db:
+            saved = manager.store.get(session.session_id, db)
+            checkpoint = manager.store.load_checkpoint(saved, db)
+            snapshot = {
+                "session_id": saved.session_id,
+                "checkpoint_id": saved.checkpoint_id,
+                "records": deepcopy(checkpoint["records"]),
+            }
+            if "identity" in checkpoint:
+                snapshot["identity"] = deepcopy(checkpoint["identity"])
+            return snapshot
+
+    provider.load_snapshot = load_request_snapshot
     # Import raw historical inputs, not invented model tool calls/outputs or
     # executions. The event and artifact record this provenance explicitly.
     with manager.store.transaction() as db:
@@ -821,7 +1011,7 @@ def main():
     args = parser.parse_args()
     if args.run_live != args.approve_paid_model_run:
         parser.error("paid mode requires both flags AND prior explicit human approval")
-    root = Path(tempfile.mkdtemp(prefix="incident-p53c2d-"))
+    root = Path(tempfile.mkdtemp(prefix="incident-p53c2e-"))
     # Supervise only our own child; terminate it on total deadline. Retain the
     # temp files (including request intent) after failure for manual inspection.
     code = (

@@ -222,6 +222,11 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     Checkpoint.model_validate(checkpoint)
     assert checkpoint["records"][:4] == read_json(root, "case.json")["records"]
     assert len(checkpoint["records"]) == 5
+    snapshot = read_json(root, "request-source-snapshot.json")
+    assert snapshot["records"] == checkpoint["records"]
+    assert snapshot["session_id"]
+    assert snapshot["checkpoint_id"]
+    assert snapshot["identity"] == checkpoint["identity"]
     version = checkpoint["records"][-1]
     assert version["name"] == "get_running_version"
     assert version["arguments"] == {"service": "order-service"}
@@ -301,6 +306,11 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
         if name != "citations"
     )
     events = read_json(root, "events.json")
+    assert any(
+        item["event_type"] == "checkpoint_saved"
+        and item["data"]["checkpoint_id"] == snapshot["checkpoint_id"]
+        for item in events
+    )
     assert sum(item["event_type"] == "model_reserved" for item in events) == 1
     assert sum(item["event_type"] == "tool_reserved" for item in events) == 1
     assert not any(
