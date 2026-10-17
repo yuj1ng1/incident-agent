@@ -1,4 +1,4 @@
-"""P5.3c.2c isolated preflight; default mode never constructs a network client.
+"""P5.3c.2d isolated preflight; default mode never constructs a network client.
 
 Paid mode requires explicit approval flags. No production entry
 point or background service is imported. Artifacts stay in a fresh OS temp dir.
@@ -7,7 +7,6 @@ import argparse
 from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
 import hashlib
 import importlib.metadata
 import json
@@ -34,20 +33,20 @@ MODEL_TIMEOUT_SECONDS = 30
 WALL_TIMEOUT_SECONDS = 90
 OFFLINE_ANSWER = "[离线传输占位回答；未调用真实模型，不证明模型理解指标。]"
 TASK = """
-复核固定历史案例。A/B 中重复数值不是独立佐证。本次以如下两部分 JSON
-替代通用报告，只输出一个可解析对象，不用代码围栏，不输出内部推理过程。
-第一部分 sources：覆盖 evidence_index 全部来源，每项仅含 observation_id、
-collected_at、has_evaluation_time（原始查询字段是否存在）、evaluation_time、
-status、samples。samples 每项仅含 metric、status、value、evaluated_at；
-无指标的来源用 []。时间逐字保留，原始缺失字段在回答中用 null，null 不是零。
-collected_at 只表示采集；evaluation_time 只表示查询目标；evaluated_at
-只归属于该具体样本，缺失时不继承查询或邻项时间。
-第二部分 conclusion：confirmed、time_comparison、missing_vs_zero、unconfirmed、
-next_checks 五个非空数组，每项仅含 text（简短中文）和 observation_ids（实际
-来源 ID 数组）。分别说明事实、可比及不可比时间、有效零与缺失、未确认根因、
-最多三项进一步取证方向。每项就近引用支持它的来源，不把历史当当前状态，
-不把 no_data 当服务不存在或恢复，不添加无基线支持的定性判断。
-conclusion 总计约 250～350 汉字；不复述整个索引，不执行工具或修复。
+复核所提供的历史证据。权威事实由 Python 根据 evidence_index 生成，
+模型只输出解释、局限、假设和取证建议，不再生成 sources 事实副本。
+只输出一个 JSON 对象，唯一顶层字段 claims 为 1～10 项数组，每项仅含
+kind、text、observation_ids。kind 只能为 confirmed、limitation、hypothesis、
+next_check；text 为简短中文，每项最多 600 字、总计最多 2400 字，建议总计
+约 250～350 汉字；next_check 最多三项进一步取证方向。observation_ids
+为非空、不重复的实际来源 ID 数组；引用存在不代表引用支持相应陈述。
+只解释证据关系，不复述 collected_at、evaluation_time、evaluated_at 或
+原始指标数值表。collected_at 只表示采集；evaluation_time 只表示查询目标；
+evaluated_at 只归属于具体样本，缺失时不继承查询或邻项时间。
+不将缺失字段当作存在，不把 no_data 当服务不存在或恢复，不把历史当当前状态，
+不将假设确认为根因，不添加无基线支持的流量高低、样本量或故障原因。
+重复观测不是独立佐证。每项就近引用支持它的来源，不能确认的推理保留不确定性。
+不用代码围栏，不输出内部推理过程，不执行工具或修复。
 """
 
 
@@ -184,13 +183,51 @@ def build_evidence_index(records, observations):
     }
 
 
-def validate_model_answer(answer, evidence_index):
-    """Check mechanical facts only. Never rewrite answers or grade reasoning."""
-    errors = []
-    if any(
-        item["extraction_status"] != "supported"
-        for item in evidence_index["sources"]
+def build_authoritative_fact_view(evidence_index):
+    """Project verified evidence only; provided=False explicitly means absent.
+
+    A present null remains provided=True. No neighboring field is a fallback.
+    Unsupported extraction is rejected rather than presented as trusted facts.
+    """
+    if not evidence_index["sources"] or any(
+        source["extraction_status"] != "supported"
+        for source in evidence_index["sources"]
     ):
+        raise ValueError("preflight_unsupported_evidence_shape")
+
+    def field(source, key):
+        return {
+            "provided": key in source,
+            "value": deepcopy(source[key]) if key in source else "未提供",
+        }
+
+    sources = deepcopy(evidence_index["sources"])
+    for original, source in zip(evidence_index["sources"], sources):
+        for key in ("evaluation_time", "evaluated_at"):
+            source[key] = field(original, key)
+        for raw_sample, sample in zip(original["samples"], source["samples"]):
+            for key in ("value", "evaluated_at"):
+                sample[key] = field(raw_sample, key)
+    return {
+        "schema_version": 1,
+        "provenance": "preflight_authoritative_fact_view",
+        "sources": sources,
+    }
+
+
+def json_sha256(value):
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def validate_model_answer(answer, evidence_index):
+    """Validate the claims contract, never natural-language truth or support."""
+    errors = []
+    supported = bool(evidence_index["sources"]) and all(
+        item["extraction_status"] == "supported"
+        for item in evidence_index["sources"]
+    )
+    if not supported:
         errors.append("unsupported_evidence_index")
 
     def unique_object(pairs):
@@ -204,122 +241,175 @@ def validate_model_answer(answer, evidence_index):
     def invalid_constant(value):
         raise ValueError("nonfinite_json_number")
 
-    def same(actual, expected):
-        if type(expected) in (int, float):
-            return (
-                type(actual) in (int, Decimal)
-                and (type(actual) is int or actual.is_finite())
-                and actual == Decimal(str(expected))
-            )
-        return type(actual) is type(expected) and actual == expected
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite_json_number")
+        return number
 
     try:
         parsed = json.loads(
-            answer, object_pairs_hook=unique_object, parse_constant=invalid_constant,
-            parse_float=Decimal,
+            answer,
+            object_pairs_hook=unique_object,
+            parse_constant=invalid_constant,
+            parse_float=finite_float,
         )
-    except (ValueError, TypeError, RecursionError, InvalidOperation):
+    except (ValueError, TypeError, RecursionError, OverflowError):
         parsed = None
         errors.append("invalid_json")
-    if not isinstance(parsed, dict) or set(parsed) != {"sources", "conclusion"}:
+    claims = parsed.get("claims") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or set(parsed) != {"claims"}:
         errors.append("invalid_root_structure")
-    else:
-        expected = {item["observation_id"]: item for item in evidence_index["sources"]}
-        rows = parsed["sources"]
-        seen = set()
-        if not isinstance(rows, list):
-            errors.append("sources_not_array")
-            rows = []
-        fields = {
-            "observation_id", "collected_at", "has_evaluation_time",
-            "evaluation_time", "status", "samples",
-        }
-        for row in rows:
-            if not isinstance(row, dict) or set(row) != fields:
-                errors.append("invalid_source_structure")
+    if not isinstance(claims, list) or not 1 <= len(claims) <= 10:
+        errors.append("invalid_claim_count")
+    if isinstance(claims, list):
+        expected = {item["observation_id"] for item in evidence_index["sources"]}
+        next_checks = 0
+        text_length = 0
+        for claim in claims:
+            if not isinstance(claim, dict) or set(claim) != {
+                "kind", "text", "observation_ids",
+            }:
+                errors.append("invalid_claim_structure")
                 continue
-            source_id = row["observation_id"]
-            if not isinstance(source_id, str) or source_id not in expected:
-                errors.append("unknown_observation_id")
-                continue
-            if source_id in seen:
-                errors.append("duplicate_observation_id")
-            seen.add(source_id)
-            source = expected[source_id]
-            facts = {
-                "collected_at": source["collected_at"],
-                "has_evaluation_time": "evaluation_time" in source,
-                "evaluation_time": source.get("evaluation_time"),
-                "status": source["status"],
-            }
-            for key, value in facts.items():
-                if not same(row[key], value):
-                    errors.append(f"{source_id}.{key}:mismatch")
-            samples = row["samples"]
-            wanted = {item["metric"]: item for item in source["samples"]}
-            found = set()
-            if not isinstance(samples, list):
-                errors.append(f"{source_id}.samples:not_array")
-                samples = []
-            for sample in samples:
-                if not isinstance(sample, dict) or set(sample) != {
-                    "metric", "status", "value", "evaluated_at",
-                }:
-                    errors.append(f"{source_id}.sample:invalid_structure")
-                    continue
-                metric = sample["metric"]
-                if (
-                    not isinstance(metric, str)
-                    or metric not in wanted
-                    or metric in found
-                ):
-                    errors.append(f"{source_id}.sample:unknown_or_duplicate_metric")
-                    continue
-                found.add(metric)
-                for key in ("status", "value", "evaluated_at"):
-                    if not same(sample[key], wanted[metric].get(key)):
-                        errors.append(f"{source_id}.{metric}.{key}:mismatch")
-            if found != set(wanted):
-                errors.append(f"{source_id}.samples:missing_metrics")
-        if seen != set(expected):
-            errors.append("missing_observation_ids")
-        conclusion = parsed["conclusion"]
-        sections = {
-            "confirmed", "time_comparison", "missing_vs_zero", "unconfirmed",
-            "next_checks",
-        }
-        if not isinstance(conclusion, dict) or set(conclusion) != sections:
-            errors.append("invalid_conclusion_structure")
-        else:
-            for section in sections:
-                statements = conclusion[section]
-                if not isinstance(statements, list) or not statements:
-                    errors.append(f"{section}:nonempty_array_required")
-                    continue
-                if section == "next_checks" and len(statements) > 3:
-                    errors.append("too_many_next_checks")
-                for statement in statements:
-                    if not isinstance(statement, dict) or set(statement) != {
-                        "text", "observation_ids",
-                    }:
-                        errors.append(f"{section}:invalid_statement")
-                        continue
-                    refs = statement["observation_ids"]
-                    if (
-                        not isinstance(statement["text"], str)
-                        or not statement["text"].strip()
-                    ):
-                        errors.append(f"{section}:empty_text")
-                    if not isinstance(refs, list) or not refs or any(
-                        not isinstance(ref, str) or ref not in expected for ref in refs
-                    ):
-                        errors.append(f"{section}:invalid_references")
+            kind = claim["kind"]
+            if not isinstance(kind, str) or kind not in {
+                "confirmed", "limitation", "hypothesis", "next_check",
+            }:
+                errors.append("invalid_claim_kind")
+            next_checks += kind == "next_check"
+            text = claim["text"]
+            if not isinstance(text, str) or not text.strip():
+                errors.append("empty_or_invalid_claim_text")
+            else:
+                text_length += len(text)
+                if len(text) > 600:
+                    errors.append("claim_text_too_long")
+            refs = claim["observation_ids"]
+            if (
+                not isinstance(refs, list)
+                or not 1 <= len(refs) <= len(expected)
+                or any(not isinstance(ref, str) or ref not in expected for ref in refs)
+            ):
+                errors.append("invalid_claim_references")
+            elif len(set(refs)) != len(refs):
+                errors.append("duplicate_claim_references")
+        if next_checks > 3:
+            errors.append("too_many_next_checks")
+        if text_length > 2400:
+            errors.append("total_claim_text_too_long")
     return {
-        "fact_check": "failed" if errors else "passed",
+        "output_structure": "failed" if errors else "passed",
         "errors": errors,
         "manual_reasoning_review": "required",
+        "model_reasoning_correctness": "pending",
         "strict_acceptance": "failed" if errors else "pending",
         "answer_rewritten": False,
+        "model_claims": deepcopy(claims),
+        "authoritative_facts_sha256": (
+            json_sha256(build_authoritative_fact_view(evidence_index))
+            if supported else None
+        ),
+    }
+
+
+def compose_preflight_report(
+    fact_view,
+    model_claims,
+    validation,
+    *,
+    runtime_completed=False,
+    reasoning_review=None,
+):
+    """Combine independent layers; passing structure never certifies reasoning.
+
+    Optional review is an explicit, evidence-based attestation bound to these
+    exact claims. This helper checks its completeness, not the review's truth.
+    It has no production acceptance or Incident-state authority.
+    """
+    if model_claims != validation.get("model_claims"):
+        raise ValueError("preflight_claims_validation_mismatch")
+    mechanical = validation["output_structure"]
+    expected_facts = validation.get("authoritative_facts_sha256")
+    actual_facts = json_sha256(fact_view) if fact_view is not None else None
+    fact_integrity = (
+        "passed" if expected_facts is not None and actual_facts == expected_facts
+        else "failed"
+    )
+    reasoning = "pending"
+    semantic_review = "pending_manual_review"
+    if reasoning_review is not None:
+        review = reasoning_review
+        digest = json_sha256(model_claims)
+        if (
+            mechanical != "passed"
+            or fact_integrity != "passed"
+            or not isinstance(review, dict)
+            or set(review) != {
+                "reviewer", "method", "claims_sha256",
+                "authoritative_facts_sha256", "claim_reviews",
+            }
+            or not isinstance(review["reviewer"], str)
+            or not review["reviewer"].strip()
+            or not isinstance(review["method"], str)
+            or review["method"] not in {"human", "independent_evidence_review"}
+            or review["claims_sha256"] != digest
+            or review["authoritative_facts_sha256"] != actual_facts
+            or not isinstance(review["claim_reviews"], list)
+            or len(review["claim_reviews"]) != len(model_claims)
+        ):
+            raise ValueError("preflight_incomplete_reasoning_review")
+        seen = set()
+        failed = False
+        for row in review["claim_reviews"]:
+            if not isinstance(row, dict) or set(row) != {
+                "claim_index", "verdict", "reason", "observation_ids",
+            }:
+                raise ValueError("preflight_incomplete_reasoning_review")
+            number = row["claim_index"]
+            if (
+                type(number) is not int
+                or not 0 <= number < len(model_claims)
+                or number in seen
+                or not isinstance(row["verdict"], str)
+                or row["verdict"] not in {"passed", "failed"}
+                or not isinstance(row["reason"], str)
+                or not row["reason"].strip()
+                or row["observation_ids"] != model_claims[number]["observation_ids"]
+            ):
+                raise ValueError("preflight_incomplete_reasoning_review")
+            seen.add(number)
+            failed |= row["verdict"] == "failed"
+        reasoning = "failed" if failed else "passed"
+        suffix = (
+            "manual_review" if review["method"] == "human" else "independent_review"
+        )
+        semantic_review = f"{reasoning}_{suffix}"
+    runtime = "passed" if runtime_completed else "failed"
+    states = (runtime, fact_integrity, mechanical, reasoning)
+    overall = (
+        "failed" if "failed" in states
+        else "passed" if all(state == "passed" for state in states)
+        else "pending"
+    )
+    return {
+        "scope": "independent_preflight_only",
+        "authoritative_facts": deepcopy(fact_view),
+        "model_interpretation": {
+            "claims": deepcopy(model_claims),
+            "mechanical_validation": mechanical,
+            "mechanical_errors": deepcopy(validation["errors"]),
+            "manual_reasoning_review": "required",
+            "semantic_review": semantic_review,
+            "reasoning_review": deepcopy(reasoning_review),
+        },
+        "acceptance": {
+            "runtime_investigation": runtime,
+            "authoritative_fact_integrity": fact_integrity,
+            "model_output_structure": mechanical,
+            "model_reasoning_correctness": reasoning,
+            "overall_strict_acceptance": overall,
+        },
     }
 
 
@@ -419,6 +509,7 @@ class BoundedProvider:
         self.options = None
         self.load_records = None
         self.evidence_index = None
+        self.fact_view = None
         self.answer_validation = None
         self.deadline = time.monotonic() + WALL_TIMEOUT_SECONDS
 
@@ -453,6 +544,8 @@ class BoundedProvider:
                 for item in self.evidence_index["sources"]
             ):
                 raise ValueError("preflight_unsupported_evidence_shape")
+            self.fact_view = build_authoritative_fact_view(self.evidence_index)
+            write_json(self.root, "authoritative-facts.json", self.fact_view)
             body["input"].append({
                 "role": "user",
                 "content": json.dumps({
@@ -497,12 +590,13 @@ class BoundedProvider:
             clean = redact_credential(serialized)
             if clean != serialized:
                 response = type(response).model_validate_json(clean)
+            write_text(self.root, "answer-original.txt", response.output_text)
             if self.evidence_index is not None:
                 self.answer_validation = validate_model_answer(
                     response.output_text, self.evidence_index,
                 )
                 if response.status != "completed":
-                    self.answer_validation["fact_check"] = "failed"
+                    self.answer_validation["output_structure"] = "failed"
                     self.answer_validation["strict_acceptance"] = "failed"
                     self.answer_validation["errors"].append("response_not_completed")
                 write_json(self.root, "answer-validation.json", self.answer_validation)
@@ -633,6 +727,26 @@ def run_case(
     checkpoint = manager.store.load_checkpoint(saved)
     write_json(root, "checkpoint.json", checkpoint)
     write_json(root, "events.json", manager.store.events(saved.session_id, limit=1000))
+    validation = provider.answer_validation or {
+        "output_structure": "failed",
+        "errors": ["model_response_not_available"],
+        "model_claims": None,
+        "authoritative_facts_sha256": (
+            json_sha256(provider.fact_view) if provider.fact_view is not None else None
+        ),
+    }
+    report = compose_preflight_report(
+        provider.fact_view,
+        validation["model_claims"],
+        validation,
+        runtime_completed=saved.status.value == "COMPLETED",
+    )
+    # Preserve malformed JSON too; parsed claims alone cannot represent it.
+    answer_path = root / "answer-original.txt"
+    report["model_interpretation"]["raw_answer"] = (
+        answer_path.read_text(encoding="utf-8") if answer_path.is_file() else None
+    )
+    write_json(root, "preflight-report.json", report)
     summary = {
         "mode": "paid" if live else "offline_preflight",
         "model": MODEL,
@@ -653,15 +767,10 @@ def run_case(
         "packages": {name: importlib.metadata.version(name) for name in (
             "openai", "httpx2", "pydantic", "python-dotenv", "pytest"
         )},
-        "manual_reasoning_review": "pending" if live else "not_run",
-        "structured_fact_check": (
-            provider.answer_validation["fact_check"]
-            if provider.answer_validation else "not_available"
-        ),
-        "strict_acceptance": (
-            provider.answer_validation["strict_acceptance"]
-            if provider.answer_validation else "failed"
-        ),
+        "manual_reasoning_review": "required",
+        "acceptance": report["acceptance"],
+        "strict_acceptance": report["acceptance"]["overall_strict_acceptance"],
+        "cli_exit_does_not_certify_reasoning": True,
         "production_data_used": False,
         "prometheus_used": False,
         "remediation_planner": None,
@@ -712,7 +821,7 @@ def main():
     args = parser.parse_args()
     if args.run_live != args.approve_paid_model_run:
         parser.error("paid mode requires both flags AND prior explicit human approval")
-    root = Path(tempfile.mkdtemp(prefix="incident-p53c2c-"))
+    root = Path(tempfile.mkdtemp(prefix="incident-p53c2d-"))
     # Supervise only our own child; terminate it on total deadline. Retain the
     # temp files (including request intent) after failure for manual inspection.
     code = (
@@ -758,8 +867,13 @@ def main():
     summary = json.loads(path.read_text(encoding="utf-8"))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     complete = summary["session_status"] == "COMPLETED"
-    facts_valid = not args.run_live or summary["structured_fact_check"] == "passed"
-    return 0 if complete and facts_valid else 2
+    checks = summary["acceptance"]
+    mechanical_valid = not args.run_live or (
+        checks["model_output_structure"] == "passed"
+        and checks["authoritative_fact_integrity"] == "passed"
+    )
+    # Semantic review is a separate explicit artifact, never implied by exit 0.
+    return 0 if complete and mechanical_valid else 2
 
 
 if __name__ == "__main__":

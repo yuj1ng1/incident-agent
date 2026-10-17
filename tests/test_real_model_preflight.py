@@ -209,7 +209,7 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert summary["provider_request_entries"] == 1
     assert summary["runtime_model_reservations"] == 1
     assert summary["tool_executions"] == 1
-    assert summary["manual_reasoning_review"] == "not_run"
+    assert summary["manual_reasoning_review"] == "required"
     assert summary["production_data_used"] is False
     assert summary["prometheus_used"] is False
     assert summary["remediation_planner"] is None
@@ -243,7 +243,7 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert body["reasoning"] == {"effort": "none"}
     assert body["tool_choice"] == "none"
     assert preflight.TASK in body["instructions"]
-    assert "conclusion 总计约 250～350 汉字" in body["instructions"]
+    assert "约 250～350 汉字" in body["instructions"]
     assert "最多三项进一步取证方向" in body["instructions"]
     assert "缺失时不继承查询或邻项时间" in body["instructions"]
     assert len(json.dumps(body, ensure_ascii=False).encode()) <= 98304
@@ -319,21 +319,21 @@ def test_generic_task_rules_reach_request_without_case_answers(
     task = preflight.TASK
     assert task in body["instructions"]
     required_rules = (
-        "覆盖 evidence_index 全部来源",
-        "has_evaluation_time（原始查询字段是否存在）",
-        "原始缺失字段在回答中用 null，null 不是零",
+        "不再生成 sources 事实副本",
+        "唯一顶层字段 claims",
+        "引用存在不代表引用支持相应陈述",
         "collected_at 只表示采集",
         "evaluation_time 只表示查询目标",
-        "只归属于该具体样本，缺失时不继承查询或邻项时间",
+        "缺失时不继承查询或邻项时间",
         "不把历史当当前状态",
         "不把 no_data 当服务不存在或恢复",
-        "不添加无基线支持的定性判断",
+        "不添加无基线支持的流量高低、样本量或故障原因",
     )
     assert all(rule in body["instructions"] for rule in required_rules)
     assert not any(f"{number}. " in task for number in range(1, 11))
-    for field in ("confirmed", "time_comparison", "missing_vs_zero", "unconfirmed", "next_checks"):
+    for field in ("confirmed", "limitation", "hypothesis", "next_check"):
         assert field in task
-    assert "conclusion 总计约 250～350 汉字" in task
+    assert "约 250～350 汉字" in task
     assert re.search(r"\d{4}-\d{2}-\d{2}", task) is None
     case = read_json(tmp_path, "case.json")
     assert all(item["observation_id"] not in task for item in case["records"])
@@ -453,7 +453,7 @@ def test_completed_answers_keep_raw_text_and_require_semantic_review(
     saved_answer = checkpoint["result"]["answer"]
     review = review_citations(saved_answer, checkpoint["records"])
     assert summary["session_status"] == "COMPLETED"
-    assert summary["manual_reasoning_review"] == "pending"
+    assert summary["manual_reasoning_review"] == "required"
     assert review["citation_check"] == expected_citations
     assert review["semantic_review"] == "required"
     assert review["strict_acceptance"] == expected_acceptance
@@ -485,7 +485,7 @@ def test_injected_sdk_keeps_raw_output_and_exact_evidence_references(
     summary = preflight.run_case(tmp_path, live=True, sdk=sdk)
     assert summary["session_status"] == "COMPLETED"
     assert summary["real_model_api_requests"] == 1
-    assert summary["manual_reasoning_review"] == "pending"
+    assert summary["manual_reasoning_review"] == "required"
     sdk.with_options.assert_called_once_with(max_retries=0, timeout=30)
     sdk.responses.with_raw_response.create.assert_called_once()
     sdk.close.assert_called_once()

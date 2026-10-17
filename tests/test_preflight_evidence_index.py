@@ -1,6 +1,7 @@
-"""P5.3c.2c deterministic evidence delivery, using only Mock Providers."""
+"""P5.3c.2d authoritative facts and model claims, using only Mock Providers."""
 from copy import deepcopy
 from datetime import timedelta
+import hashlib
 import importlib
 import json
 from types import SimpleNamespace
@@ -56,30 +57,14 @@ def delivered(preflight, tmp_path):
 
 
 def answer_from_index(index):
-    """The expected fields are local test data, never a model input rubric."""
+    """Use real references without copying the Python-owned facts into claims."""
     source_ids = [item["observation_id"] for item in index["sources"]]
-    conclusion = {
-        key: [{"text": "此项解释仍须人工复核。", "observation_ids": source_ids}]
-        for key in (
-            "confirmed", "time_comparison", "missing_vs_zero", "unconfirmed",
-            "next_checks",
-        )
-    }
     return {
-        "sources": [{
-            "observation_id": item["observation_id"],
-            "collected_at": item["collected_at"],
-            "has_evaluation_time": "evaluation_time" in item,
-            "evaluation_time": item.get("evaluation_time"),
-            "status": item["status"],
-            "samples": [{
-                "metric": sample["metric"],
-                "status": sample["status"],
-                "value": sample.get("value"),
-                "evaluated_at": sample.get("evaluated_at"),
-            } for sample in item["samples"]],
-        } for item in index["sources"]],
-        "conclusion": conclusion,
+        "claims": [{
+            "kind": "limitation",
+            "text": "此项解释仍须人工复核。",
+            "observation_ids": source_ids,
+        }],
     }
 
 
@@ -91,10 +76,38 @@ def validate(preflight, answer, index):
 
 
 def assert_failed(review):
-    assert review["fact_check"] == "failed"
+    assert review["output_structure"] == "failed"
     assert review["errors"]
     assert review["manual_reasoning_review"] == "required"
+    assert review["model_reasoning_correctness"] == "pending"
     assert review["strict_acceptance"] == "failed"
+    assert review["answer_rewritten"] is False
+
+
+def reasoning_review_for(
+    claims,
+    facts,
+    *,
+    verdict="passed",
+    method="human",
+):
+    """Mock review attestation, not evidence that a reviewer is correct."""
+    return {
+        "reviewer": "offline-test-reviewer",
+        "method": method,
+        "claims_sha256": hashlib.sha256(json.dumps(
+            claims, ensure_ascii=False, sort_keys=True, allow_nan=False,
+        ).encode("utf-8")).hexdigest(),
+        "authoritative_facts_sha256": hashlib.sha256(json.dumps(
+            facts, ensure_ascii=False, sort_keys=True, allow_nan=False,
+        ).encode("utf-8")).hexdigest(),
+        "claim_reviews": [{
+            "claim_index": number,
+            "verdict": verdict,
+            "reason": "逐项审查记录；测试只核对记录的绑定与完整性。",
+            "observation_ids": deepcopy(claim["observation_ids"]),
+        } for number, claim in enumerate(claims)],
+    }
 
 
 def test_real_mock_runtime_indexes_all_five_persisted_sources(
@@ -292,90 +305,252 @@ def test_raw_and_runtime_source_mismatch_refuses_an_index(
         preflight.build_evidence_index(records, observations)
 
 
-def test_exact_structured_fields_pass_only_mechanical_review(preflight, delivered):
+def test_authoritative_fact_view_is_mechanically_reversible_and_read_only(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    original = deepcopy(index)
+    view = preflight.build_authoritative_fact_view(index)
+    assert view["schema_version"] == 1
+    assert view["provenance"] == "preflight_authoritative_fact_view"
+    assert len(view["sources"]) == len(index["sources"]) == 5
+    for shown, source in zip(view["sources"], index["sources"]):
+        assert shown["observation_id"] == source["observation_id"]
+        for field in (
+            "name", "collected_at", "status", "historical_only", "data_missing",
+            "extraction_status",
+        ):
+            assert shown[field] == source[field]
+        for field in ("evaluation_time", "evaluated_at"):
+            assert shown[field] == {
+                "provided": field in source,
+                "value": source.get(field, "未提供"),
+            }
+        assert len(shown["samples"]) == len(source["samples"])
+        for displayed, sample in zip(shown["samples"], source["samples"]):
+            assert displayed["metric"] == sample["metric"]
+            assert displayed["status"] == sample["status"]
+            for field in ("value", "evaluated_at"):
+                assert displayed[field] == {
+                    "provided": field in sample,
+                    "value": sample.get(field, "未提供"),
+                }
+    assert index == original
+    view["sources"][0]["samples"][0]["value"]["value"] = "mutated-display-only"
+    assert index == original
+
+
+def test_fact_view_preserves_five_independent_collection_times(
+    preflight,
+    delivered,
+):
+    body, records, _ = delivered
+    records = deepcopy(records)
+    observations = deepcopy(list(request_observations(body).values()))
+    for number, record in enumerate(records):
+        record["collected_at"] = (COLLECTED + timedelta(days=number)).isoformat()
+        next(
+            item for item in observations
+            if item["observation_id"] == record["observation_id"]
+        )["collected_at"] = record["collected_at"]
+    index = preflight.build_evidence_index(records, observations)
+    view = preflight.build_authoritative_fact_view(index)
+    assert len({item["collected_at"] for item in view["sources"]}) == 5
+    assert {
+        item["observation_id"]: item["collected_at"] for item in view["sources"]
+    } == {
+        item["observation_id"]: item["collected_at"] for item in records
+    }
+
+
+def test_fact_view_distinguishes_sample_and_query_time_without_inheritance(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    view = preflight.build_authoritative_fact_view(index)
+    instant = [item for item in view["sources"] if item["name"] == "query_metrics"]
+    assert len(instant) == 2
+    for source in instant:
+        assert source["evaluation_time"] == {"provided": False, "value": "未提供"}
+        assert source["evaluated_at"]["provided"] is True
+        assert source["samples"][0]["evaluated_at"] == source["evaluated_at"]
+    aligned = next(
+        item for item in view["sources"]
+        if item["name"] == "query_metrics_aligned" and item["status"] == "incomplete"
+    )
+    assert aligned["evaluation_time"] == {
+        "provided": True,
+        "value": LATER.isoformat(),
+    }
+    missing = next(
+        item for item in aligned["samples"] if item["metric"] == "http_5xx_rate"
+    )
+    zero = next(
+        item for item in aligned["samples"] if item["metric"] == "http_request_rate"
+    )
+    assert missing["status"] == "no_data"
+    assert missing["value"] == {"provided": False, "value": "未提供"}
+    assert missing["evaluated_at"] == {"provided": False, "value": "未提供"}
+    assert zero["status"] == "ok"
+    assert zero["value"] == {"provided": True, "value": 0.0}
+    assert zero["evaluated_at"] == {"provided": True, "value": LATER.isoformat()}
+    version = next(
+        item for item in view["sources"] if item["name"] == "get_running_version"
+    )
+    assert version["collected_at"]
+    assert version["status"] == "no_data"
+    assert version["evaluation_time"] == {"provided": False, "value": "未提供"}
+    assert version["evaluated_at"] == {"provided": False, "value": "未提供"}
+    assert version["samples"] == []
+
+
+def test_unsupported_index_cannot_be_presented_as_authoritative_facts(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    index = deepcopy(index)
+    index["sources"][0]["extraction_status"] = "unsupported"
+    original = deepcopy(index)
+    with pytest.raises(ValueError, match="preflight_unsupported_evidence_shape"):
+        preflight.build_authoritative_fact_view(index)
+    assert index == original
+    assert_failed(validate(preflight, answer_from_index(index), index))
+
+
+def test_claims_only_contract_passes_mechanical_review_without_fact_copy(
+    preflight,
+    delivered,
+):
     _, _, index = delivered
     answer = answer_from_index(index)
     review = validate(preflight, answer, index)
-    assert review["fact_check"] == "passed"
+    assert set(answer) == {"claims"}
+    assert set(answer["claims"][0]) == {"kind", "text", "observation_ids"}
+    assert review["output_structure"] == "passed"
     assert review["errors"] == []
     assert review["manual_reasoning_review"] == "required"
+    assert review["model_reasoning_correctness"] == "pending"
+    assert review["strict_acceptance"] == "pending"
+    assert review["model_claims"] == answer["claims"]
+    assert review["answer_rewritten"] is False
+    facts = preflight.build_authoritative_fact_view(index)
+    assert review["authoritative_facts_sha256"] == hashlib.sha256(json.dumps(
+        facts, ensure_ascii=False, sort_keys=True, allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("kind", ["confirmed", "limitation", "hypothesis", "next_check"])
+def test_each_permitted_claim_kind_is_accepted_mechanically(
+    preflight,
+    delivered,
+    kind,
+):
+    _, _, index = delivered
+    answer = answer_from_index(index)
+    answer["claims"][0]["kind"] = kind
+    review = validate(preflight, answer, index)
+    assert review["output_structure"] == "passed"
+    assert review["strict_acceptance"] == "pending"
+
+
+def test_claim_count_text_and_next_check_limits_accept_the_exact_boundary(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    references = [item["observation_id"] for item in index["sources"]]
+    answer = {"claims": [{
+        "kind": "next_check" if number < 3 else "limitation",
+        "text": "界" * 240,
+        "observation_ids": references,
+    } for number in range(10)]}
+    review = validate(preflight, answer, index)
+    assert review["output_structure"] == "passed"
     assert review["strict_acceptance"] == "pending"
 
 
 @pytest.mark.parametrize("mutation", [
-    "unified_collection_date", "invented_version_query_time",
-    "invented_missing_sample_time",
-    "missing_sample_zero", "omitted_source", "fabricated_source", "duplicate_source",
-    "missing_source_field", "wrong_status", "wrong_query_presence", "wrong_valid_value",
-    "boolean_as_number", "missing_sample", "duplicate_sample", "invented_sample",
-    "missing_conclusion", "empty_conclusion", "unknown_conclusion_reference",
-    "missing_conclusion_reference", "too_many_next_checks",
+    "sources_copy", "legacy_conclusion", "missing_claims", "empty_claims",
+    "claims_not_array", "claim_not_object", "unknown_kind", "kind_not_string",
+    "missing_kind",
+    "missing_text", "empty_text", "whitespace_text", "text_not_string",
+    "extra_claim_field", "fabricated_source", "empty_references",
+    "references_not_array", "reference_not_string", "duplicate_reference",
+    "too_many_references", "too_many_claims", "too_many_next_checks",
+    "too_long_claim", "too_long_total",
 ])
-def test_structured_field_and_reference_errors_fail_acceptance(
+def test_claim_structure_and_reference_errors_fail_acceptance(
     preflight,
     delivered,
     mutation,
 ):
     _, _, index = delivered
     answer = answer_from_index(index)
-    version = next(item for item in answer["sources"] if not item["samples"])
-    aligned = next(
-        item for item in answer["sources"]
-        if any(sample["status"] == "no_data" for sample in item["samples"])
-    )
-    missing = next(item for item in aligned["samples"] if item["status"] == "no_data")
-    valid = next(item for item in aligned["samples"] if item["status"] == "ok")
-    if mutation == "unified_collection_date":
-        version["collected_at"] = answer["sources"][0]["collected_at"]
-    elif mutation == "invented_version_query_time":
-        version.update(has_evaluation_time=True, evaluation_time=AT.isoformat())
-    elif mutation == "invented_missing_sample_time":
-        missing["evaluated_at"] = aligned["evaluation_time"]
-    elif mutation == "missing_sample_zero":
-        missing["value"] = 0.0
-    elif mutation == "omitted_source":
-        answer["sources"].remove(version)
+    claim = answer["claims"][0]
+    if mutation == "sources_copy":
+        answer["sources"] = deepcopy(index["sources"])
+    elif mutation == "legacy_conclusion":
+        answer["conclusion"] = {"confirmed": []}
+    elif mutation == "missing_claims":
+        del answer["claims"]
+    elif mutation == "empty_claims":
+        answer["claims"] = []
+    elif mutation == "claims_not_array":
+        answer["claims"] = {}
+    elif mutation == "claim_not_object":
+        answer["claims"][0] = "unstructured explanation"
+    elif mutation == "unknown_kind":
+        claim["kind"] = "root_cause_confirmed"
+    elif mutation == "kind_not_string":
+        claim["kind"] = []
+    elif mutation == "missing_kind":
+        del claim["kind"]
+    elif mutation == "missing_text":
+        del claim["text"]
+    elif mutation == "empty_text":
+        claim["text"] = ""
+    elif mutation == "whitespace_text":
+        claim["text"] = "   "
+    elif mutation == "text_not_string":
+        claim["text"] = 12
+    elif mutation == "extra_claim_field":
+        claim["evaluation_time"] = AT.isoformat()
     elif mutation == "fabricated_source":
-        version["observation_id"] = "obs-not-provided-to-this-request"
-    elif mutation == "duplicate_source":
-        answer["sources"].append(deepcopy(version))
-    elif mutation == "missing_source_field":
-        del version["collected_at"]
-    elif mutation == "wrong_status":
-        version["status"] = "ok"
-    elif mutation == "wrong_query_presence":
-        aligned["has_evaluation_time"] = False
-    elif mutation == "wrong_valid_value":
-        valid["value"] = 999
-    elif mutation == "boolean_as_number":
-        valid["value"] = False
-    elif mutation == "missing_sample":
-        aligned["samples"].remove(missing)
-    elif mutation == "duplicate_sample":
-        aligned["samples"].append(deepcopy(missing))
-    elif mutation == "invented_sample":
-        version["samples"].append({
-            "metric": "invented", "status": "ok", "value": 0.0, "evaluated_at": None,
-        })
-    elif mutation == "missing_conclusion":
-        del answer["conclusion"]
-    elif mutation == "empty_conclusion":
-        answer["conclusion"]["confirmed"] = []
-    elif mutation == "unknown_conclusion_reference":
-        answer["conclusion"]["confirmed"][0]["observation_ids"] = ["obs-fabricated"]
-    elif mutation == "missing_conclusion_reference":
-        answer["conclusion"]["confirmed"][0]["observation_ids"] = []
+        claim["observation_ids"] = ["obs-not-provided-to-this-request"]
+    elif mutation == "empty_references":
+        claim["observation_ids"] = []
+    elif mutation == "references_not_array":
+        claim["observation_ids"] = claim["observation_ids"][0]
+    elif mutation == "reference_not_string":
+        claim["observation_ids"] = [None]
+    elif mutation == "duplicate_reference":
+        claim["observation_ids"] *= 2
+    elif mutation == "too_many_references":
+        claim["observation_ids"] += ["fabricated-extra-source"]
+    elif mutation == "too_many_claims":
+        answer["claims"] *= 11
+    elif mutation == "too_many_next_checks":
+        claim["kind"] = "next_check"
+        answer["claims"] *= 4
+    elif mutation == "too_long_claim":
+        claim["text"] = "界" * 601
     else:
-        answer["conclusion"]["next_checks"] *= 4
-    assert_failed(validate(preflight, answer, index))
+        claim["text"] = "界" * 600
+        answer["claims"] *= 5
+    original = deepcopy(answer)
+    review = validate(preflight, answer, index)
+    assert_failed(review)
+    assert review["model_claims"] == answer.get("claims")
+    assert answer == original
 
 
 @pytest.mark.parametrize("invalid", [
-    "{", "[]", "null", "{}", '{"sources":[],"conclusion":{}}',
-    '{"sources":[],"sources":[],"conclusion":{}}',
-    '{"sources":NaN,"conclusion":{}}',
-    '{"sources":Infinity,"conclusion":{}}',
-    '{"sources":-Infinity,"conclusion":{}}',
+    "{", "[]", "null", "{}", '{"claims":[],"claims":[]}',
+    '{"claims":NaN}', '{"claims":Infinity}', '{"claims":-Infinity}',
+    '{"claims":[{"kind":"limitation","text":"incomplete"}',
 ])
 def test_invalid_duplicate_or_nonfinite_json_is_rejected(
     preflight,
@@ -386,62 +561,285 @@ def test_invalid_duplicate_or_nonfinite_json_is_rejected(
     assert_failed(validate(preflight, invalid, index))
 
 
-def test_duplicate_key_in_otherwise_correct_answer_is_rejected(
+def test_duplicate_key_inside_otherwise_valid_claim_is_rejected(
     preflight,
     delivered,
-):
-    _, _, index = delivered
-    answer = answer_from_index(index)
-    text = json.dumps(answer, ensure_ascii=False)
-    duplicate = '{"sources": ' + json.dumps(answer["sources"]) + ", " + text[1:]
-    assert json.loads(duplicate) == answer
-    assert_failed(validate(preflight, duplicate, index))
-
-
-@pytest.mark.parametrize("nonnumeric", [float("nan"), float("inf"), -float("inf")])
-def test_nonfinite_sample_values_are_rejected_after_json_parsing(
-    preflight,
-    delivered,
-    nonnumeric,
-):
-    _, _, index = delivered
-    answer = answer_from_index(index)
-    sample = next(
-        sample for item in answer["sources"] for sample in item["samples"]
-        if sample["status"] == "ok"
-    )
-    sample["value"] = nonnumeric
-    assert_failed(validate(preflight, json.dumps(answer), index))
-
-
-def test_wrong_huge_integer_is_rejected_without_validator_overflow(
-    preflight,
-    delivered,
-):
-    _, _, index = delivered
-    answer = answer_from_index(index)
-    sample = next(
-        sample for item in answer["sources"] for sample in item["samples"]
-        if sample["status"] == "ok"
-    )
-    sample["value"] = 10 ** 500
-    assert_failed(validate(preflight, answer, index))
-
-
-@pytest.mark.parametrize("number", ["1e-999", "1e999", "false"])
-def test_nonzero_underflow_large_exponent_or_boolean_cannot_equal_valid_zero(
-    preflight,
-    delivered,
-    number,
 ):
     _, _, index = delivered
     answer = json.dumps(answer_from_index(index), ensure_ascii=False)
-    assert '"value": 0.0' in answer
-    corrupted = answer.replace('"value": 0.0', f'"value": {number}', 1)
-    assert_failed(validate(preflight, corrupted, index))
+    duplicate = answer.replace(
+        '"kind": "limitation"', '"kind": "confirmed", "kind": "limitation"', 1,
+    )
+    assert json.loads(duplicate) == json.loads(answer)
+    assert_failed(validate(preflight, duplicate, index))
 
 
-def test_field_correct_but_wrong_narrative_remains_pending_and_unmodified(
+@pytest.mark.parametrize("wrong_text", [
+    "此样本的查询级 evaluation_time 明确是 1900-01-01T00:00:00+00:00。",
+    "版本探测 no_data 已证明业务服务不存在。",
+    "历史数据已经证明当前业务恢复。",
+    "已经确认数据库连接耗尽是故障根因，无须追加证据。",
+    "该请求量很高且样本量充分，足以确认容量不足。",
+])
+def test_real_reference_does_not_make_wrong_reasoning_correct_or_mutate_facts(
+    preflight,
+    delivered,
+    wrong_text,
+):
+    _, records, index = delivered
+    source = next(item for item in index["sources"] if item["name"] == "query_metrics")
+    answer = {"claims": [{
+        "kind": "confirmed",
+        "text": wrong_text,
+        "observation_ids": [source["observation_id"]],
+    }]}
+    raw_answer = json.dumps(answer, ensure_ascii=False)
+    originals = deepcopy(records), deepcopy(index), raw_answer
+    facts = preflight.build_authoritative_fact_view(index)
+    original_facts = deepcopy(facts)
+    review = preflight.validate_model_answer(raw_answer, index)
+    assert review["output_structure"] == "passed"
+    assert review["manual_reasoning_review"] == "required"
+    assert review["model_reasoning_correctness"] == "pending"
+    assert review["strict_acceptance"] == "pending"
+    report = preflight.compose_preflight_report(
+        facts, review["model_claims"], review, runtime_completed=True,
+    )
+    assert report["authoritative_facts"] == original_facts
+    displayed = next(
+        item for item in report["authoritative_facts"]["sources"]
+        if item["observation_id"] == source["observation_id"]
+    )
+    assert displayed["evaluation_time"] == {"provided": False, "value": "未提供"}
+    assert displayed["evaluated_at"]["provided"] is True
+    assert report["model_interpretation"]["claims"] == answer["claims"]
+    assert report["model_interpretation"]["semantic_review"] == "pending_manual_review"
+    assert report["acceptance"]["model_reasoning_correctness"] == "pending"
+    assert report["acceptance"]["overall_strict_acceptance"] == "pending"
+    assert (records, index, raw_answer) == originals
+    assert facts == original_facts
+
+
+def test_preflight_report_separates_runtime_facts_structure_and_reasoning(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    review = validate(preflight, answer_from_index(index), index)
+    report = preflight.compose_preflight_report(
+        facts, review["model_claims"], review, runtime_completed=True,
+    )
+    assert report["authoritative_facts"] == facts
+    assert report["model_interpretation"]["mechanical_validation"] == "passed"
+    assert report["model_interpretation"]["semantic_review"] == "pending_manual_review"
+    assert report["model_interpretation"]["reasoning_review"] is None
+    assert report["acceptance"] == {
+        "runtime_investigation": "passed",
+        "authoritative_fact_integrity": "passed",
+        "model_output_structure": "passed",
+        "model_reasoning_correctness": "pending",
+        "overall_strict_acceptance": "pending",
+    }
+
+
+@pytest.mark.parametrize("failure", ["runtime", "structure"])
+def test_report_cannot_pass_when_runtime_or_output_structure_failed(
+    preflight,
+    delivered,
+    failure,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    answer = answer_from_index(index)
+    if failure == "structure":
+        answer["claims"][0]["observation_ids"] = ["fabricated-source"]
+    review = validate(preflight, answer, index)
+    report = preflight.compose_preflight_report(
+        facts, review["model_claims"], review, runtime_completed=failure != "runtime",
+    )
+    assert report["acceptance"]["overall_strict_acceptance"] == "failed"
+    assert report["acceptance"]["authoritative_fact_integrity"] == "passed"
+    assert report["acceptance"]["model_reasoning_correctness"] == "pending"
+    assert report["model_interpretation"]["claims"] == answer["claims"]
+
+
+def test_failed_manual_review_retains_wrong_claim_and_authoritative_facts(
+    preflight,
+    delivered,
+):
+    _, records, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    source = next(item for item in index["sources"] if item["name"] == "query_metrics")
+    answer = {"claims": [{
+        "kind": "confirmed",
+        "text": "该来源的查询级 evaluation_time 已提供，且历史数据证明当前恢复。",
+        "observation_ids": [source["observation_id"]],
+    }]}
+    validation = validate(preflight, answer, index)
+    attestation = reasoning_review_for(answer["claims"], facts, verdict="failed")
+    attestation["claim_reviews"][0]["reason"] = (
+        "来源只有样本 evaluated_at，没有查询 evaluation_time；历史证据不能证明当前恢复。"
+    )
+    originals = deepcopy((records, index, facts, answer, validation, attestation))
+    report = preflight.compose_preflight_report(
+        facts, validation["model_claims"], validation,
+        runtime_completed=True, reasoning_review=attestation,
+    )
+    assert report["authoritative_facts"] == facts
+    assert report["model_interpretation"]["claims"] == answer["claims"]
+    assert report["model_interpretation"]["mechanical_validation"] == "passed"
+    assert report["model_interpretation"]["semantic_review"] == "failed_manual_review"
+    assert report["model_interpretation"]["reasoning_review"] == attestation
+    assert report["acceptance"]["model_reasoning_correctness"] == "failed"
+    assert report["acceptance"]["overall_strict_acceptance"] == "failed"
+    assert (records, index, facts, answer, validation, attestation) == originals
+
+
+@pytest.mark.parametrize("method", ["human", "independent_evidence_review"])
+def test_complete_bound_review_can_record_acceptance_after_all_layers_pass(
+    preflight,
+    delivered,
+    method,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    answer = answer_from_index(index)
+    validation = validate(preflight, answer, index)
+    attestation = reasoning_review_for(answer["claims"], facts, method=method)
+    report = preflight.compose_preflight_report(
+        facts, validation["model_claims"], validation,
+        runtime_completed=True, reasoning_review=attestation,
+    )
+    expected = "passed_manual_review" if method == "human" else "passed_independent_review"
+    assert report["model_interpretation"]["semantic_review"] == expected
+    assert report["model_interpretation"]["reasoning_review"] == attestation
+    assert report["acceptance"]["model_reasoning_correctness"] == "passed"
+    assert report["acceptance"]["overall_strict_acceptance"] == "passed"
+    # The checker accepts a complete attestation; it does not prove its truth.
+    assert validation["model_reasoning_correctness"] == "pending"
+    assert validation["manual_reasoning_review"] == "required"
+
+
+@pytest.mark.parametrize("mutation", [
+    "empty", "wrong_hash", "wrong_facts_hash", "missing_claim_review", "wrong_references",
+    "duplicate_index", "boolean_index", "negative_index", "out_of_range_index",
+    "empty_reason", "unknown_verdict", "missing_reviewer", "empty_reviewer",
+    "unknown_method",
+])
+def test_incomplete_or_unbound_review_cannot_promote_acceptance(
+    preflight,
+    delivered,
+    mutation,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    answer = answer_from_index(index)
+    answer["claims"].append(deepcopy(answer["claims"][0]))
+    validation = validate(preflight, answer, index)
+    attestation = reasoning_review_for(answer["claims"], facts)
+    row = attestation["claim_reviews"][0]
+    if mutation == "empty":
+        attestation = {}
+    elif mutation == "wrong_hash":
+        attestation["claims_sha256"] = "0" * 64
+    elif mutation == "wrong_facts_hash":
+        attestation["authoritative_facts_sha256"] = "0" * 64
+    elif mutation == "missing_claim_review":
+        attestation["claim_reviews"].pop()
+    elif mutation == "wrong_references":
+        row["observation_ids"] = ["different-source"]
+    elif mutation == "duplicate_index":
+        attestation["claim_reviews"][1]["claim_index"] = 0
+    elif mutation == "boolean_index":
+        row["claim_index"] = True
+    elif mutation == "negative_index":
+        row["claim_index"] = -1
+    elif mutation == "out_of_range_index":
+        row["claim_index"] = len(answer["claims"])
+    elif mutation == "empty_reason":
+        row["reason"] = "   "
+    elif mutation == "unknown_verdict":
+        row["verdict"] = "probably-correct"
+    elif mutation == "missing_reviewer":
+        del attestation["reviewer"]
+    elif mutation == "empty_reviewer":
+        attestation["reviewer"] = "   "
+    else:
+        attestation["method"] = "automatic_format_check"
+    with pytest.raises(ValueError, match="preflight_incomplete_reasoning_review"):
+        preflight.compose_preflight_report(
+            facts, validation["model_claims"], validation,
+            runtime_completed=True, reasoning_review=attestation,
+        )
+
+
+def test_review_cannot_override_failed_output_structure(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    answer = answer_from_index(index)
+    answer["claims"][0]["observation_ids"] = ["fabricated-source"]
+    validation = validate(preflight, answer, index)
+    attestation = reasoning_review_for(answer["claims"], facts)
+    with pytest.raises(ValueError, match="preflight_incomplete_reasoning_review"):
+        preflight.compose_preflight_report(
+            facts, validation["model_claims"], validation,
+            runtime_completed=True, reasoning_review=attestation,
+        )
+
+
+def test_altered_fact_view_fails_integrity_even_with_valid_claim_structure(
+    preflight,
+    delivered,
+):
+    _, _, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    validation = validate(preflight, answer_from_index(index), index)
+    original_index = deepcopy(index)
+    altered = deepcopy(facts)
+    source = next(item for item in altered["sources"] if item["name"] == "query_metrics")
+    source["evaluation_time"] = {"provided": True, "value": AT.isoformat()}
+    report = preflight.compose_preflight_report(
+        altered, validation["model_claims"], validation, runtime_completed=True,
+    )
+    assert report["acceptance"]["authoritative_fact_integrity"] == "failed"
+    assert report["acceptance"]["model_output_structure"] == "passed"
+    assert report["acceptance"]["overall_strict_acceptance"] == "failed"
+    assert index == original_index
+    assert preflight.build_authoritative_fact_view(index) == facts
+
+
+def test_review_for_original_facts_cannot_be_reused_for_changed_facts(
+    preflight,
+    delivered,
+):
+    body, records, index = delivered
+    facts = preflight.build_authoritative_fact_view(index)
+    answer = answer_from_index(index)
+    attestation = reasoning_review_for(answer["claims"], facts)
+    records = deepcopy(records)
+    observations = deepcopy(list(request_observations(body).values()))
+    records[0]["collected_at"] = (COLLECTED + timedelta(days=1)).isoformat()
+    next(
+        item for item in observations
+        if item["observation_id"] == records[0]["observation_id"]
+    )["collected_at"] = records[0]["collected_at"]
+    changed_index = preflight.build_evidence_index(records, observations)
+    changed_facts = preflight.build_authoritative_fact_view(changed_index)
+    validation = validate(preflight, answer, changed_index)
+    assert validation["output_structure"] == "passed"
+    assert changed_facts != facts
+    with pytest.raises(ValueError, match="preflight_incomplete_reasoning_review"):
+        preflight.compose_preflight_report(
+            changed_facts, validation["model_claims"], validation,
+            runtime_completed=True, reasoning_review=attestation,
+        )
+
+
+def test_wrong_narrative_is_preserved_in_sdk_artifacts_without_extra_requests(
     preflight,
     tmp_path,
     monkeypatch,
@@ -452,19 +850,19 @@ def test_field_correct_but_wrong_narrative_remains_pending_and_unmodified(
 
     def answer_request(**body):
         index = request_index(body)
-        answer = answer_from_index(index)
-        version_id = next(
+        source_id = next(
             item["observation_id"] for item in index["sources"]
-            if item["name"] == "get_running_version"
+            if item["name"] == "query_metrics"
         )
-        answer["conclusion"]["confirmed"] = [{
-            "text": "版本探测 no_data 已证明业务服务不存在，历史数据证明当前已经恢复。",
-            "observation_ids": [version_id],
-        }]
+        answer = {"claims": [{
+            "kind": "confirmed",
+            "text": "查询级 evaluation_time 是 1900-01-01，历史数据证明当前已经恢复。",
+            "observation_ids": [source_id],
+        }]}
         text = json.dumps(answer, ensure_ascii=False)
         result = response(answer=text)
         raw_text = result.model_dump_json() + "\n"
-        captured.update(answer=text, raw=raw_text, index=index)
+        captured.update(answer=text, raw=raw_text, index=deepcopy(index))
         return SimpleNamespace(text=raw_text, parse=lambda: result)
 
     sdk.responses.with_raw_response.create.side_effect = answer_request
@@ -474,11 +872,57 @@ def test_field_correct_but_wrong_narrative_remains_pending_and_unmodified(
     assert (tmp_path / "response.raw.json").read_text(encoding="utf-8") == (
         captured["raw"]
     )
+    assert read_json(tmp_path, "evidence-index.json") == captured["index"]
     review = validate(preflight, captured["answer"], captured["index"])
-    assert review["fact_check"] == "passed"
+    assert review["output_structure"] == "passed"
     assert review["strict_acceptance"] == "pending"
     assert review["manual_reasoning_review"] == "required"
-    assert summary["manual_reasoning_review"] == "pending"
+    assert summary["manual_reasoning_review"] == "required"
     assert summary["runtime_model_reservations"] == 1
+    assert summary["tool_executions"] == 1
+    assert summary["real_model_api_requests"] == 1
+    body = read_json(tmp_path, "request.json")
+    assert body["tools"] == []
+    assert body["tool_choice"] == "none"
+    assert body["max_output_tokens"] == 2048
+    assert body["reasoning"] == {"effort": "none"}
+    sdk.with_options.assert_called_once_with(max_retries=0, timeout=30)
+    sdk.responses.with_raw_response.create.assert_called_once()
+
+
+def test_incomplete_response_with_valid_claims_still_fails_and_keeps_raw_output(
+    preflight,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "mock-provider-no-real-credential")
+    sdk = fake_sdk()
+    captured = {}
+
+    def answer_request(**body):
+        answer = answer_from_index(request_index(body))
+        text = json.dumps(answer, ensure_ascii=False)
+        result = response(answer=text, status="incomplete")
+        raw = result.model_dump_json() + "\n"
+        captured.update(answer=text, claims=deepcopy(answer["claims"]), raw=raw)
+        return SimpleNamespace(text=raw, parse=lambda: result)
+
+    sdk.responses.with_raw_response.create.side_effect = answer_request
+    summary = preflight.run_case(tmp_path, live=True, sdk=sdk)
+    validation = read_json(tmp_path, "answer-validation.json")
+    report = read_json(tmp_path, "preflight-report.json")
+    assert summary["session_status"] != "COMPLETED"
+    assert validation["model_claims"] == captured["claims"]
+    assert validation["output_structure"] == "failed"
+    assert "response_not_completed" in validation["errors"]
+    assert report["model_interpretation"]["claims"] == captured["claims"]
+    assert report["model_interpretation"]["raw_answer"] == captured["answer"]
+    assert report["acceptance"]["overall_strict_acceptance"] == "failed"
+    assert (tmp_path / "answer-original.txt").read_text(encoding="utf-8") == (
+        captured["answer"]
+    )
+    assert (tmp_path / "response.raw.json").read_text(encoding="utf-8") == captured["raw"]
+    assert summary["runtime_model_reservations"] == 1
+    assert summary["real_model_api_requests"] == 1
     assert summary["tool_executions"] == 1
     sdk.responses.with_raw_response.create.assert_called_once()
