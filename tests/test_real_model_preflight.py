@@ -196,16 +196,52 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert body["tools"] == []
     assert body["max_output_tokens"] == 2048
     assert body["reasoning"] == {"effort": "none"}
+    assert body["tool_choice"] == "none"
+    assert preflight.TASK in body["instructions"]
+    assert "全文约 500～800 汉字" in body["instructions"]
+    assert "后续验证建议最多三项" in body["instructions"]
+    assert "未知不等于相同，也不等于不同" in body["instructions"]
     assert len(json.dumps(body, ensure_ascii=False).encode()) <= 98304
     payloads = analyses(body["input"])
     assert len(payloads) == 1
+    observations = {
+        item["observation_id"]: item
+        for field in ("historical_observations", "failed_or_missing_observations")
+        for item in payloads[0][field]
+    }
+    assert set(observations) == {
+        item["observation_id"] for item in checkpoint["records"]
+    }
+    for source in checkpoint["records"]:
+        observed = observations[source["observation_id"]]
+        expected_result = source["result"]
+        if source["name"] == "query_metrics_aligned":
+            expected_result = {**expected_result, "summary_truncated": False}
+        assert observed["result"] == expected_result
+        assert observed["arguments"] == source["arguments"]
+        assert observed["collected_at"] == source["collected_at"]
+        assert observed["use_for_current_state"] is False
     analysis = payloads[0]["metric_analysis"]
     assert analysis["use_for_current_state"] is False
     assert analysis["evidence_scope"] == "historical_analysis"
+    assert analysis["selected_record_count"] == 4
+    assert not any(analysis["excluded_record_counts"].values())
+    assert analysis["status"] == "partial"
+    expected_report = analyze_metric_evidence(
+        list(reversed(checkpoint["records"][:4])), service="order-service",
+    ).to_dict()
+    assert analysis["reports"] == json.loads(json.dumps([{
+        "service": "order-service", "target_role": "primary", **expected_report,
+    }]))
     assert set(analysis["reports"][0]["source_observation_ids"]) == {
         item["observation_id"] for item in checkpoint["records"][:4]
     }
     assert "expected" not in json.dumps(body)
+    assert all(
+        value not in json.dumps(body, ensure_ascii=False)
+        for name, value in read_json(root, "case.json")["expected"].items()
+        if name != "citations"
+    )
     events = read_json(root, "events.json")
     assert sum(item["event_type"] == "model_reserved" for item in events) == 1
     assert sum(item["event_type"] == "tool_reserved" for item in events) == 1
@@ -487,6 +523,7 @@ def test_installed_sdk_serializes_one_bounded_request_to_mock_transport(
     assert requests_seen[0]["reasoning"] == {"effort": "none"}
     assert requests_seen[0]["tools"] == []
     assert requests_seen[0]["tool_choice"] == "none"
+    assert preflight.TASK in requests_seen[0]["instructions"]
     assert secret not in artifact_text(tmp_path)
 
 
