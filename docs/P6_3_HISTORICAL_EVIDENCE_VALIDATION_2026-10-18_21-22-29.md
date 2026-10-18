@@ -1,10 +1,14 @@
-# P6.3 真实故障证据与模型调查验证：离线准备报告
+# P6.3 真实故障证据与模型调查验证：单次真实模型验证报告
 
-本阶段已完成历史原件复核、脱敏请求冻结、默认离线入口和 Mock 验收流程。**新的付费授权尚未取得，真实 DeepSeek 请求为 0 次；没有真实模型回答、usage 或模型语义通过结论。** 本阶段范围为 `real_model_historical_evidence_analysis`，不是 `live_alert_to_real_model_autonomous_investigation`。完成提交推送后停止，等待独立审查及新的明确授权。
+本阶段先完成历史原件复核、脱敏请求冻结、默认离线入口与 Mock 验收，再在用户明确回复“授权”后执行了 **1 次真实 DeepSeek 请求，零重试、零工具、零业务请求、零修复**。返回 completed、格式检查通过，但两名 Agent 逐条复核确认 **2 条事实错误、3 条局部引用支持不足，语义严格验收失败**；人工审查仍 required，未伪装成人类签字。原始回答及哈希完整保留，没有改写回答、追加请求或补跑。
+
+本阶段范围为 `real_model_historical_evidence_analysis`，没有验证 `live_alert_to_real_model_autonomous_investigation`。下文保留授权前真实离线结果及完整回归的一次失败，补入唯一真实调用和逐条语义意见；提交推送后停止等待独立审查。
 
 ## 1. Git 与环境基线
 
 已实际读取根目录 [AGENTS.md](../AGENTS.md)。开始时分支 `main`、本地 HEAD 和 `git ls-remote origin refs/heads/main` 的真实远端 SHA 均为 `c54bc775b49640eab6d344281e58358a6ba72235`；origin 为 `https://github.com/yuj1ng1/incident-agent.git`，暂存区为空。
+
+离线准备已提交为 `64e66bf45ce71663e2c3de0b5c1a3bbf21636b37`。本次获授权执行前再次核对，本地与实际远端 main 均为该 SHA、暂存区为空，原有用户差异未变化；[本次付费前核查](../data/p63-live-preflight-20261018-01.json) 记录了最终输入、预算、SDK版本及保护路径。授权后没有修改任何 Python 代码或请求内容，本次提交仅更新并重命名同用途报告；本地运行及审查产物不加入 Git。
 
 原有 README、prompts/agent_prompt.py、temp_test.py 修改、6 项文档删除、未跟踪文档及此前 pytest 临时产物均保留并排除于提交。本阶段仅新增两个脚本、一个测试文件和本报告，没有修改生产代码、现有公开接口、配置、阈值、权限、Runtime 预算或依赖文件。保护清单另存 [p63-protected-baseline-20261018.json](../data/p63-protected-baseline-20261018.json)，涵盖 575 个原有路径的哈希/缺失状态和选定 Demo 文件；最终核对结果见收尾验证。
 
@@ -43,9 +47,9 @@
 
 复用 [P5 validate_model_answer](../scripts/preflight_real_model.py) 校验 claims 结构、kind、条数/长度及引用存在和去重。结果只能标 `trusted_index_internal_integrity_only`，没有伪装为 `passed_external_rebuild`。P5.3c.2g 的 typed source/field sidecar 依赖实际 Runtime 输入和一致快照，不能直接认证本阶段 HTTP/Loki 目录，因此未强接或重写它；其具体实例、字段支持、集合范围、时间和语义审查原则保留在逐条人工审查中。
 
-## 4. 最终待发送输入与脱敏范围
+## 4. 实际发送的冻结输入与脱敏范围
 
-最终候选是 [request.json](../data/p63-prepared-20261018-02/request.json)，对应 [context.json](../data/p63-prepared-20261018-02/context.json)、[预检摘要](../data/p63-prepared-20261018-02/summary.json) 与 [产物清单](../data/p63-prepared-20261018-02/sha256.json)。**请求 37,234 字节，SHA-256：**
+实际发送的是 [冻结 request.json](../data/p63-prepared-20261018-02/request.json)，对应 [context.json](../data/p63-prepared-20261018-02/context.json)、[授权前预检摘要](../data/p63-prepared-20261018-02/summary.json) 与 [准备产物清单](../data/p63-prepared-20261018-02/sha256.json)。真实调用保存的 [request.json](../data/p63-live-20261018-01/request.json) 与它逐字节相同；准备摘要的 authorization_required 保留为授权前历史状态，不回写它冒充当时已有授权。**请求 37,234 字节，SHA-256：**
 
 ```text
 a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f
@@ -57,13 +61,13 @@ a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f
 
 模型任务覆盖用户提出的现象、证据支持、监控状态、机制、真实业务故障、firing、no_data、恢复和进一步取证问题。回答要求 confirmed/hypothesis/limitation/next_check 分类，并逐条引用，不放入旧模型答案或人工评分结果。实验设计和禁止推断的边界是输入约束，不是通过验收的模型回答。
 
-## 5. 调用预算与新的授权关口
+## 5. 新授权、调用预算与实际执行
 
 | 参数 | 冻结值 |
 | --- | --- |
 | 模式 | 单次 `real_model_historical_evidence_analysis` |
 | Provider / 模型 | 固定 https://api.deepseek.com，deepseek-flash；不读取替代模型或中转站地址 |
-| 请求次数 | 新的明确授权后最多 1 次；本阶段实际 0 次 |
+| 请求次数 | 新的明确授权后最多 1 次；实际已执行 1 次，本次额度已消费 |
 | SDK / 应用重试 | 构造和 with_options 均 max_retries=0；无应用循环、fallback 或自动补跑 |
 | 输出 | max_output_tokens=2048、reasoning.effort=none |
 | 工具与延续 | tools=[]、tool_choice=none，无工具 dispatch、previous_response_id 或自动下一轮 |
@@ -72,11 +76,32 @@ a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f
 | 审批绑定 | purpose、明确同意、最终请求 SHA、原件根清单 SHA、模型、1次/0重试及带时区记录时间 |
 | 一次消费 | 正常 CLI 固定 data/p63-paid-consumption，按最终请求 SHA exclusive-create；复制目录、失败后重跑均不能重置。预留后初始化失败也不自动返还额度。可注入 SDK/临时 ledger 仅供显式离线测试。 |
 
-当前没有生成或使用真实审批文件，没有消费正式付费额度。`--execute` 是技术开关，不是人类同意；P5 和 P6.2b 的授权都不能沿用。完成本报告后需人类明确批准上述最终请求、目的及预算，才能在后续独立执行这一次调用。请求或配置实质变化时重新审查，不沿用旧哈希。
+用户在本聊天针对上一轮最终请求和明确预算直接回复“授权”。随后实际写入 [授权记录](../data/p63-paid-authorization-20261018-01.json)，记录时间为 `2026-10-18T13:12:34.463842+00:00`，明确这是授权后的落盘时间，不虚构为用户消息时间，也不声称人类独立审查已签字。复核原件、请求及 SDK 参数后，正常 CLI 在固定账本中为上述请求哈希 exclusive-create [消费标记](../data/p63-paid-consumption/a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f.consumed.json)，随后才进入真实 SDK。没有复用 P5 或 P6.2b 授权。
+
+唯一真实执行命令为：
+
+```powershell
+& 'D:\conda\envs\agentlearn\python.exe' -B scripts/p63_model_validation.py --execute --prepared-dir data/p63-prepared-20261018-02 --authorization data/p63-paid-authorization-20261018-01.json --output-dir data/p63-live-20261018-01
+```
+
+| 实际调用记录 | 值 |
+| --- | --- |
+| 返回模型 / response ID | deepseek-flash / `61ae4d5a-4804-40c8-8377-bcc6fee0c3f4` |
+| SDK create 开始 UTC | `2026-10-18T13:12:48.836913+00:00` |
+| SDK create 完成 UTC | `2026-10-18T13:13:00.098502+00:00`，间隔 11.261589 秒 |
+| Provider 状态 / CLI退出码 | completed / 0；仅代表返回及结构流程完成 |
+| 本地 SDK create / SDK重试 / 应用重试 | 1 / 0 / 0 |
+| 输入 / 输出 / 总 token | 10368 / 1587 / 11955 |
+| reasoning / cached token | 0 / 0；cache_write_tokens 为 null，原样保留 |
+| 业务请求 / 工具执行 / 修复 | 0 / 0 / 0 |
+
+实际参数仍为2048输出上限、reasoning.effort=none、tools=[]、tool_choice=none、SDK操作timeout30、max_retries=0；没有第二轮或 fallback。本地计数指进入 SDK create，不是独立计费记录；Provider usage 已保存，实际账单金额未核实，不估算费用。单次授权已消费，语义失败不会返还或自动追加请求。
 
 已读本机 SDK 签名/实现及 P5.3c.2f 历史 request/raw 原件确认该调用方式曾得到 DeepSeek 响应；这仅是历史兼容证据，不证明第三方当前可用或与 OpenAI API 完全等价。[OpenAI Responses 官方参数文档](https://developers.openai.com/api/reference/python/resources/responses/methods/create)用于核对 SDK 参数含义，不能替代第三方实际行为验证。
 
-## 6. 实际离线验证
+## 6. 实际离线验证与本次检查范围
+
+下列测试是本阶段授权前实际完成的运行；本次只执行既有冻结入口和报告更新，没有代码/依赖变更，因此未重复整套测试，也不把此前输出冒充本次新运行。调用前额外实际执行了原件/请求重建、SDK签名与版本检查；调用后再次核验返回原文和封存清单。
 
 | 验证层级 | 实际结果与记录 |
 | --- | --- |
@@ -107,28 +132,49 @@ a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f
 
 早期两次定向运行分别有一个夹具失败：Mock response 默认 model=fixture 被实际模型名校验拦住，以及本机 SDK usage 结构要求 cache_write_tokens。修复的是测试夹具，没有弱化生产校验；最终结果单独记录。离线 CLI 真实运行 `prepare` 与 `--mock` 成功；Mock 回答只写“离线Mock占位；未验证真实模型分析能力”，结构 passed、strict pending、人工审查 required，产物见 [Mock 审查](../data/p63-mock-20261018-01/claim-review.json)。
 
-## 7. 模型结果与逐条支持评估
+## 7. 真实回答封存与逐条证据支持
 
-| 项目 | 当前状态 |
+完整原始回答为 [answer-original.txt](../data/p63-live-20261018-01/answer-original.txt)，API原文为 [response.raw.json](../data/p63-live-20261018-01/response.raw.json)，SDK序列化为 [response.sdk.json](../data/p63-live-20261018-01/response.sdk.json)，usage、参数、UTC起止及计数见 [原始 summary.json](../data/p63-live-20261018-01/summary.json)。原始产物共11文件（含清单），[sha256.json](../data/p63-live-20261018-01/sha256.json)覆盖其余10项，已全部重新核验。未回显凭据，credential_redacted=false。
+
+| 冻结产物 | SHA-256 |
 | --- | --- |
-| 新的模型授权 | 未获得 |
-| 真实 DeepSeek 请求、重试、工具与修复 | 0、0、0、0 |
-| 真实 API 返回原文、回答、usage、请求起止 | 尚未产生，不以 Mock 代替 |
-| 真实模型事实/假设/错误、逐条引用支持 | 尚不能评估 |
-| 语义正确性与严格验收 | pending，必须保留独立人工审查 |
+| 请求 request.json | `a81dc82b0df040fc115dad0b04baca3eca6279edf4ee264fc337faeeac7d039f` |
+| API原文 response.raw.json | `4e03340b3427d3fc8e0c540aa54bf13c31f4ae30eb50bc6864283c82ffd942c5` |
+| SDK response.sdk.json | `83250c2e3267c8f01691475fd6866f2ee83ca12418f61b95a96e9b609d6fb8d5` |
+| 原始答案 answer-original.txt | `f35bf0377b544e254be67bb33e41cf9e1f30d190bd3859c3023ae9d8e3a28581` |
+| 原始产物清单 sha256.json | `48b23d95de6b95b68b73837f696c962657f89d7193160182cd22dcb70fbfd81d` |
 
-获授权后入口会保存脱敏请求、raw response/SDK response、原始答案、实际返回模型与 usage、请求参数和 UTC create 起止、本地 SDK 计数、每项产物 SHA-256、claims 合约检查和逐条 claim-review。HTTP错误保留响应正文及原文字段哈希；异常类别/状态保留，不写任意异常消息或 headers。若 Provider 回显实际 key，保存脱敏正文并单独标注 wire text 哈希及 redacted，不能冒称脱敏内容等于原文。没有真实返回时不补造数据。
+回答实际含10条claims。现有P5校验给出 output_structure=passed、errors=[]、reference_source_check=trusted_index_internal_integrity_only，原始 [claim-review.json](../data/p63-live-20261018-01/claim-review.json) 仍保留 strict_acceptance=pending、manual_reasoning_review=required。这些初始机械结果没有被覆写。
 
-逐条人工检查至少包括：引用是否绑定正确实例；所引字段是否充分支持复合陈述；保存集合的缺口是否被扩大成现实不存在；是否把晚期/历史观测变为当前或整个窗口结论；合成/Mock 是否被升级成真实firing/真实模型定位；是否虚构工具执行、根因、修复或业务恢复。格式正确、ID存在、status=completed 或模型自评均不能自动通过语义验收；失败后不自动重试。
+随后 root 与独立 Agent 分别直接阅读原答、冻结输入与本地原件，结论一致：**语义严格验收失败，人工仍待审**。单独的 [semantic-review.json](../data/p63-live-review-20261018-01/semantic-review.json) 保存每条原始 claim、原引用、审查意见及反例原件路径；[审查清单](../data/p63-live-review-20261018-01/sha256.json) 绑定其字节。它是两名 Agent 的审查，不是模型自评或人类签字，没有关键词自动评分、改写原答、补引用或删除错误条目。
+
+下表编号从1开始，对应 sidecar claim_index=编号减1。“支持”只表示 Agent 在所述范围内的证据意见，人工审批状态均未完成。
+
+| 编号 / kind | 原文关键陈述 | 实际引用与逐条意见 |
+| --- | --- | --- |
+| 1 confirmed | “捕获到6次完整HTTP响应”，随后只列5个完成时刻 | **事实错误。** 引用 http-002/005/008/011/014 共5个实例，原件和监督器均确认5条500；原答自己列出的时刻也只有5个。状态、响应体和路由范围正确，数量错误不能因引用ID有效而通过。 |
+| 2 confirmed | “受控合成的HTTP 500测试……实验设计而非已部署源码或业务故障证明” | **支持。** 引用 design；正确区分设计意图、期望效应与真实部署/业务认证，没有把预期直方图更新当已取得观测。 |
+| 3 confirmed | “日志查询返回5条……Loki时间戳落于故障窗口内” | **含确定时间错误。** 引用 logs；最后 Loki 时间 `11:53:24.918736582Z` 晚于故障窗口末 `11:53:24.815895Z` **0.102841582秒**，仍在延后10秒的Loki查询范围内。正文秒级事件时间 `11:53:24Z` 是窗口内候选，不能与Loki时间混用。数量、服务、内容、无route/shared ID及不能逐请求绑定的限制正确。反例在 observations/http-008.body。 |
+| 4 confirmed | “10次身份检查均报告……flags均false……commit_sha为null……不能以仓库HEAD补齐” | **支持。** 引用 versions 与 running-version，正确限定自报身份、no_data/commit_unknown及未知部署源码。 |
+| 5 confirmed | “聚合值为13.0（前后对比8.0→13.0）……no_data……0.0” | **局部引用不足。** 本条只引5个后续metric实例，没有 counter-before；这些引用不能单独支持基线8和变化。基线确实存在，属于漏引而非伪造数据。指标值、有效零与no_data区分、scrape不证明业务健康均正确。 |
+| 6 confirmed | “单一迟到快照……order-service无选中告警……历史inactive不能排除故障窗口内曾告警” | **按本案语境支持。** 引用 alerts；规则评估时间和单快照覆盖限制正确。末句“不能声称观测到真实firing”须限定本次order-service；原件确有inventory-service真实ServiceDown firing，不能泛化为全快照不存在真实firing。 |
+| 7 limitation | “/error按设计返回500，并伴随……服务聚合请求计数上升” | **局部引用不足。** 引用只有design、http-002、logs，未引前后Counter实例；设计中的预期更新不能支持实际增长。测试路由、真实500、有限日志关联及不能断言部署代码/数据库/业务根因的限制正确。 |
+| 8 hypothesis | “计数从8.0升至13.0与5次捕获的500……不能排除并发流量或证明唯一归因” | **局部引用不足。** counter-before与metric-total支持聚合变化，非排他归因及假设标记正确；但HTTP只引最后一个http-014，不能在本条支持5次数量，也与#1的6次矛盾。Counter只定位到故障前采样至故障后采样之间增长；本条故障窗口内增长仍属未验证假设。 |
+| 9 limitation | “no_data不能等于0.0……Mock……不能作为定位或恢复证据” | **支持并保留假设边界。** 引用5xx、P95、request-rate与runtime；缺失样本、有效零、历史范围与合成/Mock边界正确。“可能是查询窗口、指标命名或采集范围问题”只属一般可能，命名错误并无直接证据，不是已确认原因。 |
+| 10 next_check | “取得故障窗口内对齐的5xx……部署源码……关联日志……/order业务健康与恢复验证” | **作为取证建议支持，未执行。** 引用5xx、running-version与logs，与输入缺口一致。先检索已保存的历史材料；日后的/order健康检查不能反向证明本次历史业务恢复。“以上均需新采集”不能充当本轮新业务请求授权。 |
+
+整体上，没有发现本答虚构数据库故障、生产代码回归、订单业务瘫痪、工具执行、实际修复或业务恢复；也未把合成告警/Mock COMPLETED升级为真实模型自主调查。已确认问题是#1数量、#3精确时间边界，以及#5/#7/#8的局部引用支持。存在这些缺陷，因此不能把completed、格式通过或部分正确的边界说明当作本次语义验证成功。
 
 ## 8. 是否具备进一步真实模型 Agent 调查条件
 
-已具备**审查一次冻结历史材料单轮分析的离线准备材料**，仍缺新的付费授权和本轮独立审查；完整回归也未全通过，既有跨进程超时须保留在评审事项中。不能据此认定已具备或完成真实告警触发的自主调查：没有故障窗口对齐的 5xx/P95、连续告警史、已认证部署 SHA、真实业务故障及恢复验证，也没有本轮真实模型表现数据。
+已经完成一次真实历史材料分析并取得原答及缺陷证据，**没有足够依据直接进入或宣称完成完整真实模型自主调查**。本轮语义验收失败、人工独立审查未完成，完整回归的既有跨进程超时也须保留；原实验仍缺对齐的5xx/P95、连续告警史、已认证部署SHA、真实业务故障与恢复验证。
 
-下一步最小工作是先独立审查脚本、最终请求及证据边界，再针对上述哈希明确授权最多 1 次历史分析；之后保存真实原文、人工逐条评估并停止。若后续确需 live alert → Agent，还应另行设计和授权真实告警/工具预算/业务验证，不能以本轮准备默许再次故障注入或扩大请求。
+下一步最小工作是人工独立复核原答和10条审查意见，先决定如何处理数量、时间边界和就近引用问题；保留失败原文，现有单次额度不补跑。本阶段没有自动调整Prompt、扩建引用引擎或继续请求。任何模型复测、新采集、业务验证或 live alert → Agent 工具调查都需后续明确范围及新授权，本轮不据此再次注入故障或执行修复。
 
 ## 9. 收尾与提交边界
 
-最终重新执行原件校验和待发送请求重建，根原件清单 SHA、75 项内容及最终请求 SHA 均与冻结值一致；575 个保护路径的哈希/缺失状态全部保持，报告本地链接无缺失，三份新 Python AST 解析和暂存 diff 空白检查通过。记录见 [最终核查](../data/p63-final-verification-20261018.json)。没有遗留本轮故障开关或待恢复的受控服务，因为本轮没有注入或更改它们；既有服务与未知进程未被终止。测试自己的临时子进程由原测试收尾，不批量结束 Python。
+授权前最终核查见 [离线最终核查](../data/p63-final-verification-20261018.json)；本次调用后的原件、冻结输入、API原答、审查sidecar和保护路径复核见 [真实调用后核查](../data/p63-live-final-verification-20261018-01.json)。报告实质更新完成后使用实际北京时间重命名同一用途文档，原离线版本仍可在上一提交查看，不另造重复报告。没有遗留本轮故障开关或待恢复的受控服务，因为本轮没有注入或更改它们；既有服务与未知进程未被终止。没有批量结束Python。
 
-本阶段没有修改 Demo、调整告警、启动生产 main.py、增加 `/order` 或 `/error` 请求、停止容器/数据库或执行修复。原有文档迁移及其他用户差异保持原状，只有本阶段的三个新 Python 文件和本报告进入提交；data 下原件、预备请求、测试日志、审批和运行数据不加入 Git。提交与推送使用实际北京时间生成中文说明，最终完整 SHA 和远端一致性由交付消息记录，避免在提交内部虚构自引用 SHA。
+真实调用后重新核实：本次付费前571个仓库保护路径均未变；原离线清单含选定Demo文件的575个路径也全部保持。原件75项、API封存10项及审查清单校验一致，实际密钥值扫描无匹配；原回答字节未修改，3份P6.3 Python文件、ModelClient和P5验证入口均与执行前HEAD一致，报告本地链接可解析。本次仅为数据与文档交付，没有重跑或改写此前测试结论。
+
+本阶段没有修改 Demo、调整告警、启动生产 main.py、增加 `/order` 或 `/error` 请求、停止容器/数据库或执行修复。原有文档迁移及其他用户差异保持原状：离线提交为三个新Python文件和报告，本次授权后提交仅更新并重命名报告；data 下原件、请求、API返回、测试日志、授权消费和审查产物不加入Git。提交与推送使用实际北京时间生成中文说明，最终完整SHA和远端一致性由交付消息记录，避免在提交内部虚构自引用SHA。
