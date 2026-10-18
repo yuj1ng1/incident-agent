@@ -88,7 +88,12 @@ def _response(calls=(), *, answer="", status="completed"):
     })
 
 
-def _script(scenario, replay=False):
+def _script(
+    scenario,
+    replay=False,
+    log_arguments=None,
+    log_scope="recent_not_alert_window",
+):
     from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
 
     calls = [
@@ -96,7 +101,7 @@ def _script(scenario, replay=False):
             "service": "order-service",
             "metric": "http_5xx_rate",
         }, "metric"),
-        _call("query_logs", {"service": "order-service"}, "logs"),
+        _call("query_logs", log_arguments or {"service": "order-service"}, "logs"),
         _call("check_service_health", {"service": "order-service"}, "health"),
     ]
     if scenario == "permissions":
@@ -120,11 +125,16 @@ def _script(scenario, replay=False):
             _response([_call("execute_remediation", {}, "round-" + str(index))])
             for index in range(MAX_AGENT_LOOPS)
         ]
+    log_note = {
+        "explicit": "日志查询保留原件明确的起止时间，仅支持该时段观测。\n",
+        "recent": "原件的 recent 日志只是近期查询，不是告警窗口取证。\n",
+        "not_collected": "本轮没有日志采集原件，未用 Mock 补齐缺项。\n",
+    }.get(log_scope, "近期日志不是告警窗口取证。\n")
     final = _response(answer=(
         "[模拟模型决策，待人工审查]\n"
         "本轮重放已捕获的工具原件，未再次采集服务；原始采集时间与回放时间分开保存。\n"
         "回放结果不能证明当前状态，缺项未使用Mock补齐。\n"
-        "原件为recent的日志仍只是近期查询，不是告警窗口取证。\n"
+        f"{log_note}"
         "尚未确认根因、真实模型推理能力或业务恢复；未执行修复。"
         if replay else MOCK_ANSWER
     ))
@@ -140,6 +150,9 @@ def run_case(
     scenario="offline_ok",
     *,
     observations=None,
+    alert_snapshot=None,
+    alert_source=None,
+    alert_collected_at=None,
 ):
     """Create one new artifact directory; fail rather than reuse any path.
 
@@ -153,6 +166,33 @@ def run_case(
     ):
         raise ValueError("replay_requires_observation_object_and_default_scenario")
     captured = deepcopy(observations)
+    log_query_scope = "recent_not_alert_window"
+    alert_window = None
+    alert_window_basis = "not_available"
+    supplied_alerts = deepcopy(alert_snapshot)
+    if supplied_alerts is not None:
+        if (
+            captured is None
+            or not isinstance(supplied_alerts, dict)
+            or supplied_alerts.get("status") != "success"
+            or not isinstance(supplied_alerts.get("data"), dict)
+            or not isinstance(supplied_alerts["data"].get("alerts"), list)
+            or not supplied_alerts["data"]["alerts"]
+            or not isinstance(alert_source, str)
+            or not isinstance(alert_collected_at, str)
+        ):
+            raise ValueError("captured_alert_snapshot_requires_source_and_collection_time")
+        from scripts.p62a_verify_evidence import _utc
+        _utc(alert_collected_at)
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("labels"), dict)
+            or item["labels"].get("service") != "order-service"
+            or item["labels"].get("alertname") != "HighHttp5xxRate"
+            or item.get("state") != "firing"
+            for item in supplied_alerts["data"]["alerts"]
+        ):
+            raise ValueError("captured_alert_snapshot_outside_isolation_filter")
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     started = datetime.now(timezone.utc).isoformat()
@@ -190,6 +230,7 @@ def run_case(
 
         import requests
         from agent.agent import Agent
+        from alert_parser import normalize_snapshot
         from alert_policy import ALERT_POLICIES
         from clients.prometheus_client import PrometheusClient
         from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
@@ -272,7 +313,15 @@ def run_case(
                 row["query_finished_at"] = datetime.now(timezone.utc).isoformat()
                 raise requests.ConnectionError("p61_fixture_loki_unavailable")
             if source == "synthetic_alert":
-                body = {"status": "success", "data": {"alerts": [raw_alert]}}
+                body = (
+                    supplied_alerts if supplied_alerts is not None
+                    else {"status": "success", "data": {"alerts": [raw_alert]}}
+                )
+                if supplied_alerts is not None:
+                    row["source"] = "captured_real_alert_snapshot"
+                    row["evidence_origin"] = "captured_alert_snapshot_replay"
+                    row["captured_at"] = alert_collected_at
+                    row["original_source"] = alert_source
             elif source == "mock_prometheus":
                 values = [] if scenario == "metrics_no_data" else [{
                     "metric": {},
@@ -323,6 +372,7 @@ def run_case(
 
         stack.enter_context(patch("requests.get", offline_get))
         if captured is not None:
+            log_query_scope = "not_collected"
             expected = {
                 "query_metrics": {
                     "service": "order-service",
@@ -332,6 +382,29 @@ def run_case(
                 "check_service_health": {"service": "order-service"},
                 "get_running_version": {"service": "order-service"},
             }
+            if "query_logs" in captured:
+                arguments = captured["query_logs"].get("arguments")
+                if (
+                    not isinstance(arguments, dict)
+                    or arguments.get("service") != "order-service"
+                    or set(arguments) not in ({"service"}, {"service", "start", "end"})
+                ):
+                    raise ValueError("invalid_captured_log_arguments")
+                if "start" in arguments:
+                    from clients.loki_client import parse_time_range
+                    parse_time_range(arguments["start"], arguments["end"])
+                    log_query_scope = "explicit"
+                    alert_window = {
+                        "start": arguments["start"],
+                        "end": arguments["end"],
+                        "bounds": "[start, end)",
+                    }
+                    alert_window_basis = (
+                        "captured_explicit_log_query_not_alert_lifecycle"
+                    )
+                else:
+                    log_query_scope = "recent"
+                expected["query_logs"] = deepcopy(arguments)
 
             def replay_tool(name):
                 def replay(**arguments):
@@ -381,7 +454,12 @@ def run_case(
         )
         sdk = Mock(name="P61MockSdk")
         sdk.with_options.return_value = sdk
-        planned = _script(scenario, replay=captured is not None)
+        planned = _script(
+            scenario,
+            replay=captured is not None,
+            log_arguments=expected["query_logs"] if captured is not None else None,
+            log_scope=log_query_scope,
+        )
         requests_seen = []
         active_session = None
 
@@ -408,11 +486,23 @@ def run_case(
         sdk.responses.create.side_effect = mock_create
         agent = Agent(sdk, agent_prompt)
         scheduler = Scheduler(Worker(manager, agent))
+
+        def normalize_captured_snapshot(response):
+            snapshot = normalize_snapshot(response)
+            if supplied_alerts is not None:
+                captured_time = datetime.fromisoformat(
+                    alert_collected_at.replace("Z", "+00:00"),
+                )
+                for alert in [*snapshot.alerts, *snapshot.ignored]:
+                    alert.observed_at = captured_time
+            return snapshot
+
         monitor = IncidentMonitor(
             PrometheusClient("http://localhost:9090"),
             manager.incident_store,
             0,
             manager,
+            normalizer=normalize_captured_snapshot,
         )
         snapshot = monitor.process_alerts_once()
         assert snapshot.complete and len(snapshot.alerts) == 1
@@ -439,7 +529,8 @@ def run_case(
         assert incident.alert_state == "firing"
         assert incident.recovery_verified_at is None
         assert incident.recovery_verification is None
-        assert incident.alerts[-1].starts_at is None
+        if supplied_alerts is None:
+            assert incident.alerts[-1].starts_at is None
         reopened = RuntimeStore(manager.store.path, read_only=True)
         assert reopened.get(saved.session_id) == saved
         assert reopened.load_checkpoint(saved) == checkpoint
@@ -470,11 +561,19 @@ def run_case(
             "mock_decision_rounds": saved.total_model_requests,
             "real_service_observations": 0,
             "captured_observations": captured,
+            "alert_input_origin": (
+                "real_firing_alert_snapshot_replay"
+                if supplied_alerts is not None else "synthetic_alert_input"
+            ),
+            "captured_alert_snapshot": supplied_alerts,
+            "alert_source": alert_source,
+            "alert_collected_at": alert_collected_at,
             "replay_started_at": started if captured is not None else None,
             "business_state": "unknown",
             "business_recovery_verified": False,
-            "alert_window": None,
-            "log_query_scope": "recent_not_alert_window",
+            "alert_window": alert_window,
+            "alert_window_basis": alert_window_basis,
+            "log_query_scope": log_query_scope,
             "provider_verified": False,
             "authorization": {
                 "remediation_planner": None,

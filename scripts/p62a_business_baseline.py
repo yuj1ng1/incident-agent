@@ -215,6 +215,7 @@ def run_business_baseline(
     url=BUSINESS_URL,
     clock=time.monotonic,
     sleep=time.sleep,
+    _supervisor_deadline=None,
 ):
     """Internal child/trusted Mock API; live execution must use supervised CLI.
 
@@ -235,6 +236,8 @@ def run_business_baseline(
     root.mkdir(parents=True, exist_ok=False)
     started = clock()
     deadline = started + max_seconds
+    if _supervisor_deadline is not None:
+        deadline = min(deadline, _supervisor_deadline)
     records = []
     report = {
         "mode": "explicitly_authorized_direct_business_traffic",
@@ -400,12 +403,39 @@ def _verified_child_report(root, count):
 def run_supervised_baseline(output_dir, *, clock=time.monotonic, **arguments):
     """Own exactly one helper; only this path permits live CLI traffic."""
     _validate_run_arguments(**arguments)
+    return _run_owned_child_supervisor(
+        output_dir,
+        arguments=arguments,
+        child_script=Path(__file__).resolve(),
+        mode="p62a_owned_child_supervisor",
+        verify_report=_verified_child_report,
+        count_fields={"business_route_requests": "business_request_count_status"},
+        plan=traffic_plan(),
+        clock=clock,
+    )
+
+
+def _run_owned_child_supervisor(
+    output_dir,
+    *,
+    arguments,
+    child_script,
+    mode,
+    verify_report,
+    count_fields,
+    plan,
+    clock=time.monotonic,
+):
+    """Shared lifecycle for one owned helper; callers validate before entering."""
     root = Path(output_dir).resolve()
     count = arguments.get("count", MAX_REQUESTS)
     max_seconds = arguments.get("max_seconds", MAX_SECONDS)
+    started = clock()
+    deadline = started + max_seconds
     payload = {
         "output_dir": str(root / "traffic"),
         "supervisor_pid": os.getpid(),
+        "parent_deadline_monotonic": deadline,
         "arguments": arguments,
     }
     encoded = json.dumps(
@@ -418,15 +448,13 @@ def run_supervised_baseline(output_dir, *, clock=time.monotonic, **arguments):
     with authorization_path.open("xb") as handle:
         handle.write(encoded)
     record = {
-        "mode": "p62a_owned_child_supervisor",
+        "mode": mode,
         "started_at": _utc_now(),
         "requested_count": count,
         "max_seconds": max_seconds,
         "authorization_file": authorization_path.name,
         "authorization_sha256": hashlib.sha256(encoded).hexdigest(),
         "status": "child_failed",
-        "business_route_requests": None,
-        "business_request_count_status": "unknown",
         "originals_may_be_incomplete": True,
         "child_pid": None,
         "child_exit_code": None,
@@ -436,18 +464,19 @@ def run_supervised_baseline(output_dir, *, clock=time.monotonic, **arguments):
         "business_recovery_verified": False,
         "real_model_sdk_requests": 0,
         "limitations": [
-            traffic_plan()["deadline_semantics"],
+            plan["deadline_semantics"],
             "Killing the client cannot revoke a request already received by the server.",
             "Timeout/failure may interrupt raw evidence writes; count remains unknown.",
         ],
     }
+    for field, status_field in count_fields.items():
+        record[field] = None
+        record[status_field] = "unknown"
     child = None
-    started = clock()
-    deadline = started + max_seconds
     try:
         child = subprocess.Popen(
             [
-                sys.executable, str(Path(__file__).resolve()),
+                sys.executable, str(child_script),
                 "--_authorized-child", str(authorization_path),
             ],
             stdin=subprocess.DEVNULL,
@@ -465,18 +494,19 @@ def run_supervised_baseline(output_dir, *, clock=time.monotonic, **arguments):
         if clock() >= deadline:
             raise subprocess.TimeoutExpired(child.args, max_seconds)
         if child.returncode == 0:
-            report = _verified_child_report(root / "traffic", count)
+            report = verify_report(root / "traffic", count)
             record.update(
                 status=(
                     "traffic_completed_observations_pending"
                     if report["status"] == "traffic_completed_observations_pending"
                     else "child_stopped"
                 ),
-                business_route_requests=report["business_route_requests"],
-                business_request_count_status="verified_child_report",
                 originals_may_be_incomplete=False,
                 child_report="traffic/traffic_report.json",
             )
+            for field, status_field in count_fields.items():
+                record[field] = report[field]
+                record[status_field] = "verified_child_report"
     except subprocess.TimeoutExpired:
         record["status"] = "deadline_exceeded"
         record["deadline_exceeded"] = True
@@ -500,7 +530,7 @@ def run_supervised_baseline(output_dir, *, clock=time.monotonic, **arguments):
     return record
 
 
-def _child_main(authorization_path):
+def _read_child_authorization(authorization_path):
     path = Path(authorization_path)
     if path.name != "authorization.json" or path.is_symlink():
         raise ValueError("p62a_invalid_child_authorization_path")
@@ -513,7 +543,18 @@ def _child_main(authorization_path):
         raise PermissionError("p62a_child_requires_own_supervisor")
     if Path(payload["output_dir"]).resolve() != path.resolve().parent / "traffic":
         raise ValueError("p62a_child_output_path_mismatch")
-    run_business_baseline(payload["output_dir"], **payload["arguments"])
+    return payload
+
+
+def _child_main(authorization_path):
+    payload = _read_child_authorization(authorization_path)
+    arguments = payload["arguments"]
+    if "parent_deadline_monotonic" in payload:
+        arguments = {
+            **arguments,
+            "_supervisor_deadline": payload["parent_deadline_monotonic"],
+        }
+    run_business_baseline(payload["output_dir"], **arguments)
 
 
 def main():
