@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from investigation.models import RuntimeLimits, SessionStatus
+from investigation.result_trust import ResultTrust
 from models.investigation import InvestigationStatus
 from models.recovery import Reason as RecoveryReason
 
@@ -25,6 +26,7 @@ class InvestigationAnswer(PublicModel):
     answer_truncated: bool
     model_rounds: int = Field(ge=0)
     tool_calls: int = Field(ge=0)
+    result_trust: ResultTrust
 
 
 class InvestigationHistory(InvestigationAnswer):

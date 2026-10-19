@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from incident_store import IncidentStore
 from investigation.checkpoint import protect
 from investigation.manager import InvestigationManager
+from investigation.result_trust import project_result_trust
 from investigation.state import RuntimeIntegrityError
 from investigation.store import RuntimeStore
 from models.incident import Incident
@@ -46,12 +47,13 @@ def public_text(value, limit=200):
     return value[:limit]
 
 
-def answer_view(result):
+def answer_view(result, *, history_record=False):
     text = public_text(result["answer"], limit=65536)
     return InvestigationAnswer(
         success=result.get("success"),
         status=result["status"], answer=text[:8000], answer_truncated=len(text) > 8000,
         model_rounds=result.get("model_rounds", 0), tool_calls=result.get("tool_calls", 0),
+        result_trust=project_result_trust(result, history_record=history_record),
     )
 
 
@@ -225,7 +227,7 @@ class RuntimeQueries:
                 observed_at=a.observed_at,
             ) for a in incident.alerts[-3:]],
             recent_investigations=[InvestigationHistory(
-                **answer_view(r.model_dump()).model_dump(),
+                **answer_view(r.model_dump(), history_record=True).model_dump(),
                 session_id=public_text(r.session_id, 120), investigated_at=r.investigated_at,
             ) for r in incident.investigations[-3:]],
             evidence_count=len(incident.evidence),

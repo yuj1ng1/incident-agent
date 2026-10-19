@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from config import ALERT_POLL_INTERVAL_SECONDS, RUNTIME_LIMITS
 from investigation.checkpoint import encode, protect
+from investigation.result_trust import project_result_trust
 from investigation.models import HumanCommand, HumanInputArguments, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
 from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, TERMINAL, budget_exhaustion, exhausted, transition
 from incident_store import RuntimeProjectionResult
@@ -722,6 +723,9 @@ class InvestigationManager:
         return {
             "session": session.model_dump(mode="json"),
             "investigation_result": checkpoint.get("result"),
+            "result_trust": project_result_trust(
+                checkpoint.get("result"),
+            ).model_dump(mode="json"),
             "limits": self.limits.model_dump(mode="json"),
             "incident_budget_usage": usage,
             "reinvestigation_refusal": refusal,

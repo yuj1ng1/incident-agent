@@ -64,6 +64,17 @@ export interface IncidentSummary {
   investigation_suspended_reason: string | null;
 }
 
+export interface ResultTrust {
+  mechanical_status: 'not_checked' | 'passed' | 'failed';
+  mechanical_scope: 'not_checked' | 'result_schema_only' | 'frozen_references_and_hashes';
+  semantic_status: 'pending_review' | 'rejected' | 'accepted';
+  trusted: false;
+  human_approval: 'not_recorded';
+  answer_sha256: string | null;
+  review_origin: 'none' | 'caller_supplied_agent_review';
+  rejection_reasons: string[];
+}
+
 export interface InvestigationAnswer {
   success: boolean | null;
   status: InvestigationStatus;
@@ -71,6 +82,7 @@ export interface InvestigationAnswer {
   answer_truncated: boolean;
   model_rounds: number;
   tool_calls: number;
+  result_trust: ResultTrust;
 }
 
 export interface IncidentDetail extends IncidentSummary {

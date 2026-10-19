@@ -463,6 +463,9 @@
           "title": "Model Rounds",
           "type": "integer"
         },
+        "result_trust": {
+          "$ref": "#/components/schemas/ResultTrust"
+        },
         "status": {
           "$ref": "#/components/schemas/InvestigationStatus"
         },
@@ -489,7 +492,8 @@
         "answer",
         "answer_truncated",
         "model_rounds",
-        "tool_calls"
+        "tool_calls",
+        "result_trust"
       ],
       "title": "InvestigationAnswer",
       "type": "object"
@@ -515,6 +519,9 @@
           "minimum": 0.0,
           "title": "Model Rounds",
           "type": "integer"
+        },
+        "result_trust": {
+          "$ref": "#/components/schemas/ResultTrust"
         },
         "session_id": {
           "anyOf": [
@@ -555,6 +562,7 @@
         "answer_truncated",
         "model_rounds",
         "tool_calls",
+        "result_trust",
         "session_id",
         "investigated_at"
       ],
@@ -983,6 +991,80 @@
       "title": "RecoveryVerificationView",
       "type": "object"
     },
+    "ResultTrust": {
+      "additionalProperties": false,
+      "properties": {
+        "answer_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Answer Sha256"
+        },
+        "human_approval": {
+          "const": "not_recorded",
+          "default": "not_recorded",
+          "title": "Human Approval",
+          "type": "string"
+        },
+        "mechanical_scope": {
+          "enum": [
+            "not_checked",
+            "result_schema_only",
+            "frozen_references_and_hashes"
+          ],
+          "title": "Mechanical Scope",
+          "type": "string"
+        },
+        "mechanical_status": {
+          "enum": [
+            "not_checked",
+            "passed",
+            "failed"
+          ],
+          "title": "Mechanical Status",
+          "type": "string"
+        },
+        "rejection_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejection Reasons",
+          "type": "array"
+        },
+        "review_origin": {
+          "default": "none",
+          "enum": [
+            "none",
+            "caller_supplied_agent_review"
+          ],
+          "title": "Review Origin",
+          "type": "string"
+        },
+        "semantic_status": {
+          "$ref": "#/components/schemas/SemanticStatus"
+        },
+        "trusted": {
+          "const": false,
+          "default": false,
+          "title": "Trusted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mechanical_status",
+        "mechanical_scope",
+        "semantic_status",
+        "answer_sha256",
+        "rejection_reasons"
+      ],
+      "title": "ResultTrust",
+      "type": "object"
+    },
     "RuntimeLimits": {
       "additionalProperties": false,
       "properties": {
@@ -1068,6 +1150,15 @@
       },
       "title": "RuntimeLimits",
       "type": "object"
+    },
+    "SemanticStatus": {
+      "enum": [
+        "pending_review",
+        "rejected",
+        "accepted"
+      ],
+      "title": "SemanticStatus",
+      "type": "string"
     },
     "SessionDetail": {
       "additionalProperties": false,

@@ -1,6 +1,11 @@
-import type { IncidentDetail, SessionDetail, SessionSummary } from '../src/api/types';
+import type { IncidentDetail, ResultTrust, SessionDetail, SessionSummary } from '../src/api/types';
 
 // Synthetic records belong only to tests. The application has no fixture fallback.
+const resultTrust: ResultTrust = {
+  mechanical_status: 'passed', mechanical_scope: 'result_schema_only',
+  semantic_status: 'pending_review', trusted: false, human_approval: 'not_recorded',
+  answer_sha256: null, review_origin: 'none', rejection_reasons: [],
+};
 export const session: SessionSummary = {
   session_id: 'ses-fixture', incident_id: 'inc-fixture', service: 'fixture-service',
   status: 'COMPLETED', created_at: '2026-10-11T01:00:00Z', updated_at: '2026-10-11T01:01:00Z',
@@ -19,7 +24,8 @@ export const incident: IncidentDetail = {
   },
   recent_alerts: [{ alertname: 'FixtureAlert', state: 'firing', metric: 'fixture_metric', value: null, threshold: 0, observed_at: null }],
   recent_investigations: [{ session_id: session.session_id, investigated_at: session.updated_at, success: null,
-    status: 'completed', answer: '测试调查回答', answer_truncated: true, model_rounds: 2, tool_calls: 4 }],
+    status: 'completed', answer: '测试调查回答', answer_truncated: true, model_rounds: 2, tool_calls: 4,
+    result_trust: resultTrust }],
   evidence_count: 0, archived_session_count: 2, history_included: false,
 };
 export const detail: SessionDetail = {
@@ -30,7 +36,7 @@ export const detail: SessionDetail = {
   incident_budget_usage: { attempts: 2, model_requests: 7, tool_executions: 13, resumes: 1,
     human_requests: 0, started_at: session.created_at },
   investigation_result: { success: true, status: 'completed', answer: '<img src=x onerror=alert(1)> 纯文本调查结论',
-    answer_truncated: true, model_rounds: 2, tool_calls: 4 },
+    answer_truncated: true, model_rounds: 2, tool_calls: 4, result_trust: resultTrust },
   projection: { projected: false, blocked: true, error_category: 'fixture_projection_error', retry_at: null },
   proposal_generation: { status: 'not_pending', pending: false, attempts: 0, blocked: false,
     blocked_reason: null, error_category: null, retry_at: null, evidence_gap: 'fixture_evidence_gap' },
