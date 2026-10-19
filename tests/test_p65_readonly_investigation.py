@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import timedelta
 import hashlib
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -73,6 +73,7 @@ def approval(prepared):
     plan, _, _ = p65.read_prepared(prepared)
     return {
         "purpose": "p65_historical_multiround_investigation",
+        "request_version": p65.REQUEST_VERSION,
         "explicitly_authorized": True,
         "plan_sha256": sha(encoded(plan)),
         "first_request_sha256": plan["first_request_sha256"],
@@ -261,7 +262,7 @@ def test_prompt_injection_does_not_change_scope_or_export_sensitive_next_round(p
     injected.output.reverse()
     report = run(prepared, tmp_path, [injected, response(answer="停止。")])
     sent = request(tmp_path, 2)["body"]
-    assert sent["instructions"] == TASK
+    assert sent["instructions"] == p65.budget_instructions(2, 2)
     assert {s["name"] for s in sent["tools"]} == set(p65.TOOLS)
     assert report["session"]["total_tool_executions"] == 2
     with pytest.raises(ValueError, match="sensitive"):
@@ -370,7 +371,10 @@ def test_offline_resume_uses_saved_records_without_fabricating_outputs(
             tool_registry["get_running_version"], "func",
             lambda **kw: synthetic_package()["observations"]["get_running_version"]["result"],
         )
-        Worker(manager, Agent(adapter, TASK)).run_once()
+        with patch.dict(tool_registry, {
+            name: tool_registry[name] for name in p65.TOOLS
+        }, clear=True):
+            Worker(manager, Agent(adapter, TASK)).run_once()
     saved, checkpoint = snapshot()
     assert saved.status.value == "COMPLETED"
     assert saved.total_model_requests == 2
@@ -508,6 +512,9 @@ def test_injected_sdk_transport_raw_protocol_and_one_time_consumption(
     )
     expected = 3 if failure in {None, "usage_shape"} else 1
     assert len(bodies) == report["real_model_sdk_requests"] == expected
+    # Assert installed SDK serialization uses the approved v2 body, including
+    # dynamic instructions; this transport never opens a network connection.
+    assert bodies[0] == p65.read_prepared(prepared)[2]
     # That report field counts injected SDK entries in this test, not paid use.
     assert report["session"]["attempt_count"] == 1
     assert report["session"]["status"] == (

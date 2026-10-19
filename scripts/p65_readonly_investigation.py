@@ -19,7 +19,8 @@ if __package__ in {None, ""}:
 
 from scripts.p65_model_boundary import (
     BASE_URL, BoundedResponses, MAX_MODELS, MAX_OUTPUT_TOKENS, MAX_TOOLS,
-    MODEL, ROOT, TASK, TIMEOUT, TOOLS, encoded, inspect_input, seal, sha,
+    MODEL, REQUEST_VERSION, ROOT, TASK, TIMEOUT, TOOLS, budget_instructions,
+    encoded, inspect_input, seal, sha,
     utc, validate_approval, write,
 )
 from scripts.p63_evidence import DEFAULT_CAPTURE, build_context
@@ -89,11 +90,13 @@ def schemas():
     return result
 
 
-def first_request(package):
+def first_request(package, *, max_tools=MAX_TOOLS):
+    """Deterministic v2 SDK body after the one committed automatic probe."""
     context = package["context"]
+    tools = schemas() if max_tools > 1 else []
     return {
         "model": MODEL,
-        "instructions": TASK,
+        "instructions": budget_instructions(max_tools - 1, MAX_MODELS),
         "input": [{"role": "user", "content": encoded({
             "task": "调查冻结历史现象，按需要自主调用只读工具。",
             "service": "order-service",
@@ -106,9 +109,9 @@ def first_request(package):
             "known_gaps": context["known_gaps"],
             "automatic_version_probe": package["observations"]["get_running_version"]["result"],
             "max_model_requests": MAX_MODELS,
-            "max_tool_executions_including_probe": MAX_TOOLS,
+            "max_tool_executions_including_probe": max_tools,
         }).decode("utf-8")}],
-        "tools": schemas(), "tool_choice": "auto",
+        "tools": tools, "tool_choice": "auto" if tools else "none",
         "reasoning": {"effort": "none"},
         "max_output_tokens": MAX_OUTPUT_TOKENS,
     }
@@ -124,18 +127,31 @@ def _separate(output, *protected):
     return path
 
 
-def prepare(capture, output):
+def prepare(
+    capture,
+    output,
+    *,
+    offline_tool_budget=None,
+):
+    from config import MAX_TOOL_CALLS
+
+    max_tools = MAX_TOOLS if offline_tool_budget is None else offline_tool_budget
+    if type(max_tools) is not int or not 1 <= max_tools <= MAX_TOOL_CALLS:
+        raise ValueError("p65_invalid_offline_tool_budget")
     package = evidence_package(capture)
-    body = first_request(package)
+    body = first_request(package, max_tools=max_tools)
     plan = {
         "phase": "p65_offline_prepared_pending_new_approval",
+        "request_version": REQUEST_VERSION,
+        "offline_only": offline_tool_budget is not None,
+        "expected_initial_reservation": {"model_requests": 1, "tool_executions": 1},
         "model": MODEL, "base_url": BASE_URL,
         "capture_dir": str(Path(capture).resolve()),
         "capture_manifest_sha256": package["context"]["capture_manifest_sha256"],
         "package_sha256": sha(encoded(package)),
         "first_request_sha256": inspect_input(body),
         "code_sha256": {name: sha((ROOT / name).read_bytes()) for name in CODE_FILES},
-        "max_model_requests": MAX_MODELS, "max_tool_executions": MAX_TOOLS,
+        "max_model_requests": MAX_MODELS, "max_tool_executions": max_tools,
         "max_attempts": 1, "max_incidents": 1,
         "sdk_retries": 0, "application_retries": 0,
         "timeout_seconds": TIMEOUT, "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -167,8 +183,21 @@ def read_prepared(prepared):
     ):
         raise ValueError("p65_prepared_integrity_failed")
     plan = json.loads((root / "plan.json").read_bytes())
+    from config import MAX_TOOL_CALLS
+
+    max_tools = plan["max_tool_executions"]
+    if (
+        plan.get("request_version") != REQUEST_VERSION
+        or type(plan.get("offline_only")) is not bool
+        or type(max_tools) is not int or not 1 <= max_tools <= MAX_TOOL_CALLS
+        or (not plan["offline_only"] and max_tools != MAX_TOOLS)
+        or plan.get("expected_initial_reservation") != {
+            "model_requests": 1, "tool_executions": 1,
+        }
+    ):
+        raise ValueError("p65_prepared_scope_or_code_changed")
     package = evidence_package(plan["capture_dir"])
-    body = first_request(package)
+    body = first_request(package, max_tools=max_tools)
     if (encoded(package) != (root / "package.json").read_bytes()
             or encoded(body) != (root / "first-request.json").read_bytes()
             or sha(encoded(package)) != plan["package_sha256"]
@@ -176,8 +205,7 @@ def read_prepared(prepared):
             or plan["code_sha256"] != {
                 name: sha((ROOT / name).read_bytes()) for name in CODE_FILES
             }
-            or plan["max_model_requests"] != MAX_MODELS
-            or plan["max_tool_executions"] != MAX_TOOLS):
+            or plan["max_model_requests"] != MAX_MODELS):
         raise ValueError("p65_prepared_scope_or_code_changed")
     return plan, package, body
 
@@ -218,11 +246,16 @@ def run_prepared(
         raise ValueError("p65_new_explicit_authorization_required")
     plan, package, body = read_prepared(prepared)
     if live:
+        if plan["offline_only"]:
+            raise ValueError("p65_synthetic_budget_offline_only")
         validate_approval(authorization, plan)
     if consumption_dir is not None and sdk_factory is None:
         raise ValueError("p65_custom_ledger_only_for_injected_test_sdk")
     root = _separate(output, prepared, plan["capture_dir"])
     root.mkdir(parents=True, exist_ok=False)
+    # Freeze before patching registry: generating again from patched schemas
+    # would duplicate descriptions. This pool is code/plan bound by read_prepared.
+    frozen_tools = schemas()
     boundaries = []
     forbidden_attempts = []
     sdk = None
@@ -244,6 +277,7 @@ def run_prepared(
         "real_firing_observed": False,
         "historical_only": True, "use_for_current_state": False,
         "plan_sha256": sha(encoded(plan)),
+        "offline_only": plan["offline_only"],
         "context_strategy": plan["context_strategy"],
         "human_approval": "not_recorded",
         "counter_semantics": "local_sdk_create_entry_not_server_receipt_or_billing",
@@ -362,11 +396,11 @@ def run_prepared(
 
             # Scoped reduction of the existing registry, never a second registry.
             allowed = {s["name"]: {"schema": s, "func": replay(s["name"])}
-                       for s in body["tools"]}
+                       for s in frozen_tools}
             stack.enter_context(patch.dict(tool_registry, allowed, clear=True))
             limits = RuntimeLimits(
                 max_attempts=1, max_model_requests=MAX_MODELS,
-                max_tool_executions=MAX_TOOLS, max_resumes=0,
+                max_tool_executions=plan["max_tool_executions"], max_resumes=0,
                 max_human_requests=0, model_timeout_seconds=TIMEOUT,
             )
             manager = InvestigationManager(
@@ -386,12 +420,21 @@ def run_prepared(
 
             def snapshot():
                 saved = manager.store.get(session_id)
+                with manager.store.read() as db:
+                    usage = manager.store.budget_usage(saved, db)
+                if (usage["attempts"] != saved.attempt_count
+                        or usage["model_requests"] != saved.total_model_requests
+                        or usage["tool_executions"] != saved.total_tool_executions):
+                    raise ValueError("p65_incident_budget_binding_mismatch")
                 return saved, manager.store.load_checkpoint(saved)
 
             adapter = BoundedResponses(
                 root, body, snapshot, sdk=sdk, credential=key,
                 mock_responses=mock_responses if mock_responses is not None else mock_plan(),
                 offline_first_response=offline_first_response,
+                expected_first_sha256=plan["first_request_sha256"],
+                frozen_tools=frozen_tools,
+                max_tools=plan["max_tool_executions"],
             )
             agent = Agent(adapter, TASK)
 
@@ -469,11 +512,14 @@ def main(argv=None):
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--authorization", type=Path)
+    parser.add_argument("--offline-tool-budget", type=int)
     args = parser.parse_args(argv)
     if args.mock and args.execute or (args.mock or args.execute) and args.prepared_dir is None:
         parser.error("mock/execute require --prepared-dir and are mutually exclusive")
     if args.authorization and not args.execute:
         parser.error("authorization requires --execute")
+    if args.offline_tool_budget is not None and (args.mock or args.execute):
+        parser.error("offline-tool-budget is prepare-only; its plan cannot execute live")
     if args.mock or args.execute:
         result = run_prepared(
             args.prepared_dir, args.output_dir, live=args.execute,
@@ -483,7 +529,9 @@ def main(argv=None):
             ),
         )
     else:
-        result = prepare(args.capture_dir, args.output_dir)
+        result = prepare(
+            args.capture_dir, args.output_dir, offline_tool_budget=args.offline_tool_budget,
+        )
     print(json.dumps({k: result[k] for k in (
         "status", "phase", "real_model_sdk_requests", "outcome", "first_request_sha256",
     ) if k in result}, ensure_ascii=False))
