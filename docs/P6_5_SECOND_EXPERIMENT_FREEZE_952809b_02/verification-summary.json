@@ -1,0 +1,29 @@
+{
+  "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+  "at": "2026-10-19T10:54:23.088968+00:00",
+  "result": "offline_preparation_checks_passed_permission_still_absent",
+  "source_files_verified": 250,
+  "historical_files_verified": 76,
+  "admission_manifest_files_verified": 33,
+  "admission_report_sha256": "1a2f3c7a5d19eb3c4813e5bab4814235e8b3a2a823da8b3108ae60ccf518f099",
+  "admission_log_sha256": "36ce6a86be7e98bd26a7c2cba894789fbfdc7ea3417db889da56039851b47632",
+  "admission_counts": {
+    "passed": 2296,
+    "failed": 0,
+    "skipped": 2,
+    "deselected": 8,
+    "subtests passed": 190
+  },
+  "admission_full_runs": 1,
+  "new_full_runs": 0,
+  "baseline_protected_files": 5814,
+  "baseline_changed_files": [],
+  "previously_missing_tracked_files_still_missing": true,
+  "scope_sha256": "77a6b5cc2973321becb2568636a328ebf8c234f77be0364b7a63c1545a5a1638",
+  "plan_sha256": "685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c",
+  "offline_checks_sha256": "d7df733babec652ddbda6518577016241366f6d804862be29d2a34fc34ccf228",
+  "old_originals_authorization_ledger_unchanged": true,
+  "no_new_current_authorization_or_ledger": true,
+  "execution_not_run": true,
+  "pricing_account_balance_and_provider_online_status": "not_checked_offline"
+}

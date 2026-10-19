@@ -1,0 +1,213 @@
+{
+  "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+  "at": "2026-10-19T10:50:34.549875+00:00",
+  "checks_passed": true,
+  "exact_source_files": 250,
+  "copied_historical_files": 76,
+  "plan_sha256": "685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c",
+  "request_sha256": "825cfc43c6c4e60e1fcced85eea16d3680d94158170e11cbbb6c88f3efc6a79d",
+  "package_sha256": "0c99f1bbdab631c2e04e7b41aa72c12d1a993c9067a139c664519a8e24b0c99a",
+  "first_request_bytes": 9040,
+  "request_hash_semantics": "canonical encoded SDK create body, not captured wire HTTP bytes",
+  "request_same_as_old_first_body": true,
+  "tool_cases": [
+    {
+      "case": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_5xx_rate"
+      },
+      "status": "no_data",
+      "captured_status": "no_data",
+      "result_sha256": "1c8b3ab649d81c991cac979c3605f774bb10b3ad474531f426637b6418fe78ee"
+    },
+    {
+      "case": "http_requests_total",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_requests_total"
+      },
+      "status": "no_data",
+      "captured_status": "ok",
+      "result_sha256": "3a2fe8b66d9768ca232187ac9f48a17766c457ddfcc918603182367ded852d0d"
+    },
+    {
+      "case": "http_request_rate",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_request_rate"
+      },
+      "status": "no_data",
+      "captured_status": "ok",
+      "result_sha256": "1091a79f1a05577f15d6c546d6da25efcac57a6514e64e9c3def404188aa8002"
+    },
+    {
+      "case": "http_latency_p95_seconds",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_latency_p95_seconds"
+      },
+      "status": "no_data",
+      "captured_status": "no_data",
+      "result_sha256": "1a4fe4f966d8f58c7993637a23dd34d9624cefbd31fe238c245a69c32d8da4c0"
+    },
+    {
+      "case": "service_scrape_up",
+      "arguments": {
+        "service": "order-service",
+        "metric": "service_scrape_up"
+      },
+      "status": "no_data",
+      "captured_status": "ok",
+      "result_sha256": "7c61a6c94ab55c442bcdc44ab7880449809a1e8f676bad9abdb331821bd41bcd"
+    },
+    {
+      "case": "query_logs",
+      "arguments": {
+        "service": "order-service",
+        "start": "2026-10-18T11:52:54.430057+00:00",
+        "end": "2026-10-18T11:53:34.815895+00:00"
+      },
+      "status": "no_data",
+      "captured_status": "ok",
+      "result_sha256": "281c4ea08d9b30a8c7588251a73f985bc04e5eeb1a80e2e3996c2a651063a57f"
+    },
+    {
+      "case": "get_running_version",
+      "arguments": {
+        "service": "order-service"
+      },
+      "status": "no_data",
+      "captured_status": "no_data",
+      "result_sha256": "b813d8b956f637ecc5987774357467a2dc38d79f3290cb6d7302c7a9995b01a8"
+    },
+    {
+      "case": "outside_scope",
+      "name": "query_logs",
+      "arguments": {
+        "service": "order-service",
+        "start": "2026-10-19T00:00:00Z",
+        "end": "2026-10-19T01:00:00Z"
+      },
+      "result": {
+        "status": "no_data",
+        "reason": "outside_approved_frozen_evidence",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "evidence_scope": "time_window"
+      }
+    },
+    {
+      "case": "outside_scope",
+      "name": "query_logs",
+      "arguments": {
+        "service": "order-service",
+        "start": "2026-10-18T11:52:54.430057+00:00"
+      },
+      "result": {
+        "status": "no_data",
+        "reason": "outside_approved_frozen_evidence",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "evidence_scope": "time_window"
+      }
+    },
+    {
+      "case": "outside_scope",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": "not_in_capture"
+      },
+      "result": {
+        "status": "no_data",
+        "reason": "outside_approved_frozen_evidence",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "evidence_scope": "time_window"
+      }
+    },
+    {
+      "case": "outside_scope",
+      "name": "get_running_version",
+      "arguments": {
+        "service": "inventory-service"
+      },
+      "result": {
+        "status": "no_data",
+        "reason": "p65_target_denied"
+      }
+    },
+    {
+      "case": "validation_rejected",
+      "name": "query_logs",
+      "arguments": {
+        "service": "order-service",
+        "extra": "bad"
+      },
+      "reason": "invalid_tool_arguments"
+    },
+    {
+      "case": "validation_rejected",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service"
+      },
+      "reason": "invalid_tool_arguments"
+    },
+    {
+      "case": "validation_rejected",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": 0
+      },
+      "reason": "invalid_tool_argument_type"
+    },
+    {
+      "case": "validation_rejected",
+      "name": "query_logs",
+      "arguments": {
+        "service": "unknown-service"
+      },
+      "reason": "tool_target_outside_session"
+    },
+    {
+      "case": "validation_rejected",
+      "name": "request_human_input",
+      "arguments": {
+        "question": "unapproved"
+      },
+      "reason": "tool_not_allowed"
+    }
+  ],
+  "runtime_limits": {
+    "max_attempts": 1,
+    "max_model_requests": 3,
+    "max_tool_executions": 4,
+    "max_resumes": 0,
+    "max_duration_seconds": 3600,
+    "lease_seconds": 120,
+    "model_timeout_seconds": 30,
+    "retry_base_seconds": 5,
+    "max_human_requests": 0,
+    "human_timeout_seconds": 1800,
+    "starvation_seconds": 120,
+    "checkpoints_to_keep": 4
+  },
+  "no_data_test_method": "exact target AST nested replay factory plus Worker._validate_tool; Worker never started",
+  "budget_test_method": "actual RuntimeLimits and source/constant inspection; no SDK create or Worker execution",
+  "pending_and_old_authorizations_rejected": 3,
+  "sdk_constructed": false,
+  "sdk_create_entries": 0,
+  "worker_run_once_entries": 0,
+  "business_requests": 0,
+  "new_authorization_created": false,
+  "new_consumption_created": false,
+  "full_regression_runs_this_phase": 0,
+  "additional_diagnostic_cycles": 0,
+  "forbidden_attempts": [],
+  "credential_read": false,
+  "actual_credential_value_scan": "deferred to authorized pre-execution; no secret loaded in offline preparation",
+  "limits": "offline checks do not verify provider availability, actual second response, costs, recovery or semantic acceptance"
+}

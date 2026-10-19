@@ -1,0 +1,53 @@
+{
+  "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+  "state": "request_requirements_only_not_authorization",
+  "scope_sha256": "77a6b5cc2973321becb2568636a328ebf8c234f77be0364b7a63c1545a5a1638",
+  "must_bind": {
+    "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+    "plan_sha256": "685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c",
+    "first_request_sha256": "825cfc43c6c4e60e1fcced85eea16d3680d94158170e11cbbb6c88f3efc6a79d",
+    "package_sha256": "0c99f1bbdab631c2e04e7b41aa72c12d1a993c9067a139c664519a8e24b0c99a",
+    "capture_manifest_sha256": "350578d6914f7f09a530d85178f491da2366521b25b5f5fe4b5872bd58e5ae08",
+    "source_manifest_sha256": "7e35d8c94c87d2dacc4a8573964ae83087bf2f1f8782a5f059abb59a8f7519c4",
+    "sdk_manifest_sha256": "97a5d9e57b5189797491c4424ca57369e19384c740ca317ed74a20a3135bcc1e",
+    "provider": "DeepSeek",
+    "model": "deepseek-flash",
+    "endpoint": "https://api.deepseek.com/responses"
+  },
+  "human_decision_required": [
+    "new approval for this exact snapshot, plan and scope",
+    "export approved historical fields and real bound dynamic followups",
+    "accept 3 paid SDK entries, 4 tools including probe, 1 worker and zero retries/resumes/fallback",
+    "acknowledge unverified currency costs and provider compatibility risk",
+    "independent review of this new package; old waiver does not carry forward"
+  ],
+  "existing_validate_approval_fields": [
+    "purpose",
+    "explicitly_authorized",
+    "plan_sha256",
+    "first_request_sha256",
+    "capture_manifest_sha256",
+    "model",
+    "base_url",
+    "max_requests",
+    "max_tool_executions",
+    "sdk_retries",
+    "application_retries",
+    "cost_risk_acknowledged",
+    "historical_evidence_export_authorized",
+    "dynamic_inputs_under_same_scope_authorized",
+    "authorized_at",
+    "authorization_note"
+  ],
+  "validation_limit": "existing validator enforces plan hash and those fields; target, full snapshot, scope hash and human-message authenticity require separate execution preflight; extra plan fields are hash bound but are not a new runtime approval validator",
+  "record_only_after_real_human_approval": [
+    "actual exact human text",
+    "timezone-aware recorded time and time source",
+    "target_commit",
+    "scope_sha256",
+    "required existing approval fields"
+  ],
+  "authorization_record_created": false,
+  "consumption_record_created": false,
+  "future_consumption_path": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\tree\\data\\p65-paid-consumption\\685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c.consumed.json"
+}

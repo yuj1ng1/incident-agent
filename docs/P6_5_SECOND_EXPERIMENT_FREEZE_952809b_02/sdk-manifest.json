@@ -1,0 +1,24 @@
+{
+  "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+  "executable": "D:\\conda\\envs\\agentlearn\\python.exe",
+  "python": "3.12.14 | packaged by Anaconda, Inc. | (main, Aug 27 2026, 14:37:13) [MSC v.1942 64 bit (AMD64)]",
+  "versions": {
+    "openai": "3.14.0",
+    "httpx2": "2.13.0",
+    "pydantic": "2.13.5",
+    "pytest": "9.1.1",
+    "requests": "2.34.2",
+    "psycopg": "3.3.6"
+  },
+  "files": {
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\_client.py": "ada7742f3a488aaa585b6dd5cdb34411aff7272f6ba7a457b00f5ab3f42ff378",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\_base_client.py": "218e2cd86f7822df1a12a95e70dfff0fd02cf19d966a18a4f8985ba56b334ed5",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\_models.py": "41fa57193539881da8543bc0e5982950becdb2ef5fec3cd9e2226eef7a9099f4",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\resources\\responses\\responses.py": "3fe5089373a7f3e269f62d2760de2b141e3a8263a6e97dc0179f77d5ecacfa2d",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\types\\responses\\response.py": "3d60894eee9fb44d19d3b2bcb5c434a0328dc3bb3bff875d18749ad653ab5dd0",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\openai\\types\\responses\\response_usage.py": "aeeb1c2478edc163c375830f1cc8cdd5f94992639ef74f0a6fdbaf3ff904b5a1",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\httpx2\\_client.py": "fa3948aa66a9efd5edf097c6d13d927612c617328b43ceefc4bdd5e350aaa93b",
+    "D:\\conda\\envs\\agentlearn\\Lib\\site-packages\\httpx2\\_config.py": "0b53f754f1bb708f2ea485bccbb4ab1ffa07259cf8c008a42d8959b9cb1e3db0"
+  },
+  "OpenAI_signature_read_without_construction": "(*, api_key: 'str | Callable[[], str] | None' = None, admin_api_key: 'str | None' = None, workload_identity: 'WorkloadIdentity | X509WorkloadIdentity | None' = None, organization: 'str | None' = None, project: 'str | None' = None, webhook_secret: 'str | None' = None, provider: '_Provider | None' = None, base_url: 'str | httpx2.URL | None | NotGiven' = NOT_GIVEN, data_residency: 'DataResidency | None' = None, websocket_base_url: 'str | httpx2.URL | None' = None, timeout: 'float | Timeout | None | NotGiven' = NOT_GIVEN, max_retries: 'int' = 2, default_headers: 'Mapping[str, str] | None' = None, default_query: 'Mapping[str, object] | None' = None, http_client: 'httpx2.Client | None' = None, _strict_response_validation: 'bool' = False, _enforce_credentials: 'bool' = True) -> 'None'"
+}

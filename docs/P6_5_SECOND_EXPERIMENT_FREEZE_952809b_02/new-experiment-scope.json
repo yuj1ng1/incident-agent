@@ -1,0 +1,185 @@
+{
+  "state": "prepared_pending_new_independent_review_and_human_authorization",
+  "target_commit": "952809b157bcbd83f94a4d43ff6b5f666a2b2a0d",
+  "experiment_id": "p65-second-freeze-952809b-20261019-02",
+  "source_tree": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\tree",
+  "execution_code_source": "exact target Git blob snapshot, not dirty parent worktree",
+  "plan_sha256": "685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c",
+  "first_request_sha256": "825cfc43c6c4e60e1fcced85eea16d3680d94158170e11cbbb6c88f3efc6a79d",
+  "package_sha256": "0c99f1bbdab631c2e04e7b41aa72c12d1a993c9067a139c664519a8e24b0c99a",
+  "prepared_manifest_sha256": "e353a85179092ec2f0ce4df077dd64a164afd9242beff4247221510caf505bce",
+  "source_manifest_sha256": "7e35d8c94c87d2dacc4a8573964ae83087bf2f1f8782a5f059abb59a8f7519c4",
+  "sdk_manifest_sha256": "97a5d9e57b5189797491c4424ca57369e19384c740ca317ed74a20a3135bcc1e",
+  "historical_originals_manifest_sha256": "b3b5c13b963bead84b6890cb3eddb49ce4d3b6e3de789c52984e70c8ce574972",
+  "capture_manifest_sha256": "350578d6914f7f09a530d85178f491da2366521b25b5f5fe4b5872bd58e5ae08",
+  "provider": "DeepSeek",
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "endpoint": "https://api.deepseek.com/responses",
+  "prepared_dir": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\prepared",
+  "capture_dir": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\tree\\data\\p62b-first-error-20261018-01",
+  "max_sdk_create_requests": 3,
+  "max_tool_executions_including_automatic_probe": 4,
+  "max_worker_run_once": 1,
+  "max_incidents": 1,
+  "max_attempts": 1,
+  "sdk_retries": 0,
+  "application_retries": 0,
+  "resumes": 0,
+  "fallback": 0,
+  "human_requests": 0,
+  "timeout_seconds_per_sdk_request": 30,
+  "experiment_hard_wall_clock_limit": null,
+  "runtime_duration_seconds": 3600,
+  "runtime_duration_semantics": "cooperative checks at runtime boundaries, not a kill timer for an in-flight SDK request",
+  "max_output_tokens_per_request": 2048,
+  "max_cumulative_output_token_setting": 6144,
+  "max_serialized_request_bytes_per_round": 131072,
+  "fixed_input_token_or_currency_cap": null,
+  "allowed_tools": [
+    "query_metrics",
+    "query_logs",
+    "get_running_version"
+  ],
+  "target_service": "order-service",
+  "fault_window": {
+    "start": "2026-10-18T11:52:54.430057+00:00",
+    "end": "2026-10-18T11:53:24.815895+00:00",
+    "bounds": "[start, end)"
+  },
+  "collection_window": {
+    "start": "2026-10-18T11:54:48.842673+00:00",
+    "end": "2026-10-18T11:54:56.306126+00:00",
+    "first_http_started_at": "2026-10-18T11:54:53.968607+00:00",
+    "entry_delay_after_last_fault_seconds": 84.026778,
+    "first_http_delay_after_last_fault_seconds": 89.152712
+  },
+  "approved_query_arguments": {
+    "query_metrics": {
+      "service": "order-service",
+      "metric": "http_5xx_rate"
+    },
+    "http_requests_total": {
+      "service": "order-service",
+      "metric": "http_requests_total"
+    },
+    "http_request_rate": {
+      "service": "order-service",
+      "metric": "http_request_rate"
+    },
+    "http_latency_p95_seconds": {
+      "service": "order-service",
+      "metric": "http_latency_p95_seconds"
+    },
+    "service_scrape_up": {
+      "service": "order-service",
+      "metric": "service_scrape_up"
+    },
+    "query_logs": {
+      "service": "order-service",
+      "start": "2026-10-18T11:52:54.430057+00:00",
+      "end": "2026-10-18T11:53:34.815895+00:00"
+    },
+    "get_running_version": {
+      "service": "order-service"
+    }
+  },
+  "query_logs_omitted_bounds_alias": {
+    "service": "order-service"
+  },
+  "query_logs_alias_semantics": "exact frozen query_logs row, not the live last hour and not a new collection window",
+  "matching_rule": "literal argument-dictionary equality plus tool-source binding; omitted log bounds are the one explicit alias; equivalent-looking or partial timestamps are not normalized",
+  "unmatched_queries": "no_data or deterministic rejection; never live Loki/Prometheus/version fallback",
+  "outgoing_fields": {
+    "first_round": "exact complete prepared/first-request.json SDK body",
+    "first_round_content": [
+      "static TASK",
+      "synthetic historical task",
+      "service",
+      "origin and historical flags",
+      "capture manifest hash",
+      "fault/collection windows",
+      "known_gaps",
+      "automatic_version_probe full frozen result",
+      "budgets",
+      "three allowlisted schemas"
+    ],
+    "tool_envelope_fields": [
+      "captured_at",
+      "captured_result",
+      "collection_window",
+      "evidence_scope",
+      "fault_window",
+      "historical_only",
+      "originals",
+      "reason",
+      "sanitized_projection",
+      "service",
+      "source",
+      "status",
+      "use_for_current_state"
+    ],
+    "tool_scope": "only full frozen results including captured_result, sanitized_projection, originals paths/hashes and historical time/source metadata; all exact content is in package.json",
+    "dynamic_followups": "previous approved input + actual validated complete provider output in original order + actual committed function_call_output bound to call_id, saved call and saved evidence record; no missing output synthesis",
+    "last_round": "round 3 tools=[] and tool_choice=none; any returned function_call fails before execution",
+    "checks": "inspect_input source projection, field/value checks and byte limit; actual credential-value check at authorized execution; not universal natural-language secret detection",
+    "not_sent": [
+      ".env",
+      "API credential value",
+      "whole source snapshot",
+      "old approval or ledger as new permission",
+      "local raw evidence archive wholesale",
+      "unrelated incident data"
+    ]
+  },
+  "stop_conditions": [
+    "no new explicit human approval, missing integrity binding, occupied fresh plan ledger or source/environment drift: stop before SDK",
+    "first provider/transport/protocol/sensitive-data error: bounded terminal failure, preserve originals, no automatic rerun",
+    "max 3 SDK entries, 4 reserved tool executions including probe, 1 run_once; never retry/resume/fallback/replenish",
+    "unmatched historical query returns no_data or rejection, never supplement with current collection",
+    "third round asks for tools: fail; model ends without tools: retain original answer and mark multi-round objective unproven",
+    "empty/incomplete/unknown outcome: preserve evidence, stop and seek separate review; unused old/new slots are not permission to rerun"
+  ],
+  "forbidden": [
+    "production main.py",
+    "Scheduler loop",
+    "RecoveryWorker start",
+    "Remediation",
+    "new business traffic",
+    "fault injection",
+    "business recovery verification",
+    "live tools",
+    "automatic P6.6"
+  ],
+  "success_criteria": [
+    "real first response legal allowed function_call",
+    "actual tool result persisted",
+    "real second request contains authentic saved call/output pair",
+    "real second response continues or concludes from that result"
+  ],
+  "semantic_acceptance": "COMPLETED is process status only; conclusion remains pending independent semantic review and separate human acceptance; recovery unknown",
+  "future_consumption_path_after_new_approval_only": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\tree\\data\\p65-paid-consumption\\685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c.consumed.json",
+  "consumption_policy": "existing exclusive xb reservation before credentials/SDK; failed/timeout attempts are never automatically replayed; old parent-workspace ledger is history only",
+  "authorization": {
+    "explicitly_authorized": false,
+    "authorized_at": null,
+    "human_confirmation": null,
+    "review_status": "pending",
+    "old_review_waiver_applicable": false
+  },
+  "cost_risks": [
+    "tariff, account balance and actual currency fee unknown offline",
+    "up to three paid entries with growing resent input",
+    "bytes are not tokens; output setting is not a currency cap",
+    "timeout/HTTP error may still be billed; local entry is not server receipt or billing proof",
+    "30 second SDK timeout and 3600 second cooperative runtime setting are not experiment hard wall-clock deadlines"
+  ],
+  "phase_counters": {
+    "sdk_create": 0,
+    "worker_run_once": 0,
+    "business_requests": 0,
+    "new_authorizations": 0,
+    "new_consumption_records": 0
+  },
+  "delivery_commit_policy": "delivery commit may advance parent main with preparation documents only; experiment code remains this exact target snapshot; never silently substitute newer main"
+}
