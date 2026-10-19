@@ -31,7 +31,17 @@ def main():
         Worker(manager, FixtureAgent()).run_once()
         raise AssertionError("crash boundary was not reached")
 
-    store = IncidentStore(root / "incidents.json")
+    # Store construction takes the same nonblocking lock as later writes.
+    # Contention before ready must use the existing bounded writer policy too.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            store = IncidentStore(root / "incidents.json")
+            break
+        except FileLockError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.002)
     incident = store.get_incident(identity)
     session = InvestigationSession(session_id="writer-session", incident_id=identity,
                                    alert_fingerprint=incident.fingerprint, service=incident.service)

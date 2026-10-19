@@ -10,11 +10,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from runtime_support import FixtureAgent, SHA, call, create_runtime, response
 from investigation.state import LostClaim
 from investigation.worker import Worker
+from storage_lock import FileLockError
+
+
+def create_claim_runtime(root):
+    """Allow bounded startup contention before the claim ready barrier."""
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            return create_runtime(root)
+        except FileLockError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.002)
 
 
 if __name__ == "__main__":
-    manager = create_runtime(sys.argv[1])
     phase = sys.argv[2]
+    manager = (
+        create_claim_runtime(sys.argv[1])
+        if phase == "claim-contender"
+        else create_runtime(sys.argv[1])
+    )
     if phase == "claim-contender":
         owner = sys.argv[3]
         directory = Path(sys.argv[1])
