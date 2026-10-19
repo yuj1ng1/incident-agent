@@ -209,7 +209,10 @@ def run_prepared(
     sdk_factory=None,
     consumption_dir=None,
     boundary_hook=None,
+    offline_first_response=None,
 ):
+    if live and offline_first_response is not None:
+        raise ValueError("p65_replay_cannot_enter_sdk")
     # Missing approval is rejected before package reads, credentials or SDK.
     if live and authorization is None:
         raise ValueError("p65_new_explicit_authorization_required")
@@ -227,7 +230,11 @@ def run_prepared(
     session_id = None
     manager = None
     summary = {
-        "mode": "paid" if live else "scripted_mock_sdk_not_real_deepseek",
+        "mode": (
+            "real_provider_first_response_offline_replay"
+            if offline_first_response is not None else
+            "paid" if live else "scripted_mock_sdk_not_real_deepseek"
+        ),
         "status": "failed", "started_at": utc(),
         "real_model_sdk_requests": 0, "sdk_retries": 0,
         "application_retries": 0, "real_service_requests": 0,
@@ -384,6 +391,7 @@ def run_prepared(
             adapter = BoundedResponses(
                 root, body, snapshot, sdk=sdk, credential=key,
                 mock_responses=mock_responses if mock_responses is not None else mock_plan(),
+                offline_first_response=offline_first_response,
             )
             agent = Agent(adapter, TASK)
 
@@ -414,6 +422,10 @@ def run_prepared(
                       for i in json.loads(p.read_bytes())["output"]
                       if i["type"] == "function_call"]
             summary["model_selected_calls"] = chosen
+            summary["response_origins"] = [
+                json.loads(p.read_bytes())["response_origin"]
+                for p in sorted(root.glob("completion-*.json"))
+            ]
             summary["outcome"] = (
                 (
                     "real_model_completed_without_tool_use" if live
