@@ -1,0 +1,93 @@
+{
+  "mode": "sealed_real_first_response_replay_then_explicit_mock",
+  "experiment_id": "p65-third-tools5-241dca6-20261021-01",
+  "target_commit": "241dca6353e6bd8aff8db50dfd74a7a9bed1949a",
+  "raw_first_response_sha256": "7ff76c709d7eb8471e740f54a0c81838787ba06b32a5dc6b0b0d7bb253e3620e",
+  "actual_offline_worker_run_once": 1,
+  "automatic_version_probes": 1,
+  "model_selected_calls": 4,
+  "committed_tool_records": 5,
+  "bound_function_call_outputs": [
+    {
+      "call_id": "call_00_rK698ozA1QvmwhNxllAz3779",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_5xx_rate"
+      },
+      "observation_id": "obs-a0fb8a73156b48e8a76980a29e3e72c7",
+      "output_sha256": "5f387333e9d8682933fced70435254afa359c65f44996cb5eebd54b90dc295dc"
+    },
+    {
+      "call_id": "call_01_wEhnoD0lEiidruyUNt3I8252",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_request_rate"
+      },
+      "observation_id": "obs-e43b70b640e349b19b27aa4af21a756a",
+      "output_sha256": "a2be2024d98068de606d3a6b24a25f278eac04846316797b32b6204f64e843c1"
+    },
+    {
+      "call_id": "call_02_JeBQoinLdvwLq9ajZeHH4748",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "order-service",
+        "metric": "http_latency_p95_seconds"
+      },
+      "observation_id": "obs-45aa9ff6f6a149cebea162c3e7a41d90",
+      "output_sha256": "02c6d6800f6b446d79552dde1a51c638f2e876f838f91adc3ebadfe977a45e45"
+    },
+    {
+      "call_id": "call_03_fSbzPQLAq4t3kddpwgnR6440",
+      "name": "query_logs",
+      "arguments": {
+        "service": "order-service"
+      },
+      "observation_id": "obs-9aad6383a5f748c8b1ef8f37f99781b3",
+      "output_sha256": "def79b32d7b953aff00ccdd5ccbb95e76881495cc94fae7f33ab27b48983d674"
+    }
+  ],
+  "first_request_sha256": "d9cfac4386a1adfc2d565820e70bc03fc910cdf987020ab168df5481f2ff76a1",
+  "second_request_sha256": "88c5606c3ff61f727ba80f0c703fe638611117bad4b595cdb464109de83ce316",
+  "first_request_bytes": 9657,
+  "second_request_bytes": 21445,
+  "second_remaining_tools": 0,
+  "second_tools": [],
+  "second_tool_choice": "none",
+  "result_trust": {
+    "mechanical_status": "passed",
+    "mechanical_scope": "result_schema_only",
+    "semantic_status": "pending_review",
+    "trusted": false,
+    "human_approval": "not_recorded",
+    "answer_sha256": "0b9ca639dfff152334b7c82a8d38681ac9d4e446f21443391764d31f77855b6c",
+    "review_origin": "none",
+    "rejection_reasons": []
+  },
+  "response_origins": [
+    "real_provider_first_response_offline_replay",
+    "scripted_mock_followup"
+  ],
+  "old_approval_rejected": true,
+  "old_ledger_unchanged": true,
+  "new_real_authorizations": 0,
+  "new_real_consumption_records": 0,
+  "real_deepseek_sdk_create": 0,
+  "real_business_http": 0,
+  "real_prometheus_queries": 0,
+  "real_loki_queries": 0,
+  "fault_injections": 0,
+  "remediation_executions": 0,
+  "background_recovery_starts": 0,
+  "forbidden_attempts": [],
+  "real_multiround_behavior_verified": false,
+  "module_import_paths": {
+    "scripts.p65_model_boundary": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\scripts\\p65_model_boundary.py",
+    "scripts.p65_readonly_investigation": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\scripts\\p65_readonly_investigation.py",
+    "tools.tool_registry": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\tools\\tool_registry.py",
+    "model_client.model_client": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\model_client\\model_client.py",
+    "agent.agent": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\agent\\agent.py",
+    "investigation.worker": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\investigation\\worker.py"
+  }
+}

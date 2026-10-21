@@ -1,0 +1,15 @@
+{
+  ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+  "authorization-requirements.json": "5b54af6a2c40c7e3a9c48597cef9542740863f13af323ee709e2da00637436ff",
+  "FILE_INVENTORY.json": "ed3f8472a86e2df553afa3abe0aed41663e04088db175dd5dd6436f416eab0dd",
+  "historical-manifest.json": "44e2427c3cabe2d85b421b1afb18d49e374bd5264ba2bb2684ffb6bccc5192ce",
+  "new-experiment-plan.json": "413188aa386674e5ffd6d3663caeae25eb70822dd2771cb295fe8977bfb5584c",
+  "offline-checks.json": "662a4a8b9a99e9ffb6dd917380d0b8eeffd15eb5fa6613c127965932d4cee300",
+  "prepared-plan.json": "eb3b063ecb5e783f977c6890b40ba4ee09b70c561f80a6c3dc37a1be80b5ac76",
+  "protection-result.json": "fbd702c9de7292044c15b3c91192795d0e6ae7dbd827f596978181a64a07e346",
+  "request-comparison.json": "129ac8f8abefac0b95dc969598a4d691d493d47f859c637f605b3d74080e5f72",
+  "sdk-manifest.json": "d3c3c87fe5dd31af060e8116f30db410c48f1d767fd5d91f7ef12ab8703803d9",
+  "source-manifest.json": "a241177ea5a244d6b46ec5270f2a836fad1aa01cc51e63ec50f08923d1f35103",
+  "test-verification.json": "774dd124cda98d244f8d2258ee44bfb678b94dd42182143cdfc8bfea9cd3926c",
+  "verification-summary.json": "478471bd5ee90ce8a53e4b023f34402d41052f472723b8f3b248774a838b637c"
+}

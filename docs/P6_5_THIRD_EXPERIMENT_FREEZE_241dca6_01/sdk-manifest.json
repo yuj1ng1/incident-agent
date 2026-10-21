@@ -1,0 +1,23 @@
+{
+  "target_commit": "241dca6353e6bd8aff8db50dfd74a7a9bed1949a",
+  "executable": "D:\\conda\\envs\\agentlearn\\python.exe",
+  "python": "3.12.14 | packaged by Anaconda, Inc. | (main, Aug 27 2026, 14:37:13) [MSC v.1942 64 bit (AMD64)]",
+  "versions": {
+    "openai": "3.14.0",
+    "httpx2": "2.13.0",
+    "pydantic": "2.13.5",
+    "pytest": "9.1.1",
+    "requests": "2.34.2",
+    "psycopg": "3.3.6"
+  },
+  "sdk_source_sha256": {
+    "openai/_client.py": "ada7742f3a488aaa585b6dd5cdb34411aff7272f6ba7a457b00f5ab3f42ff378",
+    "openai/_base_client.py": "218e2cd86f7822df1a12a95e70dfff0fd02cf19d966a18a4f8985ba56b334ed5",
+    "openai/_models.py": "41fa57193539881da8543bc0e5982950becdb2ef5fec3cd9e2226eef7a9099f4",
+    "openai/resources/responses/responses.py": "3fe5089373a7f3e269f62d2760de2b141e3a8263a6e97dc0179f77d5ecacfa2d",
+    "openai/types/responses/response.py": "3d60894eee9fb44d19d3b2bcb5c434a0328dc3bb3bff875d18749ad653ab5dd0",
+    "openai/types/responses/response_usage.py": "aeeb1c2478edc163c375830f1cc8cdd5f94992639ef74f0a6fdbaf3ff904b5a1",
+    "httpx2/_client.py": "fa3948aa66a9efd5edf097c6d13d927612c617328b43ceefc4bdd5e350aaa93b",
+    "httpx2/_config.py": "0b53f754f1bb708f2ea485bccbb4ab1ffa07259cf8c008a42d8959b9cb1e3db0"
+  }
+}

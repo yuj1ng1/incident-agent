@@ -1,0 +1,72 @@
+{
+  "phase": "p65_offline_prepared_pending_new_approval",
+  "request_version": "p65_dynamic_runtime_v3_tools5",
+  "expected_initial_reservation": {
+    "model_requests": 1,
+    "tool_executions": 1
+  },
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "max_model_requests": 3,
+  "max_attempts": 1,
+  "max_incidents": 1,
+  "max_worker_run_once": 1,
+  "max_resumes": 0,
+  "fallback": 0,
+  "max_human_requests": 0,
+  "sdk_retries": 0,
+  "application_retries": 0,
+  "timeout_seconds": 30,
+  "max_output_tokens": 2048,
+  "tools": [
+    "query_metrics",
+    "query_logs",
+    "get_running_version"
+  ],
+  "real_model_sdk_requests": 0,
+  "historical_only": true,
+  "use_for_current_state": false,
+  "provider_verified": false,
+  "context_strategy": "actual_committed_outputs_phase_local_protocol_probe",
+  "sdk_versions": {
+    "openai": "3.14.0",
+    "httpx2": "2.13.0",
+    "pydantic": "2.13.5"
+  },
+  "sdk_source_sha256": {
+    "openai/_client.py": "ada7742f3a488aaa585b6dd5cdb34411aff7272f6ba7a457b00f5ab3f42ff378",
+    "openai/_base_client.py": "218e2cd86f7822df1a12a95e70dfff0fd02cf19d966a18a4f8985ba56b334ed5",
+    "openai/_models.py": "41fa57193539881da8543bc0e5982950becdb2ef5fec3cd9e2226eef7a9099f4",
+    "openai/resources/responses/responses.py": "3fe5089373a7f3e269f62d2760de2b141e3a8263a6e97dc0179f77d5ecacfa2d",
+    "openai/types/responses/response.py": "3d60894eee9fb44d19d3b2bcb5c434a0328dc3bb3bff875d18749ad653ab5dd0",
+    "openai/types/responses/response_usage.py": "aeeb1c2478edc163c375830f1cc8cdd5f94992639ef74f0a6fdbaf3ff904b5a1",
+    "httpx2/_client.py": "fa3948aa66a9efd5edf097c6d13d927612c617328b43ceefc4bdd5e350aaa93b",
+    "httpx2/_config.py": "0b53f754f1bb708f2ea485bccbb4ab1ffa07259cf8c008a42d8959b9cb1e3db0"
+  },
+  "offline_only": false,
+  "capture_dir": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\data\\p62b-first-error-20261018-01",
+  "capture_manifest_sha256": "350578d6914f7f09a530d85178f491da2366521b25b5f5fe4b5872bd58e5ae08",
+  "package_sha256": "0c99f1bbdab631c2e04e7b41aa72c12d1a993c9067a139c664519a8e24b0c99a",
+  "first_request_sha256": "d9cfac4386a1adfc2d565820e70bc03fc910cdf987020ab168df5481f2ff76a1",
+  "code_sha256": {
+    "scripts/p65_readonly_investigation.py": "027c113d9e0bc4033e20dca6c504fac460f32b10b727546fa4bb43f6289dda97",
+    "scripts/p65_model_boundary.py": "0c195e7f3db6ba4def2ee31f532d401739ecbba63223a82c72d9e7b4b51697e4",
+    "scripts/p63_evidence.py": "f811028a0b98d31a6424607314b75b310f3cb2c2c73c5390cd7a59c944de7e5e",
+    "scripts/p63_model_validation.py": "909e2e153e2e80bdbd501dbf80cd344baa713a648e9b29cca45d9c7bcba5e110",
+    "scripts/p62b_evidence.py": "b582ded3b1ddcd5028c63fd892169a5d6ae6e18ee6f19d330965ca7f9ee7dab5",
+    "scripts/p62b_error_experiment.py": "d93625e381bf02d2e13052d3ea976043ce266c2e85defc290f3a5b4a7b93f310",
+    "agent/agent.py": "6b2bf6524a5bebb043b6000ae8875913c751b2a1f904a3ccfe7c0b6dff80a294",
+    "model_client/model_client.py": "9936206f3426f4d6dd237db699f8ee3aacacf4d70a0b33a5fef30901a5ff48d4",
+    "tools/tool_manager.py": "ed5f937c90fd1f13d4d1b0a5241a80ded0431aaf6ccc27a284f4ec9fa0df4736",
+    "tools/tool_registry.py": "f5ebf14554560675f2ede64f375e8c3cd56c23f1f46188c2616886f143b63778",
+    "investigation/worker.py": "ee8988a75cf6a3814e8e1f244425c137acc049fb56d5c3dbc8dba13ceedb37f9",
+    "investigation/store.py": "c9858caee88ad3bce19d959c4b1f13feac56cd560ef542ce1e006c4f7e0a1346",
+    "investigation/manager.py": "b3d2c909130fe76e2f59b30893aefe830430566261b37039109765a5e7f0b95e",
+    "investigation/models.py": "79ae92a24cda28deb9db622a26706ac31143aca109cabf4261bc6e194f2b9db7",
+    "investigation/checkpoint.py": "ef45af180eee909ba2063312ba00280d1816dd3c753cc77901ca412cb4d7850d",
+    "investigation/evidence_policy.py": "db8cd4410554946208c1986893f6e769b8f9519207379f80defa5f3838fa67b3",
+    "investigation/result_trust.py": "6f7d633ae82b4b7d0d437984b9d324dfb9c1eeee6375ea0865599f0c008dd248",
+    "config.py": "0bd960ebb9624b01ed93b39c7c3c2dea765cd8fff1c94d8e36603ce7ce69f155"
+  },
+  "max_tool_executions": 5
+}

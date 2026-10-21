@@ -1,0 +1,318 @@
+{
+  "capture_source": "D:\\Incident Agent\\data\\p62b-first-error-20261018-01",
+  "capture_copy": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\data\\p62b-first-error-20261018-01",
+  "files": {
+    "authorization-consumed.json": {
+      "sha256": "38437ddb68fb5a199886c81bba47d61439ad6746a6bd4c90c4ea9cdfcd4ea98c",
+      "bytes": 284
+    },
+    "authorization.json": {
+      "sha256": "34cf9c083d3903ca12fbc96bdccd36197f0d78b3be3071a557531b59cb8d6a79",
+      "bytes": 2367
+    },
+    "experiment/authorization.json": {
+      "sha256": "49e6c0f2dc55c80b3e7a6ef1d567cf3ab342cbbb12944847048a8c46305e8ebf",
+      "bytes": 2885
+    },
+    "experiment/sha256.json": {
+      "sha256": "b08d8fe0cf42f4db0101913e80bfc2beb538bc04276938ee35b2c88e34606f68",
+      "bytes": 3363
+    },
+    "experiment/supervisor.json": {
+      "sha256": "3820d482c4629cca387820d25f69e4136be1b77c08a861f2c0b22e137f32e2e4",
+      "bytes": 1512
+    },
+    "experiment/traffic/authorization.json": {
+      "sha256": "31c31bf6b33da4b6dbe2f8d871e8b504435fbda8e39f675cb250c6344eac3492",
+      "bytes": 2460
+    },
+    "experiment/traffic/http-001.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-001.json": {
+      "sha256": "2946d90b41634be4ea1e844746a72e6c59e4380a29575ee1c804d4477bd0fc98",
+      "bytes": 840
+    },
+    "experiment/traffic/http-002.body": {
+      "sha256": "e41656eb2ba6c6293bf6dd928e5a88cdbc50535cab661c1969e0f598e497ed62",
+      "bytes": 21
+    },
+    "experiment/traffic/http-002.json": {
+      "sha256": "0bbe2ae0bcfe7adad96fe0014f0a12a8499554be2096ebf32a06e40d1794f436",
+      "bytes": 843
+    },
+    "experiment/traffic/http-003.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-003.json": {
+      "sha256": "bf4e79a9665651b4acee4adae021db4e1dfffa2581c1ef547729c4cc24cb2ae4",
+      "bytes": 840
+    },
+    "experiment/traffic/http-004.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-004.json": {
+      "sha256": "d80aa9b42ce6ba4ef63ca588d1665a72c77d892e08487c615507700d26b23363",
+      "bytes": 841
+    },
+    "experiment/traffic/http-005.body": {
+      "sha256": "e41656eb2ba6c6293bf6dd928e5a88cdbc50535cab661c1969e0f598e497ed62",
+      "bytes": 21
+    },
+    "experiment/traffic/http-005.json": {
+      "sha256": "e138be462ca1c92120bc6502d294e1393abc27a47a9432bddbf935ecaf6a9fb9",
+      "bytes": 842
+    },
+    "experiment/traffic/http-006.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-006.json": {
+      "sha256": "3dc98dc82f12829503cc04f0ccd5f9603afc63fdb620fd721fa0f838eae5534f",
+      "bytes": 840
+    },
+    "experiment/traffic/http-007.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-007.json": {
+      "sha256": "722b62d96db647c961c5dcbc82977380910bf183da72ebe1a6daf86c80b66c1c",
+      "bytes": 840
+    },
+    "experiment/traffic/http-008.body": {
+      "sha256": "e41656eb2ba6c6293bf6dd928e5a88cdbc50535cab661c1969e0f598e497ed62",
+      "bytes": 21
+    },
+    "experiment/traffic/http-008.json": {
+      "sha256": "95baa5d9ccaa3286fc410f17bc4365083dcac7735a8358e3f8abbd5da4c71bc1",
+      "bytes": 828
+    },
+    "experiment/traffic/http-009.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-009.json": {
+      "sha256": "10bc8bfb3d9b191561edc640a07685d87d168b714178cfa9889382e19d5f616c",
+      "bytes": 839
+    },
+    "experiment/traffic/http-010.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-010.json": {
+      "sha256": "3e16059a7dbbcf3efb3116075cdc78caa0d3fe4b16f0eb90996b26b6eef4db67",
+      "bytes": 841
+    },
+    "experiment/traffic/http-011.body": {
+      "sha256": "e41656eb2ba6c6293bf6dd928e5a88cdbc50535cab661c1969e0f598e497ed62",
+      "bytes": 21
+    },
+    "experiment/traffic/http-011.json": {
+      "sha256": "9a60621413a0531cda5f888f3c49b4ab6c39c15879342d9371fab9c0f2ccda89",
+      "bytes": 843
+    },
+    "experiment/traffic/http-012.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-012.json": {
+      "sha256": "2174f411accd955467c37a01f750756e91f8d5908ca4f0dbc5af16183edfc3ce",
+      "bytes": 840
+    },
+    "experiment/traffic/http-013.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-013.json": {
+      "sha256": "f82a9d71ae339ceee1658256ebf4c1a487cd82adbe6f2b4c436aabb4b6b382a7",
+      "bytes": 840
+    },
+    "experiment/traffic/http-014.body": {
+      "sha256": "e41656eb2ba6c6293bf6dd928e5a88cdbc50535cab661c1969e0f598e497ed62",
+      "bytes": 21
+    },
+    "experiment/traffic/http-014.json": {
+      "sha256": "f75f474677ba877537a2e9955a86b3073759846bdcdd1cae3c270ef3848867b9",
+      "bytes": 843
+    },
+    "experiment/traffic/http-015.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "experiment/traffic/http-015.json": {
+      "sha256": "991ab83e065eb73fc050fac46f1f972e926086dc1d40595d5d338e1477e7c84a",
+      "bytes": 840
+    },
+    "experiment/traffic/sha256.json": {
+      "sha256": "98f8ed8cb75337a6bb988f616158866487dffedb0a229245444788b0273af245",
+      "bytes": 2830
+    },
+    "experiment/traffic/traffic_report.json": {
+      "sha256": "ebb382a6e2613248f26858ac46b946ca4db3f5fefb87d0734e022309027bb7cc",
+      "bytes": 18360
+    },
+    "final-host-check.json": {
+      "sha256": "c0972c67a9f41c4d9643152d998c5dedbdceb3a31934b805e46a8d9ed336eab6",
+      "bytes": 693
+    },
+    "observations/collection_report.json": {
+      "sha256": "cdf01e2db1a3dc544a74ec0e12da0edd6b115def7fe82dad01cd87ac76642a08",
+      "bytes": 34790
+    },
+    "observations/http-001.body": {
+      "sha256": "11215b6992c7445495cf0479f54e42ee1f85b6d9ac43c8cf055fadf42ceb647c",
+      "bytes": 462
+    },
+    "observations/http-001.json": {
+      "sha256": "363bd1fc88c78c8af66e3b7ccbf6cfbc4d4572fbe45a73e4e20329340b3b6b03",
+      "bytes": 631
+    },
+    "observations/http-002.body": {
+      "sha256": "320f6512ce0050897e061d0f46513402dd3a27a150aedc25d99c30e801e9a406",
+      "bytes": 3784
+    },
+    "observations/http-002.json": {
+      "sha256": "6fb10b66a7e8b962d995e25f526da672c0efe4f092273f464d3d33e11ed8928d",
+      "bytes": 634
+    },
+    "observations/http-003.body": {
+      "sha256": "664b0f4a552599ac59d91a24f7e6ea8c7a4499ad237fb76aa25c33d8c25f6ec2",
+      "bytes": 63
+    },
+    "observations/http-003.json": {
+      "sha256": "8232de6d78fbb7878e1094234622f13183d563e11ceb51f4ad1cb3cd3f8c2ee5",
+      "bytes": 1527
+    },
+    "observations/http-004.body": {
+      "sha256": "8b0b8254ec80741c017d0b3e779a86ddb42d4ffc17b3b0526d66f882a212ddf1",
+      "bytes": 106
+    },
+    "observations/http-004.json": {
+      "sha256": "c22cfe911baf14ed5d441d68192053c7ecb6ddd1a4e0c1e565913512efe628be",
+      "bytes": 779
+    },
+    "observations/http-005.body": {
+      "sha256": "e47b8522787630d6c9b39b457cba0972cdda8c52578993f5d4f09f5dfffdab24",
+      "bytes": 105
+    },
+    "observations/http-005.json": {
+      "sha256": "2a1e630b00400b7ca9ebece870cb8c2f1f407e61758d64a4955cec8d0f0ad7da",
+      "bytes": 807
+    },
+    "observations/http-006.body": {
+      "sha256": "664b0f4a552599ac59d91a24f7e6ea8c7a4499ad237fb76aa25c33d8c25f6ec2",
+      "bytes": 63
+    },
+    "observations/http-006.json": {
+      "sha256": "480f4eeed3b0125ef715417246074b21692a5efad38f4b0463c45da346c90977",
+      "bytes": 1257
+    },
+    "observations/http-007.body": {
+      "sha256": "f674790d6392f42a30fc057009255490ff807bb23da6080ff1f35b6243090423",
+      "bytes": 205
+    },
+    "observations/http-007.json": {
+      "sha256": "60df79fa9e15bb11eea8630c53e7109d69585f259ef36f9a5799aef255abd342",
+      "bytes": 721
+    },
+    "observations/http-008.body": {
+      "sha256": "45029dae1b6fb30f2d4efb95ddcddd31b29e341d6bd3b121227f5b7a0bf115c3",
+      "bytes": 4262
+    },
+    "observations/http-008.json": {
+      "sha256": "16707e1027e1e5b0aeae6d2e65d58cd7654bb1c85e90f6601b25f521f4b50261",
+      "bytes": 923
+    },
+    "observations/http-009.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "observations/http-009.json": {
+      "sha256": "efa6ff230cc406e9b70aecffda16309843c9025dc5f71b068c434847847e3c50",
+      "bytes": 619
+    },
+    "observations/sha256.json": {
+      "sha256": "1fac481e626f454a942180779261cd9a3b2fabfbf74a0296f55769eae6a655fb",
+      "bytes": 1684
+    },
+    "outcome.json": {
+      "sha256": "b59df912fc56aaef71c5f1eef40e27975c79bb3d731c2a778657905cff876ec9",
+      "bytes": 2556
+    },
+    "postcheck-host.json": {
+      "sha256": "3d36349b03675ef63f0dd41752e605ae9d67269beab28115dcddebdd561921e2",
+      "bytes": 517
+    },
+    "preflight/http-001.body": {
+      "sha256": "6beb998c0a9ccaf082157804955058459f81452b3eeb1c535128681e830509f9",
+      "bytes": 195
+    },
+    "preflight/http-001.json": {
+      "sha256": "a2f0615ab59f6e82c76a841aa53d34b429a830a53f7cf607079462410f922d07",
+      "bytes": 619
+    },
+    "preflight/http-002.body": {
+      "sha256": "33dc98799d46f04043143fd1efa4db9f38accaad8309b8e445e892d68020e4f5",
+      "bytes": 3191
+    },
+    "preflight/http-002.json": {
+      "sha256": "67595c2ba8429dbb1333b1eb43460717ec855b2957e73bee3e06ea4f251c67b2",
+      "bytes": 645
+    },
+    "preflight/preflight.json": {
+      "sha256": "015834da23a3c8a43396751de72aa536df2a0e5dea35733ed96f1610e585d7e0",
+      "bytes": 2496
+    },
+    "preflight/sha256.json": {
+      "sha256": "fdfcdf9e25b56dde195b0288b862b0908164982e4e539fc2f54018cb202738bb",
+      "bytes": 444
+    },
+    "runtime-replay/report.json": {
+      "sha256": "e9d64d9c381a36d3916026f6bb06c2adb3deff412fa53f7c557e6299f501be57",
+      "bytes": 41089
+    },
+    "runtime-replay/runtime/agent.log": {
+      "sha256": "8ff97c84525b9870f4e20b82e25b77c2c956ef2c5dd269932ce8f98bf935f4e2",
+      "bytes": 929
+    },
+    "runtime-replay/runtime/report.json": {
+      "sha256": "d82504e177f078ab47c7a0a32e888c74a6f3bc8d1a5d43adb67d0a848ca13292",
+      "bytes": 175511
+    },
+    "runtime-replay/runtime/sha256.json": {
+      "sha256": "ed8d8be9090b29bfb42e6053e5893498491b31bc0d07c69770353e30e158ed17",
+      "bytes": 284
+    },
+    "runtime-replay/runtime/stores/incidents.json": {
+      "sha256": "17908deae79282391544f8b079ae93a2bf40823611f12194f610eab2961af034",
+      "bytes": 4811
+    },
+    "runtime-replay/runtime/stores/incidents.json.lock": {
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "bytes": 1
+    },
+    "runtime-replay/runtime/stores/runtime.sqlite3": {
+      "sha256": "bd360809848ae0b0db5b743cc54e84226ead82687199aa98d5c7f6b189624bec",
+      "bytes": 212992
+    },
+    "runtime-replay/sha256.json": {
+      "sha256": "49c167d6c3a70fc308777baceeb1a13fdc3aa0fb51be51fe084a1863218b0c90",
+      "bytes": 696
+    },
+    "sha256.json": {
+      "sha256": "350578d6914f7f09a530d85178f491da2366521b25b5f5fe4b5872bd58e5ae08",
+      "bytes": 7821
+    }
+  },
+  "second_response_source": "D:\\Incident Agent\\data\\p65-second-live-952809b-20261019-02",
+  "second_response_manifest_sha256": "f3b2e458ee0cc3171a52e2cfbbef344df8012aaf9b64427b02dc6f7abbb777e2",
+  "raw_response_sha256": "7ff76c709d7eb8471e740f54a0c81838787ba06b32a5dc6b0b0d7bb253e3620e",
+  "sdk_response_sha256": "ec579a56826275a2d775fbe950e802bce8f72c06686c34ae089e113293fcca8a",
+  "old_authorization_sha256": "4bee67c0b7f9f1e19a4b670cfe4596c95459cfdf4146bf8b4d12d843f9cce89c",
+  "old_consumption_path": "D:\\Incident Agent\\data\\p65-second-freeze-952809b-20261019-02\\tree\\data\\p65-paid-consumption\\685dc803754abf34b2ee8b93fea09824b37f8bb967e54f5b6fc33cd278f4e27c.consumed.json",
+  "old_consumption_sha256": "b39c4ab4a963846059659cffe2b487449f611b3280862f338c0443421edf27e2",
+  "purpose": "read-only provenance, never authorization for this experiment"
+}

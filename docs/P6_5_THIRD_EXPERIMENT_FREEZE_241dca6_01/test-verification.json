@@ -1,0 +1,160 @@
+{
+  "runs": [
+    {
+      "label": "p65",
+      "counts": {
+        "cases": 168,
+        "failed": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 167
+      },
+      "boundary": {
+        "pytest_exit_code": 1,
+        "suite_files": [
+          "tests/test_p65_third_preparation.py",
+          "tests/test_p65_dynamic_budget.py",
+          "tests/test_p65_readonly_investigation.py",
+          "tests/test_p65_protocol_compatibility.py"
+        ],
+        "forbidden_attempts": [],
+        "real_network_requests": 0,
+        "real_remediation_executions": 0,
+        "real_background_recovery_starts": 0,
+        "sdk_transport_semantics": "injected SDK tests use in-memory MockTransport only"
+      },
+      "junit_suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "168",
+          "time": "128.478",
+          "timestamp": "2026-10-21T10:22:22.359431+08:00",
+          "hostname": "LAPTOP-87JTHAVF"
+        }
+      ]
+    },
+    {
+      "label": "related",
+      "counts": {
+        "cases": 282,
+        "failed": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 281
+      },
+      "boundary": {
+        "pytest_exit_code": 1,
+        "suite_files": [
+          "tests/test_runtime.py",
+          "tests/test_runtime_quality.py",
+          "tests/test_runtime_stability.py",
+          "tests/test_runtime_finalization.py",
+          "tests/test_worker_metric_analysis.py",
+          "tests/test_worker_metric_analysis_growth.py",
+          "tests/test_worker_metric_analysis_replacement.py",
+          "tests/test_p64_offline_investigation.py",
+          "tests/test_p64_historical_acceptance.py",
+          "tests/test_p63_model_validation.py",
+          "tests/test_p65_third_preparation.py::test_installed_sdk_transmits_four_committed_outputs"
+        ],
+        "forbidden_attempts": [],
+        "real_network_requests": 0,
+        "real_remediation_executions": 0,
+        "real_background_recovery_starts": 0,
+        "sdk_transport_semantics": "injected SDK tests use in-memory MockTransport only"
+      },
+      "junit_suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "340",
+          "time": "303.284",
+          "timestamp": "2026-10-21T10:24:49.165665+08:00",
+          "hostname": "LAPTOP-87JTHAVF"
+        }
+      ]
+    },
+    {
+      "label": "p65-followup",
+      "counts": {
+        "cases": 2,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 2
+      },
+      "boundary": {
+        "pytest_exit_code": 0,
+        "suite_files": [
+          "tests/test_p65_readonly_investigation.py::test_prompt_injection_does_not_change_scope_or_export_sensitive_next_round",
+          "tests/test_p65_readonly_investigation.py::test_multiple_tools_stop_at_five_including_automatic_probe"
+        ],
+        "forbidden_attempts": [],
+        "real_network_requests": 0,
+        "real_remediation_executions": 0,
+        "real_background_recovery_starts": 0,
+        "sdk_transport_semantics": "injected SDK tests use in-memory MockTransport only"
+      },
+      "junit_suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "2",
+          "time": "8.414",
+          "timestamp": "2026-10-21T10:25:38.863606+08:00",
+          "hostname": "LAPTOP-87JTHAVF"
+        }
+      ]
+    },
+    {
+      "label": "sdk-followup",
+      "counts": {
+        "cases": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1
+      },
+      "boundary": {
+        "pytest_exit_code": 0,
+        "suite_files": [
+          "tests/test_p65_third_preparation.py::test_installed_sdk_transmits_four_committed_outputs"
+        ],
+        "forbidden_attempts": [],
+        "real_network_requests": 0,
+        "real_remediation_executions": 0,
+        "real_background_recovery_starts": 0,
+        "sdk_transport_semantics": "injected SDK tests use in-memory MockTransport only"
+      },
+      "junit_suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "1",
+          "time": "10.630",
+          "timestamp": "2026-10-21T10:31:00.335290+08:00",
+          "hostname": "LAPTOP-87JTHAVF"
+        }
+      ]
+    }
+  ],
+  "latest_unique_cases": 450,
+  "latest_status_counts": {
+    "passed": 450,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "full_repository_regression": false,
+  "new_sdk_memory_transport_test_included": true,
+  "subtests_passed_reported_in_related_log": 58
+}

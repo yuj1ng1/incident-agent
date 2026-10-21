@@ -1,0 +1,123 @@
+{
+  "state": "pending_independent_review_and_new_human_authorization",
+  "experiment_id": "p65-third-tools5-241dca6-20261021-01",
+  "request_version": "p65_dynamic_runtime_v3_tools5",
+  "target_commit": "241dca6353e6bd8aff8db50dfd74a7a9bed1949a",
+  "source_tree": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree",
+  "prepared_dir": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\prepared",
+  "source_manifest_sha256": "a241177ea5a244d6b46ec5270f2a836fad1aa01cc51e63ec50f08923d1f35103",
+  "sdk_manifest_sha256": "d3c3c87fe5dd31af060e8116f30db410c48f1d767fd5d91f7ef12ab8703803d9",
+  "historical_manifest_sha256": "44e2427c3cabe2d85b421b1afb18d49e374bd5264ba2bb2684ffb6bccc5192ce",
+  "prepared_manifest_sha256": "0402b1756a4b54b64d3b5075c86d3447c3328c51077c024e6d5b65c59885b5fa",
+  "plan_sha256": "eb3b063ecb5e783f977c6890b40ba4ee09b70c561f80a6c3dc37a1be80b5ac76",
+  "first_request_sha256": "d9cfac4386a1adfc2d565820e70bc03fc910cdf987020ab168df5481f2ff76a1",
+  "package_sha256": "0c99f1bbdab631c2e04e7b41aa72c12d1a993c9067a139c664519a8e24b0c99a",
+  "capture_manifest_sha256": "350578d6914f7f09a530d85178f491da2366521b25b5f5fe4b5872bd58e5ae08",
+  "code_sha256": {
+    "scripts/p65_readonly_investigation.py": "027c113d9e0bc4033e20dca6c504fac460f32b10b727546fa4bb43f6289dda97",
+    "scripts/p65_model_boundary.py": "0c195e7f3db6ba4def2ee31f532d401739ecbba63223a82c72d9e7b4b51697e4",
+    "scripts/p63_evidence.py": "f811028a0b98d31a6424607314b75b310f3cb2c2c73c5390cd7a59c944de7e5e",
+    "scripts/p63_model_validation.py": "909e2e153e2e80bdbd501dbf80cd344baa713a648e9b29cca45d9c7bcba5e110",
+    "scripts/p62b_evidence.py": "b582ded3b1ddcd5028c63fd892169a5d6ae6e18ee6f19d330965ca7f9ee7dab5",
+    "scripts/p62b_error_experiment.py": "d93625e381bf02d2e13052d3ea976043ce266c2e85defc290f3a5b4a7b93f310",
+    "agent/agent.py": "6b2bf6524a5bebb043b6000ae8875913c751b2a1f904a3ccfe7c0b6dff80a294",
+    "model_client/model_client.py": "9936206f3426f4d6dd237db699f8ee3aacacf4d70a0b33a5fef30901a5ff48d4",
+    "tools/tool_manager.py": "ed5f937c90fd1f13d4d1b0a5241a80ded0431aaf6ccc27a284f4ec9fa0df4736",
+    "tools/tool_registry.py": "f5ebf14554560675f2ede64f375e8c3cd56c23f1f46188c2616886f143b63778",
+    "investigation/worker.py": "ee8988a75cf6a3814e8e1f244425c137acc049fb56d5c3dbc8dba13ceedb37f9",
+    "investigation/store.py": "c9858caee88ad3bce19d959c4b1f13feac56cd560ef542ce1e006c4f7e0a1346",
+    "investigation/manager.py": "b3d2c909130fe76e2f59b30893aefe830430566261b37039109765a5e7f0b95e",
+    "investigation/models.py": "79ae92a24cda28deb9db622a26706ac31143aca109cabf4261bc6e194f2b9db7",
+    "investigation/checkpoint.py": "ef45af180eee909ba2063312ba00280d1816dd3c753cc77901ca412cb4d7850d",
+    "investigation/evidence_policy.py": "db8cd4410554946208c1986893f6e769b8f9519207379f80defa5f3838fa67b3",
+    "investigation/result_trust.py": "6f7d633ae82b4b7d0d437984b9d324dfb9c1eeee6375ea0865599f0c008dd248",
+    "config.py": "0bd960ebb9624b01ed93b39c7c3c2dea765cd8fff1c94d8e36603ce7ce69f155"
+  },
+  "sdk_versions": {
+    "openai": "3.14.0",
+    "httpx2": "2.13.0",
+    "pydantic": "2.13.5"
+  },
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "budget": {
+    "max_tool_executions_including_probe": 5,
+    "max_model_requests": 3,
+    "max_incidents": 1,
+    "max_worker_run_once": 1,
+    "max_attempts": 1,
+    "sdk_retries": 0,
+    "application_retries": 0,
+    "resumes": 0,
+    "fallback": 0,
+    "human_requests": 0
+  },
+  "first_model_remaining_tool_executions": 4,
+  "max_request_bytes_per_round": 131072,
+  "max_output_tokens_per_request": 2048,
+  "timeout_seconds_per_sdk_request": 30,
+  "runtime_cooperative_seconds": 3600,
+  "experiment_hard_wall_clock_limit": null,
+  "currency_or_input_token_hard_cap": null,
+  "allowed_tools": [
+    "query_metrics",
+    "query_logs",
+    "get_running_version"
+  ],
+  "target_service": "order-service",
+  "outgoing_fields": {
+    "first_round": "exact complete prepared/first-request.json body, including versioned dynamic instructions",
+    "historical_envelope_fields": [
+      "captured_at",
+      "captured_result",
+      "collection_window",
+      "evidence_scope",
+      "fault_window",
+      "historical_only",
+      "originals",
+      "reason",
+      "sanitized_projection",
+      "service",
+      "source",
+      "status",
+      "use_for_current_state"
+    ],
+    "historical_package": "only allowlisted full frozen result envelopes in prepared/package.json",
+    "dynamic_followups": "prior approved input + validated original Provider output in original order + actual committed call_id/name/arguments/result-bound outputs",
+    "checks_each_round": "fixed scope, runtime_budget, budget_instructions, strict schemas, first-body hash, sensitive field/value checks, canonical 131072 byte limit",
+    "zero_budget_or_last_round": "tools=[] and tool_choice=none; any returned function_call rejected before Worker tool execution"
+  },
+  "historical_argument_matching": "exact arguments/source matching; omitted log bounds alias to frozen logs only; unmatched queries no_data/rejection, never current I/O",
+  "stop_conditions": [
+    "missing new human authorization or mismatched source/SDK/manifest/request/plan: stop before SDK",
+    "existing plan consumption reservation: stop, never delete or release reservation",
+    "any transport, timeout, protocol, incomplete response, sensitive content, size or binding error: stop without retry",
+    "tool quota reached: transaction refuses execution, pending calls have no invented outputs",
+    "function_call when tools disabled or on model round 3: reject and stop",
+    "one Worker run, one Incident/attempt only; no retry/resume/fallback/rerun/P6.6",
+    "model concludes without tools or next turn: retain the result, do not rerun to obtain acceptance"
+  ],
+  "success_criteria": [
+    "real autonomous first function_call",
+    "Worker executes and commits permitted tool results",
+    "real second SDK request contains committed original call/output pairs",
+    "real DeepSeek continues or concludes after receiving those results"
+  ],
+  "third_round_required": false,
+  "authorization": {
+    "explicitly_authorized": false,
+    "authorized_at": null,
+    "human_confirmation": null,
+    "review_status": "pending"
+  },
+  "future_consumption_path_after_new_approval_only": "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\data\\p65-paid-consumption\\eb3b063ecb5e783f977c6890b40ba4ee09b70c561f80a6c3dc37a1be80b5ac76.consumed.json",
+  "cost_provider_timeout_risks": [
+    "prices, balance, actual fees and billing status unknown; no online lookup performed",
+    "at most three potentially paid SDK entries with growing resent input; bytes are not tokens or money",
+    "SDK timeout and cooperative runtime checks are not a hard experiment wall-clock deadline",
+    "timeout/error may still be billed; local SDK entry is not server receipt/billing proof",
+    "real Provider acceptance of v3 and real round 2 behavior remain unverified",
+    "five tools accommodates the sealed sample, not every future autonomous response"
+  ],
+  "execution_requirement": "after independent review/new human approval, reverify exact source tree and SDK manifest plus prepared/request hashes; import only this frozen tree, never newer dirty main"
+}

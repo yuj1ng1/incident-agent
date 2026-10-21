@@ -1,0 +1,17 @@
+{
+  "status": "pending",
+  "explicitly_authorized": false,
+  "authorized_at": null,
+  "experiment_id": "p65-third-tools5-241dca6-20261021-01",
+  "request_version": "p65_dynamic_runtime_v3_tools5",
+  "new_experiment_plan_sha256": "413188aa386674e5ffd6d3663caeae25eb70822dd2771cb295fe8977bfb5584c",
+  "target_commit": "241dca6353e6bd8aff8db50dfd74a7a9bed1949a",
+  "plan_sha256": "eb3b063ecb5e783f977c6890b40ba4ee09b70c561f80a6c3dc37a1be80b5ac76",
+  "first_request_sha256": "d9cfac4386a1adfc2d565820e70bc03fc910cdf987020ab168df5481f2ff76a1",
+  "source_manifest_sha256": "a241177ea5a244d6b46ec5270f2a836fad1aa01cc51e63ec50f08923d1f35103",
+  "sdk_manifest_sha256": "d3c3c87fe5dd31af060e8116f30db410c48f1d767fd5d91f7ef12ab8703803d9",
+  "historical_manifest_sha256": "44e2427c3cabe2d85b421b1afb18d49e374bd5264ba2bb2684ffb6bccc5192ce",
+  "requires": "future direct human approval of the exact scope and disclosed unknown costs, preserved wording and timezone-aware timestamp; no old authorization/review waiver applies",
+  "future_record": "must pass existing validate_approval and bind this experiment/code/outer-plan/source/SDK/evidence/first-body/budgets; approval is separate from semantic acceptance or remediation",
+  "no_authorization_or_consumption_file_created": true
+}

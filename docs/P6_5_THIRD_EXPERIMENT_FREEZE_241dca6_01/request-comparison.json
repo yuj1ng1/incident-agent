@@ -1,0 +1,28 @@
+{
+  "new_first_sha256": "d9cfac4386a1adfc2d565820e70bc03fc910cdf987020ab168df5481f2ff76a1",
+  "previous": {
+    "second_real_4": {
+      "path": "D:\\Incident Agent\\data\\p65-second-live-952809b-20261019-02\\request-01.json",
+      "body_sha256": "825cfc43c6c4e60e1fcced85eea16d3680d94158170e11cbbb6c88f3efc6a79d",
+      "changed_body_fields": [
+        "instructions",
+        "input"
+      ]
+    },
+    "v2_formal_4": {
+      "path": "D:\\Incident Agent\\data\\p65-dynamic-budget-offline-20261019-01\\v2-prepared-4\\first-request.json",
+      "body_sha256": "c8b7cd2a3e0f2ec4a02d5869e701229529705b9f1d5cdee7e98f7e251caf633c",
+      "changed_body_fields": [
+        "instructions",
+        "input"
+      ]
+    },
+    "v2_synthetic_5": {
+      "path": "D:\\Incident Agent\\data\\p65-dynamic-budget-offline-20261019-01\\v2-prepared-5\\first-request.json",
+      "body_sha256": "5ef5790a4ef6a5688dedefd58d347e2aeb2875cb26f0263abf6f87872d103150",
+      "changed_body_fields": [
+        "instructions"
+      ]
+    }
+  }
+}
