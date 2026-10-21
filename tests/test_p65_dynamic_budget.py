@@ -1,4 +1,4 @@
-"""v2 request binding and sealed second-response replay; all execution offline."""
+"""Versioned request binding and sealed response replay; all execution offline."""
 from copy import deepcopy
 import json
 from unittest.mock import Mock
@@ -46,7 +46,7 @@ def test_real_agent_budget_and_frozen_first_body_match(prepared, tmp_path, monke
     plan, _, frozen = p65.read_prepared(prepared)
     for number, (saved, checkpoint, kwargs) in enumerate(seen, 1):
         artifact = request(tmp_path, number)
-        remaining = min(4 - saved.total_tool_executions, 13 - saved.current_attempt_tool_calls)
+        remaining = min(5 - saved.total_tool_executions, 13 - saved.current_attempt_tool_calls)
         rounds = 4 - number
         assert kwargs["instructions"] == p65.budget_instructions(remaining, rounds)
         assert artifact["body"]["instructions"] == kwargs["instructions"]
@@ -77,7 +77,7 @@ def test_mismatch_stops_before_sdk_create(prepared, tmp_path, monkeypatch, chang
         elif change == "extra_instruction":
             kwargs["instructions"] += "\n另行允许执行修复。"
         elif change == "wrong_tools":
-            kwargs["instructions"] = p65.budget_instructions(4, 3)
+            kwargs["instructions"] = p65.budget_instructions(5, 3)
         elif change == "wrong_rounds":
             kwargs["instructions"] = p65.budget_instructions(3, 4)
         elif change == "wrong_task":
@@ -199,7 +199,7 @@ def test_synthetic_budget_is_isolated_and_enforced(
                          authorization=approval(prepared), sdk_factory=sdk)
     sdk.assert_not_called()
     assert not (tmp_path / "must-not-exist").exists()
-    assert p65.read_prepared(prepared)[0]["max_tool_executions"] == 4
+    assert p65.read_prepared(prepared)[0]["max_tool_executions"] == 5
 
 
 @pytest.fixture
@@ -214,8 +214,7 @@ def test_sealed_second_real_response_replays_exactly_with_synthetic_limits(
     tmp_path, second_frozen, total,
 ):
     prepared_dir = tmp_path / "prepared"
-    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir,
-                offline_tool_budget=None if total == 4 else total)
+    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir, offline_tool_budget=total)
     report = p65.run_prepared(
         prepared_dir, tmp_path / "run", offline_first_response=second_frozen,
         mock_responses=[response(answer="[明确 Mock 后续响应] 只验证完整输出往返。")],
@@ -301,10 +300,10 @@ def test_every_outgoing_round_is_checked_before_sdk(
 
 
 def test_unadvertised_tool_at_zero_budget_is_rejected(prepared, tmp_path):
-    calls = [metric(str(i), metric=f"synthetic-{i}", service="order-service") for i in range(3)]
+    calls = [metric(str(i), metric=f"synthetic-{i}", service="order-service") for i in range(4)]
     report = run(prepared, tmp_path, [response(calls), response([metric("unadvertised")])])
     assert report["session"]["status"] == "EXHAUSTED"
-    assert report["session"]["total_tool_executions"] == 4
+    assert report["session"]["total_tool_executions"] == 5
     assert report["adapter_requests"] == 2
     assert request(tmp_path, 2)["body"]["tools"] == []
     assert request(tmp_path, 2)["body"]["tool_choice"] == "none"
@@ -325,7 +324,7 @@ def test_agent_cannot_advertise_tools_when_disabled(
 
     intercept(monkeypatch, corrupt)
     if disabled == "zero_tools":
-        calls = [metric(str(i), metric=f"synthetic-{i}", service="order-service") for i in range(3)]
+        calls = [metric(str(i), metric=f"synthetic-{i}", service="order-service") for i in range(4)]
         responses = [response(calls), response(answer="[Mock] 不应到达")]
     else:
         responses = p65.mock_plan()

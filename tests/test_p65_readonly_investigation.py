@@ -79,7 +79,7 @@ def approval(prepared):
         "first_request_sha256": plan["first_request_sha256"],
         "capture_manifest_sha256": plan["capture_manifest_sha256"],
         "model": MODEL, "base_url": BASE_URL, "max_requests": 3,
-        "max_tool_executions": 4, "sdk_retries": 0, "application_retries": 0,
+        "max_tool_executions": 5, "sdk_retries": 0, "application_retries": 0,
         "cost_risk_acknowledged": True, "historical_evidence_export_authorized": True,
         "dynamic_inputs_under_same_scope_authorized": True,
         "authorized_at": "2026-01-01T00:00:00+00:00",
@@ -206,14 +206,19 @@ def test_unknown_foreign_and_remediation_stop_without_followup(prepared, tmp_pat
     assert not (tmp_path / "run/request-02.json").exists()
 
 
-def test_multiple_tools_stop_at_four_including_automatic_probe(prepared, tmp_path):
+def test_multiple_tools_stop_at_five_including_automatic_probe(prepared, tmp_path):
     report = run(prepared, tmp_path, [response([
         metric(str(i), metric="unknown_" + str(i), service="order-service")
         for i in range(5)
     ])])
     assert report["session"]["status"] == "EXHAUSTED"
-    assert report["session"]["total_tool_executions"] == 4
-    assert len(report["checkpoint"]["records"]) == 4
+    assert report["session"]["total_tool_executions"] == 5
+    assert len(report["checkpoint"]["records"]) == 5
+    assert [p["call_id"] for p in report["checkpoint"]["pending"]] == ["4"]
+    assert not any(
+        i.get("type") == "function_call_output" and i["call_id"] == "4"
+        for i in report["checkpoint"]["history"]
+    )
     assert report["adapter_requests"] == 1
     assert report["outcome"] == "stopped_incomplete_or_failed"
 
@@ -262,7 +267,7 @@ def test_prompt_injection_does_not_change_scope_or_export_sensitive_next_round(p
     injected.output.reverse()
     report = run(prepared, tmp_path, [injected, response(answer="停止。")])
     sent = request(tmp_path, 2)["body"]
-    assert sent["instructions"] == p65.budget_instructions(2, 2)
+    assert sent["instructions"] == p65.budget_instructions(3, 2)
     assert {s["name"] for s in sent["tools"]} == set(p65.TOOLS)
     assert report["session"]["total_tool_executions"] == 2
     with pytest.raises(ValueError, match="sensitive"):
@@ -512,7 +517,7 @@ def test_injected_sdk_transport_raw_protocol_and_one_time_consumption(
     )
     expected = 3 if failure in {None, "usage_shape"} else 1
     assert len(bodies) == report["real_model_sdk_requests"] == expected
-    # Assert installed SDK serialization uses the approved v2 body, including
+    # Assert installed SDK serialization uses the approved versioned body, including
     # dynamic instructions; this transport never opens a network connection.
     assert bodies[0] == p65.read_prepared(prepared)[2]
     # That report field counts injected SDK entries in this test, not paid use.

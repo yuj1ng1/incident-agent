@@ -229,7 +229,7 @@ def test_actual_first_response_uses_original_worker_budget_and_protocol(tmp_path
     from investigation.store import RuntimeStore
 
     prepared_dir = tmp_path / "prepared"
-    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir)
+    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir, offline_tool_budget=4)
     report = p65.run_prepared(
         prepared_dir,
         tmp_path / "run",
@@ -290,7 +290,7 @@ def test_actual_first_response_uses_original_worker_budget_and_protocol(tmp_path
 
 def test_real_first_batch_cannot_allow_a_fifth_execution(tmp_path, frozen):
     prepared_dir = tmp_path / "prepared"
-    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir)
+    p65.prepare(p65.DEFAULT_CAPTURE, prepared_dir, offline_tool_budget=4)
     report = p65.run_prepared(
         prepared_dir,
         tmp_path / "run",

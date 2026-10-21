@@ -91,7 +91,7 @@ def schemas():
 
 
 def first_request(package, *, max_tools=MAX_TOOLS):
-    """Deterministic v2 SDK body after the one committed automatic probe."""
+    """Versioned SDK body after the one committed automatic probe."""
     context = package["context"]
     tools = schemas() if max_tools > 1 else []
     return {
@@ -127,6 +127,42 @@ def _separate(output, *protected):
     return path
 
 
+def fixed_scope():
+    """Bind the experiment policy and installed SDK, never production defaults."""
+    sdk_files = (
+        "openai/_client.py", "openai/_base_client.py", "openai/_models.py",
+        "openai/resources/responses/responses.py",
+        "openai/types/responses/response.py",
+        "openai/types/responses/response_usage.py",
+        "httpx2/_client.py", "httpx2/_config.py",
+    )
+    sdk_paths = {}
+    for name in sdk_files:
+        distribution = importlib.metadata.distribution(name.split("/")[0])
+        sdk_paths[name] = Path(distribution.locate_file(name))
+    return {
+        "phase": "p65_offline_prepared_pending_new_approval",
+        "request_version": REQUEST_VERSION,
+        "expected_initial_reservation": {"model_requests": 1, "tool_executions": 1},
+        "model": MODEL, "base_url": BASE_URL,
+        "max_model_requests": MAX_MODELS,
+        "max_attempts": 1, "max_incidents": 1, "max_worker_run_once": 1,
+        "max_resumes": 0, "fallback": 0, "max_human_requests": 0,
+        "sdk_retries": 0, "application_retries": 0,
+        "timeout_seconds": TIMEOUT, "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "tools": list(TOOLS), "real_model_sdk_requests": 0,
+        "historical_only": True, "use_for_current_state": False,
+        "provider_verified": False,
+        "context_strategy": "actual_committed_outputs_phase_local_protocol_probe",
+        "sdk_versions": {
+            k: importlib.metadata.version(k) for k in ("openai", "httpx2", "pydantic")
+        },
+        "sdk_source_sha256": {
+            name: sha(path.read_bytes()) for name, path in sdk_paths.items()
+        },
+    }
+
+
 def prepare(
     capture,
     output,
@@ -141,26 +177,14 @@ def prepare(
     package = evidence_package(capture)
     body = first_request(package, max_tools=max_tools)
     plan = {
-        "phase": "p65_offline_prepared_pending_new_approval",
-        "request_version": REQUEST_VERSION,
+        **fixed_scope(),
         "offline_only": offline_tool_budget is not None,
-        "expected_initial_reservation": {"model_requests": 1, "tool_executions": 1},
-        "model": MODEL, "base_url": BASE_URL,
         "capture_dir": str(Path(capture).resolve()),
         "capture_manifest_sha256": package["context"]["capture_manifest_sha256"],
         "package_sha256": sha(encoded(package)),
         "first_request_sha256": inspect_input(body),
         "code_sha256": {name: sha((ROOT / name).read_bytes()) for name in CODE_FILES},
-        "max_model_requests": MAX_MODELS, "max_tool_executions": max_tools,
-        "max_attempts": 1, "max_incidents": 1,
-        "sdk_retries": 0, "application_retries": 0,
-        "timeout_seconds": TIMEOUT, "max_output_tokens": MAX_OUTPUT_TOKENS,
-        "tools": list(TOOLS), "real_model_sdk_requests": 0,
-        "historical_only": True, "use_for_current_state": False,
-        "provider_verified": False,
-        "context_strategy": "actual_committed_outputs_phase_local_protocol_probe",
-        "sdk_versions": {k: importlib.metadata.version(k)
-                         for k in ("openai", "httpx2", "pydantic")},
+        "max_tool_executions": max_tools,
     }
     root = _separate(output, capture)
     root.mkdir(parents=True, exist_ok=False)
@@ -187,13 +211,10 @@ def read_prepared(prepared):
 
     max_tools = plan["max_tool_executions"]
     if (
-        plan.get("request_version") != REQUEST_VERSION
+        any(encoded(plan.get(k)) != encoded(v) for k, v in fixed_scope().items())
         or type(plan.get("offline_only")) is not bool
         or type(max_tools) is not int or not 1 <= max_tools <= MAX_TOOL_CALLS
         or (not plan["offline_only"] and max_tools != MAX_TOOLS)
-        or plan.get("expected_initial_reservation") != {
-            "model_requests": 1, "tool_executions": 1,
-        }
     ):
         raise ValueError("p65_prepared_scope_or_code_changed")
     package = evidence_package(plan["capture_dir"])
