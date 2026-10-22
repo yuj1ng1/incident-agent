@@ -1,0 +1,1262 @@
+{
+  "fixture_version": "p65_s2_corpus_v1",
+  "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+  "labels_origin": "developer_agent_preset_expectations_not_independent_human_review",
+  "provider_answers": false,
+  "formal_human_approval": false,
+  "records_origin": "synthetic_offline_records_not_actual_observations; p63 identifier strings reused only as identity examples",
+  "records": [
+    {
+      "call_id": "call-total",
+      "observation_id": "obs-call-total",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "sample-service",
+        "metric": "http_requests_total"
+      },
+      "collected_at": "2026-10-22T00:00:00Z",
+      "result": {
+        "status": "no_data",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "source": "synthetic_fixture_only",
+        "originals": [
+          {
+            "path": "synthetic/metric.json"
+          }
+        ],
+        "captured_at": "2026-10-18T11:54:54Z",
+        "sanitized_projection": {
+          "observation_id": "p63:metric-http_requests_total:5da1ed71e3060dd4"
+        },
+        "captured_result": {
+          "status": "ok",
+          "value": 13.0,
+          "evaluated_at": "2026-10-18T11:54:53Z",
+          "scope": "service_total_not_independent_500_counter"
+        }
+      }
+    },
+    {
+      "call_id": "call-rate",
+      "observation_id": "obs-call-rate",
+      "name": "query_metrics",
+      "arguments": {
+        "service": "sample-service",
+        "metric": "http_5xx_rate"
+      },
+      "collected_at": "2026-10-22T00:00:00Z",
+      "result": {
+        "status": "no_data",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "source": "synthetic_fixture_only",
+        "originals": [
+          {
+            "path": "synthetic/metric.json"
+          }
+        ],
+        "captured_at": "2026-10-18T11:54:54Z",
+        "sanitized_projection": {
+          "observation_id": "p63:metric-http_5xx_rate:1294cdf7668926c2"
+        },
+        "captured_result": {
+          "status": "no_data",
+          "value": null,
+          "evaluated_at": "2026-10-18T11:54:53Z",
+          "scope": "service_total_not_independent_500_counter"
+        }
+      }
+    },
+    {
+      "call_id": "call-logs",
+      "observation_id": "obs-call-logs",
+      "name": "query_logs",
+      "arguments": {
+        "service": "sample-service",
+        "start": "2026-10-18T11:52:00Z",
+        "end": "2026-10-18T11:54:00Z"
+      },
+      "collected_at": "2026-10-22T00:00:00Z",
+      "result": {
+        "status": "no_data",
+        "reason": "outside_approved_frozen_evidence"
+      }
+    },
+    {
+      "call_id": "call-historical-logs",
+      "observation_id": "obs-call-historical-logs",
+      "name": "query_logs",
+      "arguments": {
+        "service": "sample-service",
+        "start": "2026-10-18T11:52:00Z",
+        "end": "2026-10-18T11:54:00Z"
+      },
+      "collected_at": "2026-10-22T00:00:00Z",
+      "result": {
+        "status": "no_data",
+        "historical_only": true,
+        "use_for_current_state": false,
+        "captured_at": "2026-10-18T11:54:54Z",
+        "source": "synthetic_fixture_only",
+        "originals": [
+          {
+            "path": "synthetic/log.json"
+          }
+        ],
+        "captured_result": {
+          "status": "ok",
+          "logs": [
+            {
+              "event_at": "2026-10-18T11:52:58Z",
+              "line": "synthetic historical failure"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "input_context": {
+    "automatic_version_probe": {
+      "captured_result": {
+        "commit_sha": null
+      }
+    },
+    "evidence_state": "sealed_files_only",
+    "real_firing_observed": false
+  },
+  "cases": [
+    {
+      "id": "A_p63_as_call",
+      "category": "A",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "historical_id_used_as_call_id",
+        "unknown_citation_id",
+        "field_declaration_requires_one_source_and_value"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "A_forged_observation",
+      "category": "A",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "observation_id_mismatch"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": "obs-forged",
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "A_wrong_arguments",
+      "category": "A",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "tool_arguments_mismatch"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "other-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "A_other_metric_source",
+      "category": "A",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "provenance_mismatch"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_5xx_rate:1294cdf7668926c2",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "B_outer_status",
+      "category": "B",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "source_field_value_mismatch"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：外层状态是ok。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "status"
+            ],
+            "value": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B_current_health",
+      "category": "B",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "unverified_fact_in_historical_scope"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：captured_result.status=ok所以当前业务健康。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "current_health"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B_no_data_zero",
+      "category": "B",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "no_valid_zero"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "rate",
+            "type": "tool_call",
+            "call_id": "call-rate",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_5xx_rate"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "no_data",
+            "historical_evidence_id": "p63:metric-http_5xx_rate:1294cdf7668926c2",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：no_data就是有效零值。",
+            "kind": "fact",
+            "refs": [
+              "rate"
+            ],
+            "use": "valid_zero"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B_fault_count",
+      "category": "B",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "independent_fault_count_not_established"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：累计值13.0等于13次独立故障。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "fault_count"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B_commit_head",
+      "category": "B",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "source_field_value_mismatch"
+      ],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "probe",
+            "type": "input_context",
+            "input_path": [
+              "automatic_version_probe",
+              "captured_result"
+            ]
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：运行commit已确认等于仓库HEAD。",
+            "kind": "fact",
+            "refs": [
+              "probe"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "commit_sha"
+            ],
+            "value": "b4aa148aaf667e109ece9966f2ad9ddffd665837"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_seal_means_freeze",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "sealed_evidence_misread_as_service_freeze"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：封存证据说明服务发生冻结。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_confirmed_cause_disguised",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "hypothesis_promoted_to_confirmed_root_cause"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：数据库根因已经确认。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_history_as_current",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "historical_observation_promoted_to_current_state"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史请求值说明当前业务健康。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_denied_logs_as_read",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "rejected_range_promoted_to_log_content"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "logs",
+            "type": "tool_call",
+            "call_id": "call-logs",
+            "tool": "query_logs",
+            "arguments": {
+              "service": "sample-service",
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": null,
+            "historical_evidence_id": null,
+            "source": null,
+            "originals": [],
+            "captured_at": null,
+            "evaluated_at": null,
+            "event_window": {
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：已成功读取日志正文且没有异常。",
+            "kind": "fact",
+            "refs": [
+              "logs"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_late_logs_as_now",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "collection_time_confused_with_event_time"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "history_logs",
+            "type": "tool_call",
+            "call_id": "call-historical-logs",
+            "tool": "query_logs",
+            "arguments": {
+              "service": "sample-service",
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": null,
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/log.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": null,
+            "event_window": {
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：这些晚采集日志中的全部事件均发生于采集瞬间。",
+            "kind": "fact",
+            "refs": [
+              "history_logs"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_temporal_causality",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [
+        "temporal_proximity_promoted_to_causality"
+      ],
+      "rule_scope": "manual_label_only_open_semantics",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：故障与部署时间相近，故障必由部署造成。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "observation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_explicit_root_cause",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "unverified_fact_in_historical_scope"
+      ],
+      "manual_expected_problems": [
+        "hypothesis_promoted_to_confirmed_root_cause"
+      ],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：数据库根因已经确认。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "root_cause"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_explicit_logs",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "logs_not_read"
+      ],
+      "manual_expected_problems": [
+        "rejected_range_promoted_to_log_content"
+      ],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "logs",
+            "type": "tool_call",
+            "call_id": "call-logs",
+            "tool": "query_logs",
+            "arguments": {
+              "service": "sample-service",
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": null,
+            "historical_evidence_id": null,
+            "source": null,
+            "originals": [],
+            "captured_at": null,
+            "evaluated_at": null,
+            "event_window": {
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：已成功读取日志正文。",
+            "kind": "fact",
+            "refs": [
+              "logs"
+            ],
+            "use": "log_content"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C_explicit_event_time",
+      "category": "C",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [
+        "source_field_value_mismatch"
+      ],
+      "manual_expected_problems": [
+        "collection_time_confused_with_event_time"
+      ],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "history_logs",
+            "type": "tool_call",
+            "call_id": "call-historical-logs",
+            "tool": "query_logs",
+            "arguments": {
+              "service": "sample-service",
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": null,
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/log.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": null,
+            "event_window": {
+              "start": "2026-10-18T11:52:00Z",
+              "end": "2026-10-18T11:54:00Z"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：日志事件发生于采集瞬间。",
+            "kind": "fact",
+            "refs": [
+              "history_logs"
+            ],
+            "use": "observation",
+            "field_path": [
+              "captured_result",
+              "logs",
+              0,
+              "event_at"
+            ],
+            "value": "2026-10-18T11:54:54Z"
+          }
+        ]
+      }
+    },
+    {
+      "id": "D_historical_value",
+      "category": "D",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "D_hypothesis",
+      "category": "D",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：数据库是可能原因，尚无证据确认。",
+            "kind": "hypothesis",
+            "refs": [
+              "total"
+            ],
+            "use": "root_cause"
+          }
+        ]
+      }
+    },
+    {
+      "id": "D_insufficient",
+      "category": "D",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：证据不足，无法确认根因或当前健康。",
+            "kind": "limitation",
+            "refs": [
+              "total"
+            ],
+            "use": "root_cause"
+          }
+        ]
+      }
+    },
+    {
+      "id": "D_unknown_commit",
+      "category": "D",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "probe",
+            "type": "input_context",
+            "input_path": [
+              "automatic_version_probe",
+              "captured_result"
+            ]
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：输入背景commit_sha=null；运行版本未知。",
+            "kind": "fact",
+            "refs": [
+              "probe"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "commit_sha"
+            ],
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "D_complete_legal",
+      "category": "D",
+      "sample_origin": "developer_agent_handcrafted_not_provider_not_formal_human_approval",
+      "expected_deterministic_codes": [],
+      "manual_expected_problems": [],
+      "rule_scope": "deterministic_declarations",
+      "answer": {
+        "schema_version": "p65_s1_answer_v1",
+        "citations": [
+          {
+            "id": "total",
+            "type": "tool_call",
+            "call_id": "call-total",
+            "tool": "query_metrics",
+            "arguments": {
+              "service": "sample-service",
+              "metric": "http_requests_total"
+            },
+            "observation_id": null,
+            "outer_status": "no_data",
+            "captured_status": "ok",
+            "historical_evidence_id": "p63:metric-http_requests_total:5da1ed71e3060dd4",
+            "source": "synthetic_fixture_only",
+            "originals": [
+              "synthetic/metric.json"
+            ],
+            "captured_at": "2026-10-18T11:54:54Z",
+            "evaluated_at": "2026-10-18T11:54:53Z",
+            "event_window": null
+          }
+        ],
+        "claims": [
+          {
+            "id": "c1",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：历史累计值13.0，不等于独立故障次数。",
+            "kind": "fact",
+            "refs": [
+              "total"
+            ],
+            "use": "field_value",
+            "field_path": [
+              "captured_result",
+              "value"
+            ],
+            "value": 13.0
+          },
+          {
+            "id": "hypothesis",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：数据库是待验证假设，未确认根因。",
+            "kind": "hypothesis",
+            "refs": [
+              "total"
+            ],
+            "use": "root_cause"
+          },
+          {
+            "id": "gap",
+            "text": "人工测试样本，非Provider回答、非正式人工批准：证据不足以确认当前健康或业务恢复。",
+            "kind": "limitation",
+            "refs": [
+              "total"
+            ],
+            "use": "current_recovery"
+          }
+        ]
+      }
+    }
+  ]
+}
