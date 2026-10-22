@@ -9,14 +9,16 @@ class FileLockError(Exception):
 
 class FileLock:
     """Nonblocking OS lock; process exit releases the actual lock."""
-    def __init__(self, path):
+    def __init__(self, path, *, read_only=False):
         self.path = Path(path)
+        self.read_only = read_only
 
     def __enter__(self):
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.handle = self.path.open("a+b")
-            if os.fstat(self.handle.fileno()).st_size == 0:
+            if not self.read_only:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.handle = self.path.open("rb" if self.read_only else "a+b")
+            if not self.read_only and os.fstat(self.handle.fileno()).st_size == 0:
                 self.handle.write(b"0")
                 self.handle.flush()
             self.handle.seek(0)

@@ -6,6 +6,15 @@
     "/api/incidents/{incident_id}": {
       "$ref": "#/components/schemas/IncidentDetail"
     },
+    "/api/operator": {
+      "$ref": "#/components/schemas/OperatorView"
+    },
+    "/api/remediations": {
+      "$ref": "#/components/schemas/RemediationPage"
+    },
+    "/api/remediations/{proposal_id}": {
+      "$ref": "#/components/schemas/RemediationDetail"
+    },
     "/api/sessions": {
       "$ref": "#/components/schemas/SessionPage"
     },
@@ -14,6 +23,52 @@
     }
   },
   "schemas": {
+    "ActionView": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "execution_outcome": {
+          "enum": [
+            "not_executed",
+            "executed",
+            "unknown"
+          ],
+          "title": "Execution Outcome",
+          "type": "string"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "title": "Finished At",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "success": {
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action_id",
+        "started_at",
+        "finished_at",
+        "success",
+        "status",
+        "execution_outcome"
+      ],
+      "title": "ActionView",
+      "type": "object"
+    },
     "AlertSummary": {
       "additionalProperties": false,
       "properties": {
@@ -85,6 +140,48 @@
       "title": "AlertSummary",
       "type": "object"
     },
+    "AuditView": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "title": "Actor",
+          "type": "string"
+        },
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "event_id",
+        "occurred_at",
+        "event",
+        "actor",
+        "reason"
+      ],
+      "title": "AuditView",
+      "type": "object"
+    },
     "BudgetUsage": {
       "additionalProperties": false,
       "properties": {
@@ -128,6 +225,189 @@
         "started_at"
       ],
       "title": "BudgetUsage",
+      "type": "object"
+    },
+    "CompensationRequestView": {
+      "additionalProperties": false,
+      "properties": {
+        "assessment_id": {
+          "title": "Assessment Id",
+          "type": "string"
+        },
+        "command_id": {
+          "title": "Command Id",
+          "type": "string"
+        },
+        "compensation_proposal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Compensation Proposal Id"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_reason": {
+          "title": "Request Reason",
+          "type": "string"
+        },
+        "requested_by": {
+          "title": "Requested By",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "approval_required",
+            "already_requested"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/CompensationTargetView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "enum": [
+            "verification_failed",
+            "operator_request"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "target",
+        "compensation_proposal_id",
+        "assessment_id",
+        "command_id",
+        "requested_by",
+        "request_reason",
+        "evaluated_at",
+        "trigger"
+      ],
+      "title": "CompensationRequestView",
+      "type": "object"
+    },
+    "CompensationTargetView": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "commit_sha": {
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "configuration_digest": {
+          "title": "Configuration Digest",
+          "type": "string"
+        },
+        "data_compatibility": {
+          "title": "Data Compatibility",
+          "type": "string"
+        },
+        "preconditions": {
+          "title": "Preconditions",
+          "type": "string"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "side_effects": {
+          "title": "Side Effects",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "verification_policy": {
+          "title": "Verification Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "service",
+        "commit_sha",
+        "artifact_sha256",
+        "configuration_digest",
+        "preconditions",
+        "side_effects",
+        "verification_policy",
+        "data_compatibility"
+      ],
+      "title": "CompensationTargetView",
+      "type": "object"
+    },
+    "CompensationView": {
+      "additionalProperties": false,
+      "properties": {
+        "compensation_proposal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Compensation Proposal Id"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "approval_required",
+            "already_requested"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/CompensationTargetView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "target",
+        "compensation_proposal_id"
+      ],
+      "title": "CompensationView",
       "type": "object"
     },
     "HumanRequestView": {
@@ -578,6 +858,33 @@
       "title": "InvestigationStatus",
       "type": "string"
     },
+    "OperatorView": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "title": "Actor",
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "enum": [
+              "request",
+              "approve",
+              "execute"
+            ],
+            "type": "string"
+          },
+          "title": "Permissions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "actor",
+        "permissions"
+      ],
+      "title": "OperatorView",
+      "type": "object"
+    },
     "Projection": {
       "additionalProperties": false,
       "properties": {
@@ -991,6 +1298,375 @@
       "title": "RecoveryVerificationView",
       "type": "object"
     },
+    "RemediationDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "action_type": {
+          "title": "Action Type",
+          "type": "string"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/components/schemas/ActionView"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "approval_valid": {
+          "title": "Approval Valid",
+          "type": "boolean"
+        },
+        "approved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Approved At"
+        },
+        "approved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Approved By"
+        },
+        "audit": {
+          "items": {
+            "$ref": "#/components/schemas/AuditView"
+          },
+          "title": "Audit",
+          "type": "array"
+        },
+        "closure_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Closure Reason"
+        },
+        "compensation": {
+          "$ref": "#/components/schemas/CompensationView"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "execution_outcome": {
+          "enum": [
+            "not_executed",
+            "executed",
+            "unknown"
+          ],
+          "title": "Execution Outcome",
+          "type": "string"
+        },
+        "expected_commit_sha": {
+          "title": "Expected Commit Sha",
+          "type": "string"
+        },
+        "hidden_parameter_count": {
+          "title": "Hidden Parameter Count",
+          "type": "integer"
+        },
+        "incident_id": {
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "original_proposal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Original Proposal Id"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "proposal_digest": {
+          "title": "Proposal Digest",
+          "type": "string"
+        },
+        "proposal_id": {
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "rejected_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rejected At"
+        },
+        "rejected_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rejected By"
+        },
+        "rejection_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rejection Reason"
+        },
+        "related_proposals": {
+          "items": {
+            "$ref": "#/components/schemas/RemediationSummary"
+          },
+          "title": "Related Proposals",
+          "type": "array"
+        },
+        "requests": {
+          "items": {
+            "$ref": "#/components/schemas/CompensationRequestView"
+          },
+          "title": "Requests",
+          "type": "array"
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "executing",
+            "succeeded",
+            "failed",
+            "verification_failed",
+            "closed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/CompensationTargetView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifications": {
+          "items": {
+            "$ref": "#/components/schemas/VerificationView"
+          },
+          "title": "Verifications",
+          "type": "array"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "incident_id",
+        "service",
+        "summary",
+        "action_type",
+        "risk",
+        "status",
+        "created_at",
+        "execution_outcome",
+        "original_proposal_id",
+        "reason",
+        "parameters",
+        "hidden_parameter_count",
+        "proposal_digest",
+        "expected_commit_sha",
+        "approved_by",
+        "approved_at",
+        "approval_valid",
+        "rejected_by",
+        "rejected_at",
+        "rejection_reason",
+        "closure_reason",
+        "compensation",
+        "target",
+        "related_proposals",
+        "actions",
+        "verifications",
+        "requests",
+        "audit"
+      ],
+      "title": "RemediationDetail",
+      "type": "object"
+    },
+    "RemediationPage": {
+      "additionalProperties": false,
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/components/schemas/RemediationSummary"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "limit": {
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "limit",
+        "offset",
+        "has_more"
+      ],
+      "title": "RemediationPage",
+      "type": "object"
+    },
+    "RemediationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "action_type": {
+          "title": "Action Type",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "execution_outcome": {
+          "enum": [
+            "not_executed",
+            "executed",
+            "unknown"
+          ],
+          "title": "Execution Outcome",
+          "type": "string"
+        },
+        "incident_id": {
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "original_proposal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Original Proposal Id"
+        },
+        "proposal_id": {
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "executing",
+            "succeeded",
+            "failed",
+            "verification_failed",
+            "closed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "incident_id",
+        "service",
+        "summary",
+        "action_type",
+        "risk",
+        "status",
+        "created_at",
+        "execution_outcome",
+        "original_proposal_id"
+      ],
+      "title": "RemediationSummary",
+      "type": "object"
+    },
     "ResultTrust": {
       "additionalProperties": false,
       "properties": {
@@ -1385,6 +2061,124 @@
       ],
       "title": "SessionSummary",
       "type": "object"
+    },
+    "VerificationCheckView": {
+      "additionalProperties": false,
+      "properties": {
+        "http_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Http Status"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Success"
+        }
+      },
+      "required": [
+        "name",
+        "success",
+        "http_status"
+      ],
+      "title": "VerificationCheckView",
+      "type": "object"
+    },
+    "VerificationView": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Action Id"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/components/schemas/VerificationCheckView"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "evidence_status": {
+          "enum": [
+            "bound",
+            "legacy",
+            "stale",
+            "mismatch",
+            "manual_observation"
+          ],
+          "title": "Evidence Status",
+          "type": "string"
+        },
+        "historical_success": {
+          "title": "Historical Success",
+          "type": "boolean"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "no_data",
+            "timeout",
+            "stale",
+            "mismatch",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "post_action",
+            "manual_check"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        },
+        "verification_id": {
+          "title": "Verification Id",
+          "type": "string"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verification_id",
+        "verified_at",
+        "purpose",
+        "outcome",
+        "historical_success",
+        "evidence_status",
+        "action_id",
+        "checks"
+      ],
+      "title": "VerificationView",
+      "type": "object"
     }
   },
   "serialization": {
@@ -1394,6 +2188,21 @@
       "exclude_unset": false
     },
     "/api/incidents/{incident_id}": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/operator": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/remediations": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/remediations/{proposal_id}": {
       "exclude_defaults": false,
       "exclude_none": false,
       "exclude_unset": false

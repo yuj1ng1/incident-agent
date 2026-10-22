@@ -10,7 +10,7 @@ from models.remediation import ActionResult, ExecutionOutcome, utc_now
 from remediation.approval import approval_digest
 from remediation.planner import parse_time
 from remediation.state import RemediationError
-from remediation.verification import DemoClient
+from remediation.verification import DemoClient, service_identity
 from remediation.windows_process import ProcessHandle, belongs_to_demo
 
 DEMO_ROOT = Path(r"D:\prometheus-demo")
@@ -153,12 +153,13 @@ def disable_demo_regression(proposal, runtime=None):
         stop_attempted = True
         runtime.stop(identity)
         stopped = True
-        runtime.start()
+        started_version = runtime.start()
         new_identity = runtime.listener()
         details.update(new_pid=new_identity["pid"], old_demo_stopped=True)
         return ActionResult(proposal_id=proposal.proposal_id, action_type=proposal.action_type,
             started_at=started, success=True, status="action_completed",
             summary="已用原 start_demo.ps1 正常模式重新启动 Demo，等待独立恢复验证。", details=details,
+            resulting_identity=service_identity(started_version),
             execution_outcome=ExecutionOutcome.EXECUTED)
     except RemediationError as exc:
         details["old_demo_stopped"] = stopped

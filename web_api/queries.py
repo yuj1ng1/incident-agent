@@ -33,6 +33,44 @@ from web_api.schemas import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class RemediationQueries:
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def snapshot(self):
+        from remediation.store import RemediationStore
+        store = RemediationStore(self.path, read_only=True)
+        return store, store.load()
+
+    def list(
+        self,
+        *,
+        limit,
+        offset,
+        status=None,
+        incident_id=None,
+    ):
+        from web_api.remediation_views import summary_view
+        from web_api.schemas import RemediationPage
+        store, data = self.snapshot()
+        proposals = [store.from_data(data, key) for key in data["proposals"]]
+        proposals = sorted((p for p in proposals
+                            if (status is None or p.status == status)
+                            and (incident_id is None or p.incident_id == incident_id)),
+                           key=lambda p: (p.created_at, p.proposal_id), reverse=True)
+        return RemediationPage(
+            items=[summary_view(store, data, p) for p in proposals[offset:offset + limit]],
+            limit=limit, offset=offset, has_more=len(proposals) > offset + limit,
+        )
+
+    def detail(self, proposal_id):
+        from web_api.remediation_views import detail_view
+        store, data = self.snapshot()
+        if proposal_id not in data["proposals"]:
+            return None
+        return detail_view(store, data, store.from_data(data, proposal_id))
+
+
 def public_text(value, limit=200):
     if value is None:
         return None

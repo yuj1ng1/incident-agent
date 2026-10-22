@@ -51,6 +51,45 @@ export interface Page<T> {
 export type IncidentPage = Page<IncidentSummary>;
 export type SessionPage = Page<SessionSummary>;
 
+export type RemediationStatus = 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'verification_failed' | 'closed';
+export interface OperatorView { actor: string; permissions: ('request' | 'approve' | 'execute')[] }
+export interface CompensationTargetView {
+  target_id: string; service: string; commit_sha: string; artifact_sha256: string;
+  configuration_digest: string; preconditions: string; side_effects: string;
+  verification_policy: string; data_compatibility: string;
+}
+export interface CompensationView {
+  status: 'blocked' | 'approval_required' | 'already_requested'; reason: string;
+  target: CompensationTargetView | null; compensation_proposal_id: string | null;
+}
+export interface CompensationRequestView extends CompensationView {
+  assessment_id: string; command_id: string; requested_by: string; request_reason: string;
+  evaluated_at: string; trigger: 'verification_failed' | 'operator_request';
+}
+export interface RemediationSummary {
+  proposal_id: string; incident_id: string; service: string; summary: string; action_type: string;
+  risk: 'low' | 'medium' | 'high'; status: RemediationStatus; created_at: string;
+  execution_outcome: 'not_executed' | 'executed' | 'unknown'; original_proposal_id: string | null;
+}
+export type RemediationPage = Page<RemediationSummary>;
+export interface RemediationDetail extends RemediationSummary {
+  reason: string; parameters: Record<string, string>; hidden_parameter_count: number;
+  proposal_digest: string; expected_commit_sha: string; approved_by: string | null;
+  approved_at: string | null; approval_valid: boolean; rejected_by: string | null;
+  rejected_at: string | null; rejection_reason: string | null; closure_reason: string | null;
+  compensation: CompensationView; target: CompensationTargetView | null;
+  related_proposals: RemediationSummary[];
+  actions: { action_id: string; started_at: string; finished_at: string;
+    success: boolean; status: string; execution_outcome: 'not_executed' | 'executed' | 'unknown' }[];
+  verifications: { verification_id: string; verified_at: string; purpose: 'post_action' | 'manual_check';
+    outcome: 'passed' | 'failed' | 'no_data' | 'timeout' | 'stale' | 'mismatch' | 'unknown';
+    evidence_status: 'bound' | 'legacy' | 'stale' | 'mismatch' | 'manual_observation';
+    historical_success: boolean; action_id: string | null;
+    checks: { name: string; success: boolean | null; http_status: number | null }[] }[];
+  requests: CompensationRequestView[];
+  audit: { event_id: string; occurred_at: string; event: string; actor: string; reason: string | null }[];
+}
+
 export interface IncidentSummary {
   incident_id: string;
   service: string;

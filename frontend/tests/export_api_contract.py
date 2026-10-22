@@ -31,7 +31,7 @@ def public_contract():
     responses = {
         path: methods["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         for path, methods in openapi["paths"].items()
-        if path.startswith("/api/")
+        if path.startswith("/api/") and "get" in methods
     }
     schemas = {}
     pending = set(references(responses))

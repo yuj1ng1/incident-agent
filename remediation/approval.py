@@ -22,6 +22,10 @@ def approval_digest(proposal):
     # Preserve v1 approval hashes; new retry lineage is covered when present.
     if proposal.retry_of is not None:
         payload["retry_of"] = proposal.retry_of
+    if proposal.incident_fingerprint is not None:
+        payload["incident_fingerprint"] = proposal.incident_fingerprint
+    if proposal.compensation is not None:
+        payload["compensation"] = proposal.compensation.model_dump(mode="json")
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

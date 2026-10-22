@@ -55,6 +55,10 @@ if __name__ == "__main__":
         "runtime_flags": {"simulate_code_regression": True},
     }
     runtime.listener.return_value = {"pid": 123}  # No native process API is used.
+    runtime.start.return_value = {
+        **runtime.client.version.return_value,
+        "runtime_flags": {"simulate_code_regression": False},
+    }
     runtime.stop.side_effect = lambda identity: (root / "test-effect").write_text("executed", encoding="utf-8")
     verifier = Mock()
     verifier.verify.side_effect = lambda p: VerificationResult(

@@ -145,9 +145,9 @@ Prompt 区分提交存在、实例版本自报、进程启动、代码修改、�
 - [Runtime 稳定性与维护性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)
 - [单元、跨进程及真实模型验收记录](docs/DURABLE_AGENT_RUNTIME_VALIDATION.md)
 
-## 本地只读 Web 工作台
+## 本地 Web 工作台
 
-第一版包括总览、Incident 列表与详情、Session 列表与详情，通过现有 FastAPI 读取真实记录。
+包括总览、Incident/Session 列表与详情，以及 Remediation 的申请、审批、受控执行、独立业务验证和补偿关联，通过现有 FastAPI 读取真实记录。
 API 与前端独立启动；页面和 API 都不会启动第二份 Worker。
 
 在项目根目录的第一个终端启动 API：
@@ -165,8 +165,11 @@ npm run dev
 ```
 
 使用 Node.js 24，访问 [本地工作台](http://127.0.0.1:5173)。默认 API 为 127.0.0.1:8010，
-仅为固定本地前端来源开放 GET；无开发代理、登录、审批或执行接口。
-原有 API 进程需要重启才能加载新增的本地 CORS 配置。
+写操作默认关闭。配置后端 `INCIDENT_AGENT_WEB_OPERATORS` 后，Remediation 操作还需 Bearer 认证、对应权限、有效提案摘要和审批；Incident/Session 接口保持只读。
+后端代码或操作授权配置变化后，需要操作者按部署流程重新加载 API。
+
+新增补偿资格、阻断语义、权限配置、逐文件变更和离线验证结果见
+[安全补偿闭环与 Web 工作台交付说明](docs/COMPENSATION_WORKBENCH_2026-10-22_19-02-52.md)。当前未注册真实可执行的安全补偿动作，缺少可信目标时会持久化阻断申请。
 
 目录、页面对应 API、替代端口、测试和安全限制见
 [Web 工作台使用指南](docs/WEB_WORKBENCH_GUIDE_2026-10-11_12-17-36.md)；

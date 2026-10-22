@@ -36,7 +36,9 @@ class RecoveryTests(unittest.TestCase):
         self.p = self.store.create(proposal())
         self.runtime = fake_runtime()
         self.client = Mock()
-        self.client.get.side_effect = lambda endpoint: (200, version(False)) if endpoint == "/version" else (200, None)
+        self.client.get.side_effect = lambda endpoint: (200, version(False)) if endpoint == "/version" else (
+            200, {"service": "order-service", "dependency": "order-db", "order": {"id": 1}},
+        )
         self.verifier = DemoVerifier(self.client)
         self.executor = ActionExecutor(self.store, self.runtime, self.verifier)
         locking = patch("remediation.executor.SERVICE_LOCK", self.root / "service.lock")

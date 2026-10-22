@@ -11,7 +11,9 @@ from models.remediation import (
     ActionResult, ExecutionOutcome, RemediationAuditEvent, RemediationProposal,
     RemediationStatus as S, VerificationResult,
 )
-from remediation.approval import actor_name, approve_proposal, reject_proposal
+from remediation.approval import (
+    actor_name, approval_digest, approve_proposal, reject_proposal,
+)
 from remediation.state import RemediationError
 from storage_lock import FileLock as SharedFileLock, FileLockError
 
@@ -32,16 +34,28 @@ class FileLock(SharedFileLock):
 
 
 class RemediationStore:
-    def __init__(self, file_path=DEFAULT_STORE):
+    def __init__(self, file_path=DEFAULT_STORE, *, read_only=False):
         self.file_path = Path(file_path)
+        self.read_only = read_only
 
     def load(self):
+        if self.read_only:
+            if not self.file_path.is_file():
+                raise FileNotFoundError("remediation_store_missing")
+            lock_path = Path(str(self.file_path) + ".lock")
+            if lock_path.is_file():
+                # Coordinate with writers without creating a lock or opening it for writes.
+                with FileLock(lock_path, read_only=True):
+                    return self._load_unlocked()
+            return self._load_unlocked()
         # Windows readers must release their handles before a writer replaces JSON.
         with FileLock(str(self.file_path) + ".lock"):
             return self._load_unlocked()
 
     def _load_unlocked(self):
         if not self.file_path.exists():
+            if self.read_only:
+                raise FileNotFoundError("remediation_store_missing")
             return {"version": 2, "proposals": {}, "actions": [], "verifications": [], "audit": []}
         try:
             data = json.loads(self.file_path.read_text(encoding="utf-8"))
@@ -83,6 +97,8 @@ class RemediationStore:
 
     @contextmanager
     def transaction(self):
+        if self.read_only:
+            raise StoreError("remediation_store_read_only")
         with FileLock(str(self.file_path) + ".lock"):
             data = self._load_unlocked()
             yield data
@@ -157,6 +173,8 @@ class RemediationStore:
         denial = None
         with self.transaction() as data:
             old = self.from_data(data, proposal_id)
+            if old.compensation is not None:
+                raise RemediationError("compensation_retry_forbidden")
             successor = next((self.from_data(data, key) for key, item in data["proposals"].items()
                               if item.get("retry_of") == proposal_id), None)
             if successor:
@@ -195,16 +213,99 @@ class RemediationStore:
             raise RemediationError(denial)
         return proposal
 
-    def approve(self, proposal_id, by):
+    @staticmethod
+    def check_command(
+        data,
+        proposal,
+        event_name,
+        actor,
+        command_id,
+        digest,
+        reason=None,
+    ):
+        """Optional Web command idempotency leaves legacy CLI decisions unchanged."""
+        if command_id is None:
+            return False
+        actor_name(command_id)
+        if digest != approval_digest(proposal):
+            raise RemediationError("proposal_digest_mismatch")
+        for event in data["audit"]:
+            details = event["details"]
+            if (details.get("assessment") or {}).get("command_id") == command_id:
+                raise RemediationError("command_id_conflict")
+            if details.get("command_id") == command_id:
+                if (event["proposal_id"], event["event"], event["actor"],
+                        details.get("proposal_digest"), details.get("reason")) != (
+                        proposal.proposal_id, event_name, actor, digest, reason):
+                    raise RemediationError("command_id_conflict")
+                return True
+        return False
+
+    def request_compensation(
+        self,
+        proposal_id,
+        by,
+        reason,
+        command_id,
+        *,
+        expected_digest=None,
+        target_id=None,
+    ):
+        from remediation.compensation import evaluate, record_request
         with self.transaction() as data:
-            proposal = approve_proposal(self.from_data(data, proposal_id), by)
+            original = self.from_data(data, proposal_id)
+            if expected_digest is not None and approval_digest(original) != expected_digest:
+                raise RemediationError("proposal_digest_mismatch")
+            if target_id is not None:
+                _, _, target, _ = evaluate(data, original)
+                if target is None or target.target_id != target_id:
+                    raise RemediationError("compensation_target_changed")
+            return record_request(
+                data, self, original, by, reason, command_id, "operator_request",
+            )
+
+    def approve(
+        self,
+        proposal_id,
+        by,
+        *,
+        command_id=None,
+        expected_digest=None,
+    ):
+        by = actor_name(by)
+        with self.transaction() as data:
+            original = self.from_data(data, proposal_id)
+            if self.check_command(data, original, "approved", by, command_id, expected_digest):
+                return original
+            if original.compensation is not None:
+                from remediation.compensation import execution_contract
+                execution_contract(data, original)
+            proposal = approve_proposal(original, by)
             self.put(data, proposal)
-            self.event(data, proposal, "approved", by)
+            self.event(data, proposal, "approved", by, **(
+                {"command_id": command_id, "proposal_digest": expected_digest}
+                if command_id else {}
+            ))
         return proposal
 
-    def reject(self, proposal_id, by, reason):
+    def reject(
+        self,
+        proposal_id,
+        by,
+        reason,
+        *,
+        command_id=None,
+        expected_digest=None,
+    ):
+        by = actor_name(by)
         with self.transaction() as data:
-            proposal = reject_proposal(self.from_data(data, proposal_id), by, reason)
+            original = self.from_data(data, proposal_id)
+            if self.check_command(data, original, "rejected", by, command_id, expected_digest, reason):
+                return original
+            proposal = reject_proposal(original, by, reason)
             self.put(data, proposal)
-            self.event(data, proposal, "rejected", by, reason=reason)
+            self.event(data, proposal, "rejected", by, reason=reason, **(
+                {"command_id": command_id, "proposal_digest": expected_digest}
+                if command_id else {}
+            ))
         return proposal

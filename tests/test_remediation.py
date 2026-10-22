@@ -636,7 +636,10 @@ class RuntimePlannerIntegrationTests(unittest.TestCase):
 class VerificationTests(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
-        self.responses = [(200, version(False)), (200, None), (200, None)]
+        self.responses = [(200, version(False)), (200, {
+            "service": "order-service", "dependency": "order-db",
+            "order": {"id": 1, "item": "fixture", "quantity": 1},
+        }), (200, None)]
 
     def verify(self):
         self.client.get.side_effect = self.responses

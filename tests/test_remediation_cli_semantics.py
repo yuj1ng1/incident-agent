@@ -30,6 +30,10 @@ def execution(tmp_path, monkeypatch):
         "runtime_flags": {"simulate_code_regression": True},
     }
     runtime.listener.return_value = {"pid": 123}
+    runtime.start.return_value = {
+        **runtime.client.version.return_value,
+        "runtime_flags": {"simulate_code_regression": False},
+    }
     verifier = Mock()
     verifier.verify.return_value = VerificationResult(
         proposal_id=proposal.proposal_id, success=True, checks={"fixture": {"success": True}}, summary="Verified",

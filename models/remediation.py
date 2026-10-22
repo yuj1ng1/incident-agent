@@ -28,6 +28,16 @@ class ExecutionOutcome(str, Enum):
     UNKNOWN = "unknown"
 
 
+class VerificationOutcome(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+    NO_DATA = "no_data"
+    TIMEOUT = "timeout"
+    STALE = "stale"
+    MISMATCH = "mismatch"
+    UNKNOWN = "unknown"
+
+
 class Risk(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
@@ -57,6 +67,51 @@ class ManualClosure(Record):
     verification_id: str
 
 
+class ServiceIdentity(Record):
+    service: str = Field(min_length=1, max_length=200)
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    process_started_at: datetime
+    configuration_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CompensationTarget(Record):
+    target_id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$")
+    service: str = Field(min_length=1, max_length=200)
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuration_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preconditions: str = Field(min_length=1, max_length=1000)
+    side_effects: str = Field(min_length=1, max_length=1000)
+    verification_policy: str = Field(min_length=1, max_length=1000)
+    data_compatibility: str = Field(min_length=1, max_length=1000)
+
+
+class CompensationLink(Record):
+    original_proposal_id: str
+    original_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    original_action_id: str
+    original_verification_id: str
+    source_identity: ServiceIdentity
+    contract_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target: CompensationTarget
+    trigger: Literal["verification_failed", "operator_request"]
+    command_id: str = Field(min_length=1, max_length=200)
+
+
+class CompensationAssessment(Record):
+    assessment_id: str = Field(default_factory=lambda: "comp-" + uuid4().hex)
+    original_proposal_id: str
+    trigger: Literal["verification_failed", "operator_request"]
+    command_id: str = Field(min_length=1, max_length=200)
+    requested_by: str = Field(min_length=1, max_length=200)
+    request_reason: str = Field(min_length=1, max_length=1000)
+    evaluated_at: datetime = Field(default_factory=utc_now)
+    status: Literal["blocked", "approval_required", "already_requested"]
+    reason: str = Field(max_length=200)
+    compensation_proposal_id: str | None = None
+    target: CompensationTarget | None = None
+
+
 class RemediationProposal(Record):
     proposal_id: str = Field(default_factory=lambda: "rem-" + uuid4().hex)
     incident_id: str = Field(min_length=1)
@@ -80,6 +135,8 @@ class RemediationProposal(Record):
     approval_digest: str | None = None
     retry_of: str | None = None
     closure: ManualClosure | None = None
+    incident_fingerprint: str | None = None
+    compensation: CompensationLink | None = None
 
 
 class ActionResult(Record):
@@ -94,6 +151,7 @@ class ActionResult(Record):
     details: dict[str, Any] = Field(default_factory=dict)
     # Old v1 results without an explicit outcome remain unknown.
     execution_outcome: ExecutionOutcome = ExecutionOutcome.UNKNOWN
+    resulting_identity: ServiceIdentity | None = None
 
 
 class VerificationResult(Record):
@@ -104,6 +162,12 @@ class VerificationResult(Record):
     checks: dict[str, Any]
     summary: str = Field(max_length=1000)
     purpose: Literal["post_action", "manual_check"] = "post_action"
+    # Legacy success=False is deliberately not promoted to a business failure.
+    outcome: VerificationOutcome = VerificationOutcome.UNKNOWN
+    started_at: datetime | None = None
+    action_id: str | None = None
+    proposal_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    observed_identity: ServiceIdentity | None = None
 
 
 class RemediationAuditEvent(Record):

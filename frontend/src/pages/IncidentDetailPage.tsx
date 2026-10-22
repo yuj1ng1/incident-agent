@@ -17,6 +17,7 @@ export function IncidentDetailPage() {
         <div className="detail-banner"><div><span className="eyebrow">INCIDENT</span><h2>{incident.service}</h2><span className="full-id">{incident.incident_id}</span></div><div className="badge-group"><StatusBadge value={incident.severity} /><StatusBadge value={incident.status} /></div></div>
         <div className="detail-layout"><div className="detail-main">
         <RecoveryVerificationCard incident={incident} />
+        <p><Link className="text-link" to={`/remediations?incident_id=${encodeURIComponent(incident.incident_id)}`}>查看此 Incident 的修复与补偿提案<ArrowRight size={14} /></Link></p>
         <Panel title="最近告警" subtitle="API 最多返回最近 3 条告警观测">
           {incident.recent_alerts.length ? <div className="table-scroll" tabIndex={0} role="region" aria-label="告警观测，可横向滚动"><table><caption className="sr-only">最近告警观测</caption><thead><tr><th scope="col">告警 / 指标</th><th scope="col">状态</th><th scope="col">观测值</th><th scope="col">阈值</th><th scope="col">观测时间 · 北京时间</th></tr></thead><tbody>{[...incident.recent_alerts].reverse().map((alert, index) => <tr key={index}>
             <td><strong className="alert-name">{alert.alertname}</strong><span className="record-id">{alert.metric ?? '未记录指标名'}</span></td>

@@ -5,8 +5,11 @@ def main(argv=None):
     import argparse
 
     import uvicorn
+    from dotenv import load_dotenv
 
-    parser = argparse.ArgumentParser(description="Incident Agent 本地只读 API")
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Incident Agent 本地工作台 API（写操作默认关闭）")
     parser.add_argument("--port", type=int, default=8010, help="本地监听端口（默认 8010）")
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:

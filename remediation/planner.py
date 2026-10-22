@@ -102,6 +102,7 @@ class RemediationPlanner:
             summary="关闭受控应用回归开关并重新启动 order-service",
             reason="当前运行开关、启动后的现场异常、当前版本源码和数据库可访问证据共同确认受控故障路径。",
             action_type="disable_demo_regression", parameters={"service": "order-service"},
+            incident_fingerprint=incident.fingerprint,
             risk=Risk.LOW, expected_commit_sha=sha, expected_process_started_at=started,
             evidence_sources=["get_running_version", "query_logs", "get_source_file", "check_dependency_health"])
 

@@ -16,6 +16,7 @@ interface Schema {
   required?: string[];
   items?: Schema;
   default?: unknown;
+  additionalProperties?: boolean | Schema;
 }
 const contract = JSON.parse(readFileSync(new URL('./api-contract.json', import.meta.url), 'utf8')) as {
   responses: Record<string, Schema>;
@@ -29,6 +30,7 @@ function schemaType(schema: Schema): string {
   if ('const' in schema) return JSON.stringify(schema.const);
   if (schema.enum) return schema.enum.map(value => JSON.stringify(value)).join(' | ');
   if (schema.type === 'array') return 'Array<' + schemaType(schema.items!) + '>';
+  if (schema.type === 'object' && typeof schema.additionalProperties === 'object') return 'Record<string, ' + schemaType(schema.additionalProperties) + '>';
   if (schema.type === 'object') return '{ ' + Object.entries(schema.properties || {}).map(([name, field]) => {
     // These responses include defaults. The Python test verifies live response
     // serialization flags, so a default cannot silently become an absent field.
@@ -48,11 +50,13 @@ it('checks actual TypeScript response types against live-checked OpenAPI, includ
   const assertions = [
     ['IncidentPage', '/api/incidents'], ['IncidentDetail', '/api/incidents/{incident_id}'],
     ['SessionPage', '/api/sessions'], ['SessionDetail', '/api/sessions/{session_id}'],
+    ['RemediationPage', '/api/remediations'], ['RemediationDetail', '/api/remediations/{proposal_id}'],
+    ['OperatorView', '/api/operator'],
   ].map(([name, path]) => 'type Check_' + name + ' = Assert<Equal<' + name + ', ' + schemaType(contract.responses[path]) + '>>;');
   // Flatten intersections in retained investigation records without widening
   // literal unions or dropping optional/nullable fields.
   const source = [
-    'import type { IncidentPage, IncidentDetail, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus } from ' + JSON.stringify(typePath) + ';',
+    'import type { IncidentPage, IncidentDetail, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus, RemediationPage, RemediationDetail, OperatorView } from ' + JSON.stringify(typePath) + ';',
     'type Normalize<T> = T extends readonly unknown[] ? { [K in keyof T]: Normalize<T[K]> } : T extends object ? { [K in keyof T]: Normalize<T[K]> } : T;',
     'type Equal<A, B> = (<T>() => T extends Normalize<A> ? 1 : 2) extends (<T>() => T extends Normalize<B> ? 1 : 2) ? true : false;',
     'type Assert<T extends true> = T;',

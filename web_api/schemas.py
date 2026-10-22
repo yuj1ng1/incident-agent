@@ -16,7 +16,130 @@ class PublicModel(BaseModel):
 
 class Health(PublicModel):
     status: Literal["ok"] = "ok"
-    read_only: Literal[True] = True
+    read_only: bool = True
+
+
+class OperatorView(PublicModel):
+    actor: str
+    permissions: list[Literal["request", "approve", "execute"]]
+
+
+class RemediationSummary(PublicModel):
+    proposal_id: str
+    incident_id: str
+    service: str
+    summary: str
+    action_type: str
+    risk: Literal["low", "medium", "high"]
+    status: Literal["pending", "approved", "rejected", "executing", "succeeded", "failed", "verification_failed", "closed"]
+    created_at: datetime
+    execution_outcome: Literal["not_executed", "executed", "unknown"]
+    original_proposal_id: str | None
+
+
+class RemediationPage(PublicModel):
+    items: list[RemediationSummary] = Field(max_length=100)
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class CompensationTargetView(PublicModel):
+    target_id: str
+    service: str
+    commit_sha: str
+    artifact_sha256: str
+    configuration_digest: str
+    preconditions: str
+    side_effects: str
+    verification_policy: str
+    data_compatibility: str
+
+
+class CompensationView(PublicModel):
+    status: Literal["blocked", "approval_required", "already_requested"]
+    reason: str
+    target: CompensationTargetView | None
+    compensation_proposal_id: str | None
+
+
+class ActionView(PublicModel):
+    action_id: str
+    started_at: datetime
+    finished_at: datetime
+    success: bool
+    status: str
+    execution_outcome: Literal["not_executed", "executed", "unknown"]
+
+
+class VerificationCheckView(PublicModel):
+    name: str
+    success: bool | None
+    http_status: int | None
+
+
+class VerificationView(PublicModel):
+    verification_id: str
+    verified_at: datetime
+    purpose: Literal["post_action", "manual_check"]
+    outcome: Literal["passed", "failed", "no_data", "timeout", "stale", "mismatch", "unknown"]
+    historical_success: bool
+    evidence_status: Literal["bound", "legacy", "stale", "mismatch", "manual_observation"]
+    action_id: str | None
+    checks: list[VerificationCheckView]
+
+
+class AuditView(PublicModel):
+    event_id: str
+    occurred_at: datetime
+    event: str
+    actor: str
+    reason: str | None
+
+
+class CompensationRequestView(CompensationView):
+    assessment_id: str
+    command_id: str
+    requested_by: str
+    request_reason: str
+    evaluated_at: datetime
+    trigger: Literal["verification_failed", "operator_request"]
+
+
+class RemediationDetail(RemediationSummary):
+    reason: str
+    parameters: dict[str, str]
+    hidden_parameter_count: int
+    proposal_digest: str
+    expected_commit_sha: str
+    approved_by: str | None
+    approved_at: datetime | None
+    approval_valid: bool
+    rejected_by: str | None
+    rejected_at: datetime | None
+    rejection_reason: str | None
+    closure_reason: str | None
+    compensation: CompensationView
+    target: CompensationTargetView | None
+    related_proposals: list[RemediationSummary]
+    actions: list[ActionView]
+    verifications: list[VerificationView]
+    requests: list[CompensationRequestView]
+    audit: list[AuditView]
+
+
+class RemediationCommand(PublicModel):
+    command_id: str = Field(min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_.:-]+$")
+    proposal_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CompensationRequest(RemediationCommand):
+    reason: str = Field(min_length=1, max_length=1000)
+    target_id: str | None = Field(default=None, max_length=80)
+
+
+class ReasonCommand(RemediationCommand):
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class InvestigationAnswer(PublicModel):
