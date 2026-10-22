@@ -352,7 +352,7 @@ def test_s1_task_and_initial_input_change_without_expanding_scope():
 
     body = p65.first_request(synthetic_package())
     initial = json.loads(body["input"][0]["content"])
-    assert p65.REQUEST_VERSION == "p65_s1_semantics_v4_tools5"
+    assert p65.REQUEST_VERSION == "p65_s1_semantics_v5_compact_refs_tools5"
     assert p65.MAX_MODELS == 3 and p65.MAX_TOOLS == 5
     assert body["max_output_tokens"] == 2048
     expected_task = "调查已经封存的 order-service 历史观测记录中反映的 HTTP 错误现象"
@@ -362,7 +362,7 @@ def test_s1_task_and_initial_input_change_without_expanding_scope():
         "不是实际 Prometheus firing", "数据库根因",
     ):
         assert required in initial["task"]
-    assert "p65_s1_answer_v1" in body["instructions"]
+    assert "p65_s1_answer_v2_compact_refs" in body["instructions"]
     assert "本轮未取得日志正文" in body["instructions"]
     assert "hypothesis" in body["instructions"]
     assert "外层和 captured_result 状态分别保留" in body["instructions"]

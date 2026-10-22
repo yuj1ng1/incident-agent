@@ -19,7 +19,7 @@ MAX_MODELS = 3
 MAX_TOOLS = 5
 MAX_REQUEST_BYTES = 131072
 TOOLS = ("query_metrics", "query_logs", "get_running_version")
-REQUEST_VERSION = "p65_s1_semantics_v4_tools5"
+REQUEST_VERSION = "p65_s1_semantics_v5_compact_refs_tools5"
 CACHE_WRITE_PATH = ("usage", "input_tokens_details", "cache_write_tokens")
 TASK = f"""实验请求协议：{REQUEST_VERSION}。
 使用简体中文调查已经封存的 order-service 历史观测记录中反映的 HTTP 错误现象，
@@ -35,20 +35,22 @@ TASK = f"""实验请求协议：{REQUEST_VERSION}。
 13.0 是服务级累计请求总数，不是故障次数。晚采集的日志可包含早期事件，
 指标 evaluated_at、回看窗口、日志事件范围、captured_at 和回放执行时间不能混称采集瞬间。
 日志范围拒绝须写“本轮未取得日志正文”，不能写成功读取或日志不存在。
-只输出一个 JSON 对象：schema_version=p65_s1_answer_v1，citations 数组和 claims 数组。
-每个 citation 有唯一 id 和 type（tool_call 或 input_context）。tool_call 必须有真实
-call_id、tool、arguments，三者逐项匹配本轮记录；p63 派生 ID 只放 historical_evidence_id。
-input_context 用 input_path 键/下标数组指向初始 user JSON，无 call_id；输入背景不是工具证据。
+只输出一个严格 JSON 对象：schema_version=p65_s1_answer_v2_compact_refs，
+顶层仅有 schema_version、citations 数组和 claims 数组，不允许未知字段。
+每个 citation 有唯一 id 和 type（tool_call 或 input_context）。
+tool_call 仅有 id、type、call_id、tool、arguments，后三者逐项匹配本轮真实调用；
+p63 派生历史 ID 不能用作 call_id，不得重复引用同一 call_id。
+input_context 仅有 id、type、input_path，路径为初始 user JSON 的键/下标数组；
+输入背景不是工具证据，不含 call_id 或其他工具身份字段。
 自动版本探针仅作为 input_context 的 ["automatic_version_probe"]，不得猜造隐藏的探针 ID。
-可见工具结果的引用另写 outer_status、captured_status、historical_evidence_id、source、
-originals（路径数组即可）、captured_at、evaluated_at、event_window，缺失值写 null（originals=[]）。
-observation_id 不可见时写 null，由离线审查关联 Runtime 记录；不得把 p63 ID 当 observation_id。
-event_window 仅填写实际日志工具 start/end 对象；它是请求事件范围，不证明日志正文已取得。
+引用中禁止附加 observation_id、状态、历史 ID、source、originals 和任何时间字段，
+Python 按已独立验证的真实调用记录还原这些信息，缺失信息保持未知。
+日志请求事件范围不证明日志正文已取得。
 claims 每项含唯一 id、text、kind（fact/hypothesis/limitation）、refs（citation id 数组）、
 use（observation/field_value/log_content/valid_zero/fault_count/root_cause/repair/
 current_health/current_recovery/interpretation）。field_value 另有 field_path 键/下标数组和 value，
 路径相对引用的工具 result 或输入字段；每项事实至少引用一项，假设和缺口仍须明确范围。
-引用表只列被 claims 使用的来源；外层和 captured_result 状态分别保留，不能合并。
+引用表只列被 claims 使用的来源；解释中外层和 captured_result 状态分别保留，不能合并。
 重要事实须就近使用 refs，输入 known_gaps 仅标输入背景，不冒充本轮已读取的日志。
 自然语言仍须独立语义审查；结构检查不代表 accepted。只给调查结论，不输出思维过程。
 最多三轮模型请求；工具总上限以冻结请求及 Python Runtime 为准（含自动版本探针）。

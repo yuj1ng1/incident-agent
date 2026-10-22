@@ -117,7 +117,7 @@ def evaluate_claim_quality(
         })
     rows = []
     try:
-        document = s1.Answer.model_validate(_parse_json(answer))
+        document = s1.parse_answer(answer)
     except (ValueError, TypeError, ValidationError):
         document = None
     if document is not None:
@@ -215,12 +215,12 @@ def evaluate_claim_quality(
 
 
 def measure_answer_capacity(answer):
-    """Byte sizes only. Identity-only projection is NOT valid under current v4.
+    """Byte sizes only; removing v1 provenance requires a new schema version.
 
     No same-model tokenizer is implemented or claimed; Provider usage from a
     different answer cannot establish this answer's exact token count.
     """
-    document = s1.Answer.model_validate(_parse_json(answer))
+    document = s1.parse_answer(answer)
     full = _parse_json(answer)
     minimal = deepcopy(full)
     for citation in minimal["citations"]:
@@ -235,14 +235,19 @@ def measure_answer_capacity(answer):
         ).encode("utf-8"))
 
     return {
+        "answer_schema_version": document.schema_version,
         "original_utf8_bytes": len(answer.encode("utf-8")),
         "compact_full_json_bytes": byte_size(full),
         "citation_count": len(document.citations),
+        "citation_field_counts": [len(c) for c in full["citations"]],
         "claim_count": len(document.claims),
         "full_citations_compact_bytes": byte_size(full["citations"]),
         "identity_only_citations_compact_bytes": byte_size(minimal["citations"]),
         "identity_only_answer_compact_bytes": byte_size(minimal),
         "identity_only_projection_valid_under_current_v4": False,
+        "identity_only_projection_valid_under_declared_schema": isinstance(
+            document, s1.CompactAnswer,
+        ),
         "exact_deepseek_tokens": None,
         "exact_token_basis": "no_verified_same_model_tokenizer_or_usage_for_sample",
         "configured_max_output_tokens": MAX_OUTPUT_TOKENS,

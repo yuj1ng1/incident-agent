@@ -25,7 +25,7 @@ def reseal_plan(prepared, change):
 
 def test_formal_five_tool_revision_requires_its_own_approval(prepared):
     plan, _, body = p65.read_prepared(prepared)
-    assert plan["request_version"] == "p65_s1_semantics_v4_tools5"
+    assert plan["request_version"] == "p65_s1_semantics_v5_compact_refs_tools5"
     assert plan["offline_only"] is False
     assert plan["max_tool_executions"] == 5
     assert plan["max_model_requests"] == 3
@@ -38,6 +38,7 @@ def test_formal_five_tool_revision_requires_its_own_approval(prepared):
     record = approval(prepared)  # Synthetic in-memory test data, never human consent.
     validate_approval(record, plan)
     for field, value in (
+        ("request_version", "p65_s1_semantics_v4_tools5"),
         ("request_version", "p65_dynamic_runtime_v3_tools5"),
         ("request_version", "p65_dynamic_runtime_v2"),
         ("max_tool_executions", 4),
