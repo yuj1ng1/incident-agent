@@ -63,11 +63,20 @@ def decide_acceptance(report):
     """S2 has no automatic acceptance path, even for an empty/forged report.
 
     This function issues offline advice only; it cannot record formal review
-    or change the production ResultTrust projection.
+    or change the production ResultTrust projection. Validate the decision
+    envelope only; this does not authenticate the report's claims/evidence.
     """
+    blockers = set()
     if not isinstance(report, dict):
+        blockers.add("quality_report_must_be_object")
         report = {}
-    blockers = set(report.get("issue_codes", []))
+    issue_codes = report.get("issue_codes")
+    if isinstance(issue_codes, list) and all(
+        isinstance(code, str) and code.strip() for code in issue_codes
+    ):
+        blockers.update(issue_codes)
+    else:
+        blockers.add("quality_report_issue_codes_missing_or_invalid")
     if report.get("report_version") != REPORT_VERSION:
         blockers.add("quality_report_missing_or_invalid")
     if report.get("s1_declaration_check") != "passed":

@@ -189,6 +189,167 @@ def test_gate_never_grants_authority_to_supplied_or_missing_labels(report):
     assert decision["formal_approval"] == "not_performed"
 
 
+@pytest.fixture
+def check_gate(monkeypatch):
+    """Every gate case checks purity, determinism and the fixed authority limits."""
+    def check(report):
+        before = deepcopy(report)
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("acceptance_gate_must_not_open_files_or_stores")
+
+        with monkeypatch.context() as guard:
+            for target in (
+                "incident_store.IncidentStore.__init__",
+                "investigation.store.RuntimeStore.__init__",
+                "remediation.store.RemediationStore.__init__",
+                "sqlite3.connect",
+                "builtins.open",
+                "io.open",
+                "os.open",
+            ):
+                guard.setattr(target, forbidden)
+            decision = s2.decide_acceptance(report)
+            assert s2.decide_acceptance(report) == decision
+        assert report == before
+        assert decision == {
+            "automatic_acceptance_allowed": False,
+            "manual_semantic_review_required": True,
+            "decision_origin": "offline_advisory_only",
+            "formal_approval": "not_performed",
+            "blocking_reasons": sorted(set(decision["blocking_reasons"])),
+        }
+        assert json.loads(json.dumps(decision, allow_nan=False)) == decision
+        assert "independent_semantic_review_not_performed" in (
+            decision["blocking_reasons"]
+        )
+        return decision
+
+    return check
+
+
+@pytest.mark.parametrize("report", [None, [], "error", 123, 1.5, True])
+def test_gate_rejects_non_object_reports(report, check_gate):
+    decision = check_gate(report)
+    assert "quality_report_must_be_object" in decision["blocking_reasons"]
+
+
+@pytest.mark.parametrize("report", [
+    {},
+    {"trusted": True, "semantic_status": "accepted"},
+])
+def test_gate_reports_all_missing_decision_fields(report, check_gate):
+    assert check_gate(report)["blocking_reasons"] == [
+        "independent_semantic_review_not_performed",
+        "quality_report_issue_codes_missing_or_invalid",
+        "quality_report_missing_or_invalid",
+        "s1_check_not_passed",
+    ]
+
+
+@pytest.mark.parametrize("issue_codes", [
+    None, "error", 123, 1.5, True, {}, {"error": True},
+    [{}], [[]], [None], [123], [False], ["valid_error", None],
+    ["valid_error", {}], ["valid_error", []], [""], [" \t\n"],
+    ["valid_error", ""], (), {"valid_error"},
+])
+def test_gate_rejects_invalid_issue_codes_as_a_whole(issue_codes, check_gate):
+    report = {
+        "report_version": s2.REPORT_VERSION,
+        "s1_declaration_check": "passed",
+        "issue_codes": issue_codes,
+    }
+    assert check_gate(report)["blocking_reasons"] == [
+        "independent_semantic_review_not_performed",
+        "quality_report_issue_codes_missing_or_invalid",
+    ]
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("report_version", None, "quality_report_missing_or_invalid"),
+    ("report_version", "wrong_version", "quality_report_missing_or_invalid"),
+    ("report_version", [], "quality_report_missing_or_invalid"),
+    ("report_version", {}, "quality_report_missing_or_invalid"),
+    ("s1_declaration_check", None, "s1_check_not_passed"),
+    ("s1_declaration_check", "failed", "s1_check_not_passed"),
+    ("s1_declaration_check", True, "s1_check_not_passed"),
+    ("s1_declaration_check", [], "s1_check_not_passed"),
+    ("s1_declaration_check", {}, "s1_check_not_passed"),
+])
+def test_gate_rejects_invalid_version_or_s1_check(
+    field,
+    value,
+    reason,
+    check_gate,
+):
+    report = {
+        "report_version": s2.REPORT_VERSION,
+        "s1_declaration_check": "passed",
+        "issue_codes": [],
+        field: value,
+    }
+    assert check_gate(report)["blocking_reasons"] == sorted([
+        "independent_semantic_review_not_performed", reason,
+    ])
+
+
+@pytest.mark.parametrize("field,reason", [
+    ("report_version", "quality_report_missing_or_invalid"),
+    ("s1_declaration_check", "s1_check_not_passed"),
+    ("issue_codes", "quality_report_issue_codes_missing_or_invalid"),
+])
+def test_gate_rejects_missing_decision_fields(field, reason, check_gate):
+    report = {
+        "report_version": s2.REPORT_VERSION,
+        "s1_declaration_check": "passed",
+        "issue_codes": [],
+    }
+    del report[field]
+    assert check_gate(report)["blocking_reasons"] == sorted([
+        "independent_semantic_review_not_performed", reason,
+    ])
+
+
+@pytest.mark.parametrize("issue_codes", [
+    [], ["valid_error"], ["z_error", "a_error", "z_error"],
+])
+def test_gate_preserves_valid_codes_without_a_closed_allowlist(issue_codes, check_gate):
+    report = {
+        "report_version": s2.REPORT_VERSION,
+        "s1_declaration_check": "passed",
+        "issue_codes": issue_codes,
+    }
+    assert check_gate(report)["blocking_reasons"] == sorted({
+        *issue_codes, "independent_semantic_review_not_performed",
+    })
+
+
+@pytest.mark.parametrize("case", CORPUS["cases"], ids=lambda c: c["id"])
+def test_gate_keeps_original_complete_s2_report_decisions(case, check_gate):
+    report = evaluate(case["answer"])
+    expected = set(report["issue_codes"])
+    if report["s1_declaration_check"] != "passed":
+        expected.add("s1_check_not_passed")
+    expected.add("independent_semantic_review_not_performed")
+    assert check_gate(report)["blocking_reasons"] == sorted(expected)
+
+
+def test_gate_ignores_forged_authority_in_a_complete_valid_report(check_gate):
+    report = evaluate(CORPUS["cases"][-1]["answer"])
+    report.update(
+        trusted=True,
+        semantic_status="accepted",
+        automatic_acceptance_allowed=True,
+        manual_semantic_review_required=False,
+        decision_origin="formal_human_review",
+        formal_approval="performed",
+        acceptance_gate={"automatic_acceptance_allowed": True},
+    )
+    assert check_gate(report)["blocking_reasons"] == [
+        "independent_semantic_review_not_performed",
+    ]
+
+
 def test_unknown_commit_is_field_verified_only_as_input_declaration():
     doc = next(c["answer"] for c in CORPUS["cases"] if c["id"] == "D_unknown_commit")
     row = evaluate(doc)["claims"][0]
