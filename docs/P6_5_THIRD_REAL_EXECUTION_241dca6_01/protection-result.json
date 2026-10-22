@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "verified_at": "2026-10-22T02:34:52.989472+00:00",
+  "protected_files": 7097,
+  "changed_files": [],
+  "existing_git_status_unchanged": true,
+  "frozen_directory_additions": [
+    "D:\\Incident Agent\\data\\p65-third-tools5-241dca6-20261021-01\\tree\\data\\p65-paid-consumption\\eb3b063ecb5e783f977c6890b40ba4ee09b70c561f80a6c3dc37a1be80b5ac76.consumed.json"
+  ],
+  "only_allowed_ledger_added": true,
+  "baseline_sha256": "4b073983e14f0cd76c3f378fd0fcdf365e6ad116b938dc7f0700517708a0c247",
+  "after_sha256": "4b073983e14f0cd76c3f378fd0fcdf365e6ad116b938dc7f0700517708a0c247"
+}
