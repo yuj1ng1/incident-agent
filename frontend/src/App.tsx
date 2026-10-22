@@ -35,6 +35,7 @@ export function App() {
     <div className="workspace"><div className="topbar"><nav className="breadcrumbs" aria-label="面包屑"><span className="workspace-name">工作台</span><ChevronRight size={14} aria-hidden="true" />
       {detail ? <><Link to={section === 'Incidents' ? '/incidents' : section === 'Sessions' ? '/sessions' : '/remediations'}>{section}</Link><ChevronRight size={14} aria-hidden="true" /><span aria-current="page">详情</span></> : <span aria-current="page">{section}</span>}
       </nav><span className="read-only"><LockKeyhole size={13} aria-hidden="true" />{section === 'Remediations' ? '写操作需后端授权' : '只读模式'}</span></div>
+      {import.meta.env.VITE_SYNTHETIC_DEMO === '1' && <div className="demo-banner" role="note">合成测试环境 · 仅临时夹具 · 非生产运行结果</div>}
       <main id="main-content"><Routes>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/incidents" element={<IncidentListPage />} />

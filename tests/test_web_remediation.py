@@ -13,6 +13,7 @@ from models.incident import Incident
 from remediation.approval import approval_digest
 from remediation.executor import ActionExecutor
 from remediation.store import RemediationStore
+from remediation.store import StoreError
 from test_compensation import comp, child, run_original
 from web_api.app import create_app
 from web_api.auth import WebAuthorization
@@ -43,6 +44,60 @@ def web(comp):
 
 def headers(actor):
     return {"Authorization": "Bearer " + TOKENS[actor]}
+
+
+def test_transient_snapshot_contention_retries_reads_without_changing_data(web, monkeypatch):
+    comp, client, _ = web
+    before = comp.store.file_path.read_bytes()
+    load = RemediationStore.load
+    attempts = []
+
+    def briefly_busy(store):
+        attempts.append(store.read_only)
+        if len(attempts) <= 2:
+            raise StoreError("store_busy")
+        return load(store)
+
+    monkeypatch.setattr(RemediationStore, "load", briefly_busy)
+    delays = []
+    monkeypatch.setattr("web_api.queries.time.sleep", delays.append)
+    assert client.get("/api/remediations").status_code == 200
+    assert attempts == [True, True, True]
+    assert delays == [0.025, 0.05]
+    assert comp.store.file_path.read_bytes() == before
+
+
+def test_persistent_snapshot_contention_is_bounded_and_reports_service_unavailable(web, monkeypatch):
+    _, client, _ = web
+    load = Mock(side_effect=StoreError("store_busy"))
+    monkeypatch.setattr(RemediationStore, "load", load)
+    monkeypatch.setattr("web_api.queries.time.sleep", Mock())
+    response = client.get("/api/remediations")
+    assert response.status_code == 503 and response.json() == {"detail": "store_busy"}
+    assert load.call_count == 4
+    load.reset_mock()
+    response = client.post("/api/remediations/fixture/approve", headers=headers("approver"), json={
+        "command_id": "locked-write", "proposal_digest": "a" * 64,
+    })
+    assert response.status_code == 409 and load.call_count == 1
+
+
+def test_corrupt_snapshot_is_not_retried_or_reported_as_a_state_conflict(web, monkeypatch):
+    _, client, _ = web
+    load = Mock(side_effect=StoreError("remediation_store_corrupt_or_unreadable"))
+    monkeypatch.setattr(RemediationStore, "load", load)
+    response = client.get("/api/remediations")
+    assert response.status_code == 500 and response.json() == {"detail": "remediation_store_failed"}
+    assert load.call_count == 1
+
+
+def test_concurrent_readonly_browser_snapshots_share_existing_lock_without_writes(web):
+    comp, client, _ = web
+    before = comp.store.file_path.read_bytes()
+    with ThreadPoolExecutor(4) as pool:
+        statuses = list(pool.map(lambda _: client.get("/api/remediations").status_code, range(12)))
+    assert statuses == [200] * 12
+    assert comp.store.file_path.read_bytes() == before
 
 
 def command(comp, identifier, cmd="command", **extra):

@@ -50,11 +50,13 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
   const inFlight = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const commands = useRef<Record<string, { payload: string; id: string }>>({});
-  useEffect(() => { if (result.data) { setRecord(result.data); setConfirm(false); setError(''); } }, [result.data]);
+  useEffect(() => { if (result.data) { setRecord(result.data); setConfirm(false); setError(''); setNotice(''); } }, [result.data]);
+  useEffect(() => { setConfirm(false); }, [token]);
   useEffect(() => () => controller.current?.abort(), []);
 
   async function submit(operation: string) {
     if (!record || !operator || inFlight.current) return;
+    if (['approve', 'reject', 'execute', 'close-execution'].includes(operation) && !confirm) return;
     inFlight.current = true; setBusy(operation); setError(''); setNotice('');
     const needsReason = ['compensation-requests', 'reject', 'close-execution'].includes(operation);
     const body = { proposal_digest: record.proposal_digest, ...(needsReason ? { reason: reason.trim() } : {}),
@@ -104,8 +106,8 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
             <h3>{remediationLabels[action.execution_outcome]} · {action.status}</h3><p>{formatTime(action.started_at)} → {formatTime(action.finished_at)}</p>
           </article>) : <EmptyState title={record.status === 'executing' ? '执行结果尚未持久化 · 需要等待或核查' : '暂无动作执行记录'} />}
         </Panel>
-        <Panel title="补偿资格与关联" subtitle="缺少安全目标时只记录阻断申请，不创建可执行的虚假动作。">
-          <div className="remediation-entry"><StatusBadge value={record.compensation.status} label={remediationLabels[record.compensation.status]} tone={record.compensation.status === 'blocked' ? 'amber' : 'blue'} />
+        <Panel title={record.original_proposal_id ? '补偿目标与原修复关联' : '补偿资格与关联'} subtitle={record.original_proposal_id ? '本提案的执行状态见页面顶部；以下限制仅说明不再派生下一轮补偿。' : '缺少安全目标时只记录阻断申请，不创建可执行的虚假动作。'}>
+          <div className="remediation-entry"><StatusBadge value={record.compensation.status} label={record.original_proposal_id && record.compensation.reason === 'compensation_recursion_forbidden' ? '禁止递归补偿' : remediationLabels[record.compensation.status]} tone={record.compensation.status === 'blocked' ? 'amber' : 'blue'} />
             <p>{reasonLabel(record.compensation.reason)}</p>
             {target && <Fields items={[
               ['补偿目标', target.target_id], ['目标版本', <code>{target.commit_sha}</code>], ['制品 SHA-256', <code>{target.artifact_sha256}</code>],
@@ -113,7 +115,7 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
               ['预期副作用', target.side_effects], ['业务验证标准', target.verification_policy], ['数据兼容条件', target.data_compatibility],
             ]} />}
             {record.original_proposal_id && <p>原提案：<Link className="record-link" to={pathFor(record.original_proposal_id)}>{record.original_proposal_id}</Link></p>}
-            {record.related_proposals.map(p => <p key={p.proposal_id}><Link className="record-link" to={pathFor(p.proposal_id)}>{p.proposal_id}</Link> · {remediationState(p)}</p>)}
+            {record.related_proposals.filter(p => p.proposal_id !== record.original_proposal_id).map(p => <p key={p.proposal_id}><Link className="record-link" to={pathFor(p.proposal_id)}>{p.proposal_id}</Link> · {remediationState(p)}</p>)}
           </div>
           {record.requests.map(request => <article className="remediation-entry" key={request.assessment_id}>
             <h3>{remediationLabels[request.status]} · {request.trigger === 'operator_request' ? '人工申请' : '验证失败自动评估'}</h3>
@@ -143,8 +145,9 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
               {record.status === 'pending' && <>
                 <p>批准仅授权当前提案摘要；原修复审批不会批准补偿。</p>
                 {!can('approve') && <p>当前身份无审批权限。</p>}
-                <button className="button" disabled={disabled || !can('approve')} onClick={() => submit('approve')}>批准此提案</button>
-                <button className="button" disabled={disabled || !can('approve') || !reason.trim()} onClick={() => submit('reject')}>拒绝此提案</button>
+                <label className="confirm-operation"><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} disabled={disabled || !can('approve')} />确认已核对本次审批的精确目标和参数</label>
+                <button className="button" disabled={disabled || !can('approve') || !confirm} onClick={() => submit('approve')}>批准此提案</button>
+                <button className="button" disabled={disabled || !can('approve') || !confirm || !reason.trim()} onClick={() => submit('reject')}>拒绝此提案</button>
               </>}
               {record.status === 'approved' && <>
                 {!can('execute') && <p>当前身份无执行权限。</p>}
@@ -154,7 +157,10 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
               {(record.status === 'executing' || (record.status === 'failed' && record.execution_outcome === 'unknown')) && <>
                 <p>执行可能仍在进行或已经中断。核查不会重放动作，人工收口也不会将未知结果改写为成功。</p>
                 <button className="button" disabled={disabled || !can('execute')} onClick={() => submit('inspect-execution')}>核查当前业务</button>
-                {record.status === 'executing' && <button className="button" disabled={disabled || !can('execute') || !reason.trim()} onClick={() => submit('close-execution')}>人工收口</button>}
+                {record.status === 'executing' && <>
+                  <label className="confirm-operation"><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} disabled={disabled || !can('execute')} />确认人工收口保留原执行结果，不代表业务恢复</label>
+                  <button className="button" disabled={disabled || !can('execute') || !reason.trim() || !confirm} onClick={() => submit('close-execution')}>人工收口</button>
+                </>}
               </>}
             </>}
             {busy && <p role="status">请求处理中，请勿重复操作…</p>}

@@ -92,6 +92,7 @@ h2 { font-size: 14px; font-weight: 600; line-height: 1.5; margin: 0; }
 .version { display: block; margin-top: var(--space-3); }
 
 .workspace { margin-left: var(--sidebar-width); flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.demo-banner { padding: 12px var(--space-3); background: var(--color-warning-soft); color: var(--color-warning-ink); border-bottom: 1px solid var(--color-border); font-size: var(--text-sm); font-weight: 600; }
 .topbar { height: 56px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: 0 var(--space-4); }
 .breadcrumbs { display: flex; align-items: center; gap: var(--space-1); color: var(--color-muted); font-size: var(--text-sm); min-width: 0; }
 .breadcrumbs [aria-current] { color: var(--color-text); }
@@ -342,12 +343,12 @@ tbody tr:hover { background: var(--color-bg); }
 @media (max-width: 768px) {
   :root { --sidebar-width: 0px; }
   .app-shell { display: block; }
-  .sidebar { position: static; width: 100%; height: auto; padding: var(--space-2) var(--space-3); flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-2); }
+  .sidebar { position: static; width: 100%; height: auto; padding: var(--space-2) var(--space-3); flex-direction: column; align-items: stretch; gap: 12px; }
   .brand { padding: 0; }
   .brand-copy { display: block; }
   .nav-label, .sidebar-footer { display: none; }
-  .sidebar nav { flex-direction: row; gap: var(--space-1); }
-  .sidebar nav a { gap: var(--space-1); padding: 0 12px; }
+  .sidebar nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1); }
+  .sidebar nav a { gap: var(--space-1); padding: 0 4px; justify-content: center; min-width: 0; white-space: nowrap; }
   .nav-text { display: inline; }
   .topbar { height: 48px; }
   .updated { display: none; }
@@ -361,7 +362,8 @@ tbody tr:hover { background: var(--color-bg); }
   .sidebar { flex-direction: column; align-items: stretch; padding: var(--space-2); gap: 12px; }
   .brand-copy { font-size: 14px; }
   .brand-copy > span { font-size: 10px; }
-  .sidebar nav a { flex: 1; justify-content: center; padding: 0 var(--space-1); font-size: var(--text-sm); }
+  .sidebar nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sidebar nav a { justify-content: flex-start; padding: 0 var(--space-1); font-size: var(--text-sm); white-space: nowrap; }
   .topbar { padding: 0 var(--space-2); }
   main { padding: var(--space-3) var(--space-2); }
   .page-header p { font-size: var(--text-sm); }

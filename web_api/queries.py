@@ -1,6 +1,7 @@
 """Small HTTP query adapter over public store/manager methods; no SQL here."""
 from pathlib import Path
 import re
+import time
 
 from pydantic import ValidationError
 
@@ -38,9 +39,17 @@ class RemediationQueries:
         self.path = Path(path)
 
     def snapshot(self):
-        from remediation.store import RemediationStore
+        from remediation.store import RemediationStore, StoreError
         store = RemediationStore(self.path, read_only=True)
-        return store, store.load()
+        # Aborted browser reads still finish on the server. Briefly serialize
+        # their snapshots through the existing lock; never retry a mutation.
+        for delay in (0.025, 0.05, 0.1, None):
+            try:
+                return store, store.load()
+            except StoreError as exc:
+                if str(exc) != 'store_busy' or delay is None:
+                    raise
+                time.sleep(delay)
 
     def list(
         self,

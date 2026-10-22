@@ -117,6 +117,57 @@ it('requires explicit execution confirmation and renders the returned independen
   expect(JSON.parse(request.body as string)).toEqual({ proposal_digest: fixture.proposal_digest, command_id: expect.any(String) });
 });
 
+it.each(['批准此提案', '拒绝此提案'])('requires explicit confirmation before %s and prevents duplicate submissions', async operation => {
+  const fetch = open({ ...fixture, status: 'pending', approval_valid: false });
+  await connect();
+  fireEvent.change(screen.getByLabelText('申请 / 拒绝 / 收口理由'), { target: { value: 'reviewed fixture' } });
+  const button = screen.getByRole('button', { name: operation });
+  expect(button).toBeDisabled();
+  fireEvent.click(button);
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' }));
+  let resolve!: (response: Response) => void;
+  fetch.mockImplementation(async () => new Promise<Response>(done => { resolve = done; }));
+  fireEvent.click(button); fireEvent.click(button);
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+  resolve(json({ ...fixture, status: operation === '批准此提案' ? 'approved' : 'rejected' }));
+  await screen.findByText('操作响应已收到，请核对当前状态和独立验证结果。');
+});
+
+it('retains unknown results and requires confirmation to close, with no execute control', async () => {
+  const fetch = open({ ...fixture, status: 'executing', execution_outcome: 'unknown' });
+  await connect();
+  expect(screen.queryByRole('button', { name: '执行已批准动作' })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('申请 / 拒绝 / 收口理由'), { target: { value: 'manual closure' } });
+  expect(screen.getByRole('button', { name: '人工收口' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox', { name: '确认人工收口保留原执行结果，不代表业务恢复' }));
+  fetch.mockImplementation(async () => json({ ...fixture, status: 'closed', execution_outcome: 'unknown' }));
+  fireEvent.click(screen.getByRole('button', { name: '人工收口' }));
+  await screen.findByText('操作响应已收到，请核对当前状态和独立验证结果。');
+  expect(screen.getByText('结果未知 · 需要核查', { selector: '.badge' })).toBeVisible();
+});
+
+it('distinguishes the no-recursion rule from the current compensation execution state', async () => {
+  open({ ...fixture, status: 'succeeded', original_proposal_id: 'rem-original', related_proposals: [{ ...fixture, proposal_id: 'rem-original' }], compensation: {
+    ...fixture.compensation, reason: 'compensation_recursion_forbidden',
+  } });
+  expect(await screen.findByText('禁止递归补偿', { selector: '.badge' })).toBeVisible();
+  expect(screen.getByText('流程已完成', { selector: '.badge' })).toBeVisible();
+  expect(screen.queryByText('补偿被阻断', { selector: '.badge' })).not.toBeInTheDocument();
+  expect(screen.getAllByRole('link', { name: 'rem-original' })).toHaveLength(1);
+});
+
+it('clears confirmation when the operator identity disconnects', async () => {
+  const fetch = open({ ...fixture, status: 'pending' });
+  await connect();
+  fireEvent.click(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' }));
+  fireEvent.click(screen.getByRole('button', { name: '断开操作身份' }));
+  await connect();
+  expect(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: '批准此提案' })).toBeDisabled();
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(0);
+});
+
 it('handles remediation list empty, loading, error and pagination via the real API contract', async () => {
   const fetch = vi.fn().mockResolvedValue(json({ items: [], limit: 20, offset: 0, has_more: false }));
   vi.stubGlobal('fetch', fetch);

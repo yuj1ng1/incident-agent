@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { apiBaseUrl, getJson } from '../src/api/client';
+import { apiBaseUrl, getJson, postJson } from '../src/api/client';
 import { pageQuery, formatTime, recordPath } from '../src/lib/format';
 import { json, page } from './fixtures';
 
@@ -36,6 +36,30 @@ describe('local read-only API requests', () => {
       }));
       vi.stubGlobal('fetch', fetch);
       const pending = expect(getJson('/api/incidents', new AbortController().signal)).rejects.toThrow('10 秒');
+      await vi.advanceTimersByTimeAsync(10000);
+      await pending;
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([
+    [503, 'store_busy', '存储正在处理其他请求'],
+    [503, 'write_auth_not_configured', '后端尚未配置操作授权'],
+    [403, 'operator_permission_denied', '当前身份没有此操作的权限'],
+    [409, 'verification_stale', '验证证据已过期'],
+    [422, 'invalid_request', '操作参数无效'],
+    [500, 'private-credential-in-error', '结果尚未确认'],
+  ])('explains write error HTTP %s / %s without raw error exposure', async (status, detail, message) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ detail }, status)));
+    await expect(postJson('/api/remediations/rem-test/approve', 'test-token', {}, new AbortController().signal)).rejects.toThrow(message);
+  });
+  it('does not retry a timed out write or imply that it failed before execution', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+        options.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      }));
+      vi.stubGlobal('fetch', fetch);
+      const pending = expect(postJson('/api/remediations/rem-test/execute', 'test-token', {}, new AbortController().signal)).rejects.toThrow('不要重复执行');
       await vi.advanceTimersByTimeAsync(10000);
       await pending;
       expect(fetch).toHaveBeenCalledTimes(1);

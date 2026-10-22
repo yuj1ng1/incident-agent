@@ -67,6 +67,8 @@ def create_app(
     def remediation_failure(request: Request, exc):
         code = str(exc)
         status = 404 if code == "proposal_not_found" else 409
+        if code == "store_busy" and request.method == "GET":
+            status = 503
         if isinstance(exc, StoreError) and code not in {"proposal_not_found", "store_busy"}:
             status, code = 500, "remediation_store_failed"
         if not re.fullmatch(r"[a-z_]+(?::[a-z_]+)?", code):

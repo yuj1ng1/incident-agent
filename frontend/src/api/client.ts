@@ -19,7 +19,20 @@ const errorMessages: Record<number, string> = {
   404: '没有找到这条记录，它可能已被移除，或地址中的 ID 不正确。',
   422: '查询参数无效，请重新选择筛选条件。',
   500: '存储读取失败。请检查 FastAPI 终端中的诊断信息。',
-  503: '存储暂不可用。请确认 Runtime 已生成数据文件，然后重试。',
+  503: '存储暂不可用。请核对后端数据文件和访问权限，然后重试。',
+};
+
+const operationErrors: Record<string, string> = {
+  store_busy: '存储正在处理其他请求，请稍后刷新核查。',
+  write_auth_not_configured: '后端尚未配置操作授权，写操作已关闭。',
+  operator_permission_denied: '当前身份没有此操作的权限。',
+  local_operator_required: '请求必须来自受信任的本地工作台。',
+  proposal_digest_mismatch: '提案内容已变化，审批摘要不匹配。请刷新后重新核对。',
+  verification_stale: '验证证据已过期，本次操作被阻断；需要可信的新证据。',
+  safe_compensation_target_not_registered: '没有注册经过验证的安全补偿目标，本次操作被阻断。',
+  original_execution_unknown: '原动作结果未知，请先核查，不能再次执行或盲目补偿。',
+  command_id_conflict: '操作标识与已保存的请求冲突，请刷新核查已有记录。',
+  incident_missing_archived_or_changed: '关联 Incident 不存在、已归档或身份已变化，操作被阻断。',
 };
 
 async function requestJson<T>(path: string, signal: AbortSignal, token?: string, body?: unknown): Promise<T> {
@@ -37,10 +50,19 @@ async function requestJson<T>(path: string, signal: AbortSignal, token?: string,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), referrerPolicy: 'no-referrer',
       signal: controller.signal,
     });
-    if (!response.ok) throw new ApiError(
-      response.status === 503 && token ? '写操作未启用或存储暂不可用。请核对后端操作授权配置。'
-        : errorMessages[response.status] || `API 请求失败（HTTP ${response.status}）。`, response.status,
-    );
+    if (!response.ok) {
+      let message: string | undefined;
+      // Only known codes become UI text; never echo a raw backend error/body.
+      try {
+        const failure = await response.json();
+        if (typeof failure?.detail === 'string' && Object.hasOwn(operationErrors, failure.detail)) message = operationErrors[failure.detail];
+      } catch { /* Use a safe HTTP fallback for non-JSON failures. */ }
+      throw new ApiError(message || (response.status === 422 && body !== undefined
+        ? '操作参数无效，请核对理由和当前提案后重试。'
+        : response.status >= 500 && body !== undefined
+          ? '操作响应异常，结果尚未确认。请刷新核查，不要重复执行。'
+          : errorMessages[response.status] || `API 请求失败（HTTP ${response.status}）。`), response.status);
+    }
     if (!response.headers.get('content-type')?.includes('application/json')) {
       throw new ApiError('API 返回了非 JSON 内容，请确认 API 地址和端口。');
     }
