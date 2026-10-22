@@ -98,7 +98,13 @@ def first_request(package, *, max_tools=MAX_TOOLS):
         "model": MODEL,
         "instructions": budget_instructions(max_tools - 1, MAX_MODELS),
         "input": [{"role": "user", "content": encoded({
-            "task": "调查冻结历史现象，按需要自主调用只读工具。",
+            "task": (
+                "调查已经封存的 order-service 历史观测记录中反映的 HTTP 错误现象，"
+                "分析证据支持的事实、可能原因与无法确认的事项。"
+                "封存仅指文件固定不变，不代表服务、进程或请求冻结。"
+                "历史事件包含受控合成 HTTP 500 输入，不是实际 Prometheus firing。"
+                "按需要自主调用只读工具；不根据材料名称预设故障类型或数据库根因。"
+            ),
             "service": "order-service",
             "alert_input_origin": "synthetic_alert_input",
             "real_firing_observed": False,

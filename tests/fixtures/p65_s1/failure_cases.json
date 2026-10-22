@@ -1,0 +1,63 @@
+{
+  "origin": "agent_review_annotations_not_provider_response_or_human_approval",
+  "source_dir": "data/p65-third-live-tools5-241dca6-20261022-01",
+  "original_answer_sha256": "ad84a451320c641e02c083169ac9f54fb8b85cd449bc5c3e914c8eed6f6bd4f8",
+  "cases": [
+    {
+      "id": "p63_call_namespace",
+      "line": 8,
+      "excerpt": "call `p63:metric-http_5xx_rate:1294cdf7668926c2`",
+      "disposition": "deterministic_error",
+      "review": "三处派生 ID 有效，但不是本轮 call_id；不能把来源存在等同于调用归因正确。"
+    },
+    {
+      "id": "logs_range_rejection",
+      "line": 7,
+      "excerpt": "outside_approved_frozen_evidence",
+      "disposition": "preserved_constraint",
+      "review": "原回答承认范围拒绝，未明确声称已成功读取。防回归：本轮未取得日志正文，不能补入 package 中未消费的日志。"
+    },
+    {
+      "id": "material_vs_service_freeze",
+      "line": 17,
+      "excerpt": "服务冻结、进程停滞或请求被阻塞",
+      "disposition": "semantic_review_required",
+      "review": "原文谨慎地说无法确认，但仍替换了调查对象；没有观测确认该故障类型。"
+    },
+    {
+      "id": "nested_status",
+      "line": 9,
+      "excerpt": "`status: ok`",
+      "disposition": "semantic_review_required",
+      "review": "内层历史 ok 与外层 no_data 没有同时标明；不能据此指控原文已确认当前正常。新结构逐字段检查。"
+    },
+    {
+      "id": "time_semantics",
+      "line": 19,
+      "excerpt": "采集数据只能反映采集时刻",
+      "disposition": "semantic_review_required",
+      "review": "晚采集不排除早期日志；累计 counter、评价与回看窗口不等于瞬时请求量。"
+    },
+    {
+      "id": "counter_not_fault_count",
+      "line": 18,
+      "excerpt": "不能被解读为 5xx 计数或故障计数",
+      "disposition": "preserved_constraint",
+      "review": "原文已正确拒绝此推断，条件假设不是实测故障次数。新增结构化反例确保不将13.0升级为故障计数。"
+    },
+    {
+      "id": "running_commit_unknown",
+      "line": 23,
+      "excerpt": "运行 commit 未知",
+      "disposition": "preserved_constraint",
+      "review": "不能以执行脚本 SHA 或仓库 HEAD 填充服务运行身份；字段声明须绑定实际 null。"
+    },
+    {
+      "id": "root_cause_and_current_recovery",
+      "line": 36,
+      "excerpt": "不能用于判断当前业务健康",
+      "disposition": "preserved_constraint",
+      "review": "原回答未确认数据库/部署根因或恢复；新增结构化事实反例必须拒绝。偏题和全文范围仍需语义审查。"
+    }
+  ]
+}
