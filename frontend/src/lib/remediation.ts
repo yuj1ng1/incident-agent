@@ -10,6 +10,18 @@ export const remediationLabels: Record<string, string> = {
   bound: '已绑定本次动作', legacy: '旧记录缺少绑定', manual_observation: '人工当前观测',
 };
 export const compensationReasons: Record<string, string> = {
+  demo_observation_timeout: '独立业务验证超时，不能确认业务恢复。',
+  demo_observation_unavailable: '独立业务验证暂不可用，不能确认业务恢复。',
+  demo_owned_process_not_running: '本次拥有的隔离进程未运行，不能确认业务恢复。',
+  demo_spawn_identity_unconfirmed: '无法确认本次启动进程的完整身份，禁止终止该进程。',
+  demo_process_identity_changed: '隔离进程身份变化，执行或验证已阻断。',
+  demo_unexpected_deployed_file: '隔离部署出现未绑定的文件，执行或验证已阻断。',
+  demo_artifact_missing: '恢复制品不存在，执行已阻断，未停止当前实例。',
+  demo_artifact_hash_mismatch: '制品 SHA-256 不匹配，执行已阻断，未停止当前实例。',
+  demo_service_identity_changed: '隔离服务身份发生变化，执行已阻断。',
+  demo_deployed_files_changed: '隔离部署文件完整性校验失败，执行已阻断。',
+  compensation_current_identity_changed: '当前进程、版本或配置已变化，执行已阻断。',
+  demo_process_or_transport_failure: '进程或通信未确认，需要人工核查，禁止盲目重放。',
   safe_compensation_target_not_registered: '没有注册经过验证的安全补偿目标。不会重开故障开关或使用监控配置快照回滚。',
   independent_approval_required: '具备候选补偿契约，须独立人工审批并在执行前重新校验目标。',
   compensation_already_exists: '已经存在关联补偿提案，请在该提案中继续处理。',

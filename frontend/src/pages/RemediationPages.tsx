@@ -85,6 +85,20 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
       {result.loading && <p role="status">正在刷新记录…</p>}
       <div className="detail-heading"><State item={record} /><span>{record.original_proposal_id ? '补偿提案' : '原修复提案'} · {record.service}</span></div>
       <div className="detail-grid"><div className="detail-main">
+        {record.demo_recovery && <Panel title="隔离真实 Demo · 库存应用恢复" subtitle="A/B 共用 Git 源码，B 是受控错误配置。审批使用独立测试身份；这是新建隔离恢复能力。">
+          <Fields items={[
+            ['源制品版本', record.demo_recovery.source_release_id],
+            ['目标制品版本', record.demo_recovery.release_id],
+            ['源 Git 版本', <code>{record.demo_recovery.source_commit}</code>],
+            ['目标 Git 版本', <code>{record.demo_recovery.target_commit}</code>],
+            ['制品绝对来源', <code>{record.demo_recovery.artifact_source}</code>],
+            ['制品 SHA-256', <code>{record.demo_recovery.artifact_sha256}</code>],
+            ['隔离实例', <code>{record.demo_recovery.instance_id}</code>],
+          ]} />
+          <details className="remediation-entry"><summary>固定启动与配置（审批绑定）</summary>
+            <p><code>{record.demo_recovery.startup_configuration}</code></p>
+          </details>
+        </Panel>}
         <Panel title={record.summary}><Fields items={[
           ['提案', <code>{record.proposal_id}</code>], ['Incident', <Link className="record-link" to={`/incidents/${encodeURIComponent(record.incident_id)}`}>{record.incident_id}</Link>],
           ['动作', record.action_type], ['参数摘要', JSON.stringify(record.parameters)],
@@ -98,12 +112,17 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
             <p>{formatTime(v.verified_at)} · {v.verification_id}</p>
             <p>证据状态：{remediationLabels[v.evidence_status]}。验证只代表记录时的观测。</p>
             {v.outcome === 'unknown' && <p>历史 success 字段不构成当前业务恢复证明。</p>}
-            <ul>{v.checks.map(check => <li key={check.name}>{check.name}：{check.success === null ? '未知' : check.success ? '条件符合' : '条件未通过'}{check.http_status !== null && ` · HTTP ${check.http_status}`}</li>)}</ul>
+            <ul>{v.checks.map(check => <li key={check.name}>{check.name}：{check.success === null ? '未知' : check.success ? '条件符合' : '条件未通过'}{check.http_status !== null && ` · HTTP ${check.http_status}`}
+              {check.reason && <p>{reasonLabel(check.reason)}</p>}
+              {check.release_id && <p>观测制品 {check.release_id} · PID {check.pid} · SHA-256 <code>{check.artifact_sha256}</code></p>}
+            </li>)}</ul>
           </article>) : <EmptyState title="尚无独立业务验证" />}
         </Panel>
         <Panel title="动作执行记录" subtitle="执行成功不等于业务恢复成功。结果未知时禁止盲目重试。">
           {record.actions.length ? record.actions.map(action => <article className="remediation-entry" key={action.action_id}>
             <h3>{remediationLabels[action.execution_outcome]} · {action.status}</h3><p>{formatTime(action.started_at)} → {formatTime(action.finished_at)}</p>
+            {action.release_id && <p>实际启动制品 {action.release_id} · PID {action.pid} · Git <code>{action.resulting_commit_sha}</code></p>}
+            {action.reason && <p role="alert">{reasonLabel(action.reason)}</p>}
           </article>) : <EmptyState title={record.status === 'executing' ? '执行结果尚未持久化 · 需要等待或核查' : '暂无动作执行记录'} />}
         </Panel>
         <Panel title={record.original_proposal_id ? '补偿目标与原修复关联' : '补偿资格与关联'} subtitle={record.original_proposal_id ? '本提案的执行状态见页面顶部；以下限制仅说明不再派生下一轮补偿。' : '缺少安全目标时只记录阻断申请，不创建可执行的虚假动作。'}>

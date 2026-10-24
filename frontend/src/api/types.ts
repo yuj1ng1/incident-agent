@@ -73,6 +73,12 @@ export interface RemediationSummary {
 }
 export type RemediationPage = Page<RemediationSummary>;
 export interface RemediationDetail extends RemediationSummary {
+  demo_recovery?: {
+    environment: 'isolated_real_demo'; artifact_source: string; artifact_sha256: string;
+    source_commit: string; target_commit: string; release_id: string;
+    source_release_id?: string | null;
+    instance_id: string; startup_configuration: string;
+  } | null;
   reason: string; parameters: Record<string, string>; hidden_parameter_count: number;
   proposal_digest: string; expected_commit_sha: string; approved_by: string | null;
   approved_at: string | null; approval_valid: boolean; rejected_by: string | null;
@@ -80,12 +86,16 @@ export interface RemediationDetail extends RemediationSummary {
   compensation: CompensationView; target: CompensationTargetView | null;
   related_proposals: RemediationSummary[];
   actions: { action_id: string; started_at: string; finished_at: string;
-    success: boolean; status: string; execution_outcome: 'not_executed' | 'executed' | 'unknown' }[];
+    success: boolean; status: string; execution_outcome: 'not_executed' | 'executed' | 'unknown';
+    reason?: string | null; resulting_commit_sha?: string | null;
+    resulting_configuration_digest?: string | null; release_id?: string | null; pid?: number | null }[];
   verifications: { verification_id: string; verified_at: string; purpose: 'post_action' | 'manual_check';
     outcome: 'passed' | 'failed' | 'no_data' | 'timeout' | 'stale' | 'mismatch' | 'unknown';
     evidence_status: 'bound' | 'legacy' | 'stale' | 'mismatch' | 'manual_observation';
     historical_success: boolean; action_id: string | null;
-    checks: { name: string; success: boolean | null; http_status: number | null }[] }[];
+    checks: { name: string; success: boolean | null; http_status: number | null;
+      reason?: string | null;
+      release_id?: string | null; artifact_sha256?: string | null; pid?: number | null }[] }[];
   requests: CompensationRequestView[];
   audit: { event_id: string; occurred_at: string; event: string; actor: string; reason: string | null }[];
 }

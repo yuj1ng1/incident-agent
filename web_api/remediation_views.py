@@ -8,7 +8,7 @@ from remediation.compensation import evaluate
 from web_api.queries import public_text
 from web_api.schemas import (
     ActionView, AuditView, CompensationRequestView, CompensationTargetView,
-    CompensationView, RemediationDetail, RemediationSummary,
+    CompensationView, DemoRecoveryView, RemediationDetail, RemediationSummary,
     VerificationCheckView, VerificationView,
 )
 
@@ -91,6 +91,16 @@ def detail_view(
     # Parameters are never dumped recursively, even for malformed/legacy records.
     parameters = {key: safe_text(value, 200) for key, value in proposal.parameters.items()
                   if key in {"service", "target_id"} and isinstance(value, str)}
+    demo_fields = (
+        "artifact_source", "artifact_sha256", "source_commit", "target_commit",
+        "release_id", "instance_id", "startup_configuration",
+    )
+    demo = None
+    if (proposal.action_type in {"w2_inventory_deploy_b", "w2_inventory_restore_a"}
+            and all(isinstance(proposal.parameters.get(key), str) for key in demo_fields)):
+        demo = DemoRecoveryView(**{
+            key: safe_text(proposal.parameters[key], 2000) for key in demo_fields
+        }, source_release_id=safe_text(proposal.parameters.get("source_release_id"), 80))
     return RemediationDetail(
         **summary_view(store, data, proposal).model_dump(),
         reason=safe_text(proposal.reason, 2000),
@@ -111,10 +121,17 @@ def detail_view(
         ),
         target=target_view(proposal.compensation.target) if proposal.compensation else None,
         related_proposals=[summary_view(store, data, p) for p in related[:100]],
+        demo_recovery=demo,
         actions=[ActionView(
             action_id=safe_text(a["action_id"], 120), started_at=a["started_at"],
             finished_at=a["finished_at"], success=a["success"], status=safe_text(a["status"], 200),
             execution_outcome=a.get("execution_outcome", "unknown"),
+            reason=safe_text(a.get("details", {}).get("reason"), 200),
+            resulting_commit_sha=(a.get("resulting_identity") or {}).get("commit_sha"),
+            resulting_configuration_digest=(a.get("resulting_identity") or {}).get("configuration_digest"),
+            release_id=safe_text(a.get("details", {}).get("release_id"), 80),
+            pid=a.get("details", {}).get("pid")
+            if type(a.get("details", {}).get("pid")) is int else None,
         ) for a in actions[-100:]],
         verifications=[VerificationView(
             verification_id=safe_text(v.verification_id, 120),
@@ -125,6 +142,15 @@ def detail_view(
                 name=name, success=check.get("success") if type(check.get("success")) is bool else None,
                 http_status=check.get("http_status") if type(check.get("http_status")) is int
                 and 100 <= check["http_status"] <= 599 else None,
+                reason=check.get("reason") if isinstance(check.get("reason"), str)
+                and re.fullmatch(r"[a-z_]{1,100}", check["reason"]) else None,
+                release_id=safe_text(check.get("observed", {}).get("release_id"), 80)
+                if isinstance(check.get("observed"), dict) else None,
+                artifact_sha256=safe_text(check.get("observed", {}).get("artifact_sha256"), 64)
+                if isinstance(check.get("observed"), dict) else None,
+                pid=check["observed"].get("pid")
+                if isinstance(check.get("observed"), dict)
+                and type(check["observed"].get("pid")) is int else None,
             ) for name, check in v.checks.items()
                 if name in {"version", "order", "health", "business", "verification", "observation"}
                 and isinstance(check, dict)],

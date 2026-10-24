@@ -2,6 +2,7 @@
 from types import MappingProxyType
 from pathlib import Path
 import logging
+import re
 
 from models.remediation import (
     ActionResult, ExecutionOutcome, ManualClosure, RemediationStatus as S,
@@ -98,12 +99,18 @@ class ActionExecutor:
                         raise RemediationError("compensation_current_identity_changed")
                 except Exception as exc:
                     preflight_failed = True
+                    reason = str(exc) if isinstance(exc, RemediationError) else ""
+                    if not re.fullmatch(r"[a-z_]{1,100}", reason):
+                        reason = "compensation_identity_probe_failed"
                     action = ActionResult(
                         proposal_id=proposal_id, action_type=proposal.action_type,
                         started_at=proposal.executed_at, success=False,
                         status="compensation_precondition_failed",
                         summary="补偿目标的当前身份或前置条件未通过，未执行补偿。",
-                        details={"exception_type": type(exc).__name__},
+                        details={
+                            "exception_type": type(exc).__name__,
+                            "reason": reason,
+                        },
                         execution_outcome=ExecutionOutcome.NOT_EXECUTED,
                     )
             try:

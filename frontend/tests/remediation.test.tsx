@@ -17,6 +17,35 @@ const fixture: RemediationDetail = {
   target: null, related_proposals: [], actions: [], verifications: [], requests: [], audit: [],
 };
 
+it('shows independent verification timeout without claiming recovery', async () => {
+  open({ ...fixture, verifications: [{
+    verification_id: 'verify-timeout', verified_at: fixture.created_at,
+    purpose: 'post_action', outcome: 'timeout', evidence_status: 'mismatch',
+    historical_success: false, action_id: null,
+    checks: [{ name: 'observation', success: false, http_status: null,
+      reason: 'demo_observation_timeout' }],
+  }] });
+  expect(await screen.findByText('独立业务验证超时，不能确认业务恢复。')).toBeVisible();
+  expect(screen.queryByText('业务验证通过')).not.toBeInTheDocument();
+});
+
+it('shows isolated real artifact provenance, actual process and blocking reason', async () => {
+  open({ ...fixture, demo_recovery: {
+    environment: 'isolated_real_demo', artifact_source: 'C:\\Temp\\w2\\inventory-A.zip',
+    artifact_sha256: 'c'.repeat(64), source_commit: 'a'.repeat(40), target_commit: 'b'.repeat(40),
+    source_release_id: 'B', release_id: 'A', instance_id: 'w2-isolated-instance', startup_configuration: '{"port":18120}',
+  }, actions: [{ action_id: 'act-blocked', started_at: fixture.created_at, finished_at: fixture.created_at,
+    success: false, status: 'demo_execution_blocked', execution_outcome: 'not_executed',
+    reason: 'demo_artifact_hash_mismatch' }] });
+  expect(await screen.findByText('隔离真实 Demo · 库存应用恢复')).toBeVisible();
+  expect(screen.getByText('C:\\Temp\\w2\\inventory-A.zip')).toBeVisible();
+  expect(screen.getByText('w2-isolated-instance')).toBeVisible();
+  expect(screen.getByText('源制品版本')).toBeVisible();
+  expect(screen.getByText('目标制品版本')).toBeVisible();
+  expect(screen.getByText('制品 SHA-256 不匹配，执行已阻断，未停止当前实例。')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '执行已批准动作' })).not.toBeInTheDocument();
+});
+
 function open(record = fixture, identity = { actor: 'fixture-operator', permissions: ['request', 'approve', 'execute'] }) {
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
     if (url.endsWith('/api/operator')) return json(identity);

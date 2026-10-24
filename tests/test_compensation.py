@@ -74,6 +74,20 @@ def test_failed_verification_atomically_creates_separate_unapproved_proposal(com
     assert not (comp.root / "effects").exists()
 
 
+def test_preflight_records_machine_reason_without_arbitrary_error_text(comp):
+    def failed_probe(proposal, runtime):
+        raise RemediationError("probe failed: private credential example")
+
+    register(comp, replace(comp.contract, inspect_identity=failed_probe))
+    run_original(comp)
+    pending = child(comp)
+    comp.store.approve(pending.proposal_id, "independent-approver")
+    action = ActionExecutor(comp.store).execute(pending.proposal_id, "executor")
+    assert action.execution_outcome == O.NOT_EXECUTED
+    assert action.details["reason"] == "compensation_identity_probe_failed"
+    assert "private credential example" not in comp.store.file_path.read_text(encoding="utf-8")
+
+
 def test_no_production_target_is_registered_or_invented(comp):
     comp.monkeypatch.setattr("remediation.compensation.COMPENSATION_REGISTRY", {})
     run_original(comp)

@@ -70,12 +70,33 @@ class ActionView(PublicModel):
     success: bool
     status: str
     execution_outcome: Literal["not_executed", "executed", "unknown"]
+    reason: str | None = None
+    resulting_commit_sha: str | None = None
+    resulting_configuration_digest: str | None = None
+    release_id: str | None = None
+    pid: int | None = None
 
 
 class VerificationCheckView(PublicModel):
     name: str
     success: bool | None
     http_status: int | None
+    reason: str | None = None
+    release_id: str | None = None
+    artifact_sha256: str | None = None
+    pid: int | None = None
+
+
+class DemoRecoveryView(PublicModel):
+    environment: Literal["isolated_real_demo"] = "isolated_real_demo"
+    artifact_source: str
+    artifact_sha256: str
+    source_commit: str
+    target_commit: str
+    release_id: str
+    source_release_id: str | None = None
+    instance_id: str
+    startup_configuration: str
 
 
 class VerificationView(PublicModel):
@@ -126,6 +147,7 @@ class RemediationDetail(RemediationSummary):
     verifications: list[VerificationView]
     requests: list[CompensationRequestView]
     audit: list[AuditView]
+    demo_recovery: DemoRecoveryView | None = None
 
 
 class RemediationCommand(PublicModel):
