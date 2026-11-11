@@ -8,6 +8,7 @@ import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import zipfile
@@ -16,18 +17,34 @@ PACKAGES = (
     "Flask", "Werkzeug", "Jinja2", "MarkupSafe", "click", "itsdangerous",
     "blinker", "prometheus-client",
 )
+EXPECTED_SOURCE_COMMIT = "0e2f6f3220b9fb9f0baf8730de5ffaaac00d8c38"
+SOURCE_FILES = ("inventory_app.py", "http_observability.py")
 
 
-def build(repo, output):
+def build(repo, output, expected_source_commit=EXPECTED_SOURCE_COMMIT):
     repo, output = Path(repo).resolve(), Path(output).resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_source_commit):
+        raise ValueError("full_expected_source_commit_required")
+    top = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=repo, timeout=5,
+    ).decode().strip()
+    if Path(top).resolve() != repo:
+        raise ValueError("demo_repository_root_required")
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, timeout=5,
     ).decode().strip()
+    if commit != expected_source_commit:
+        raise ValueError("demo_source_commit_mismatch")
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", *SOURCE_FILES],
+        cwd=repo, timeout=5,
+    )
+    if dirty.strip():
+        raise ValueError("demo_source_worktree_changed")
     files = {
         name: subprocess.check_output(
             ["git", "show", f"{commit}:{name}"], cwd=repo, timeout=5,
-        ) for name in ("inventory_app.py", "http_observability.py")
+        ) for name in SOURCE_FILES
     }
     files["launch.py"] = Path(__file__).with_name(
         "w2_inventory_entry.py"
@@ -44,6 +61,7 @@ def build(repo, output):
             if source.is_file():
                 files["vendor/" + item.as_posix()] = source.read_bytes()
     interpreter = Path(sys._base_executable).resolve()
+    output.mkdir(parents=True, exist_ok=False)
     results = {}
     for release_id, error in (("A", False), ("B", True)):
         manifest = {
@@ -87,5 +105,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("repo")
     parser.add_argument("output")
+    parser.add_argument("--expected-source-commit", default=EXPECTED_SOURCE_COMMIT)
     args = parser.parse_args()
-    build(args.repo, args.output)
+    build(args.repo, args.output, args.expected_source_commit)

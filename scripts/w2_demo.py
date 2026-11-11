@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def create_demo(root, port):
+def create_demo(root, port, *, manual_approval=False):
     from incident_store import IncidentStore
     from investigation.store import RuntimeStore
     from models.incident import Incident
@@ -35,6 +35,7 @@ def create_demo(root, port):
     from remediation.store import RemediationStore
     from web_api.app import create_app
     from web_api.auth import WebAuthorization
+    from scripts.w2_demo_build import EXPECTED_SOURCE_COMMIT
 
     root = Path(root).resolve()
     if any((root / name).exists() for name in (
@@ -42,6 +43,9 @@ def create_demo(root, port):
     )):
         raise ValueError("new_experiment_directory_required_use_review_for_saved_evidence")
     build = json.loads((root / "artifacts" / "build.json").read_text(encoding="utf-8"))
+    if any(release["manifest"]["source_commit"] != EXPECTED_SOURCE_COMMIT
+           for release in build.values()):
+        raise ValueError("demo_source_commit_mismatch")
     runtime = IsolatedDemoRuntime(
         root, {key: DemoRelease.from_build(value) for key, value in build.items()}, port,
     )
@@ -78,11 +82,12 @@ def create_demo(root, port):
             expected_commit_sha=runtime.validated_a.observed_identity.commit_sha,
             expected_process_started_at=runtime.validated_a.observed_identity.process_started_at,
         ))
-        tokens = {role: secrets.token_urlsafe(36) for role in (
+        roles = ("requester", "approver", "executor") if manual_approval else (
             "requester", "deploy-approver", "rollback-approver", "executor",
-        )}
+        )
+        tokens = {role: secrets.token_urlsafe(36) for role in roles}
         auth = WebAuthorization(json.dumps([
-            {"actor": "w2-" + role,
+            {"actor": ("w3-" if manual_approval else "w2-") + role,
              "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
              "permissions": ["approve" if role.endswith("approver")
                              else "execute" if role == "executor" else "request"]}
@@ -91,14 +96,32 @@ def create_demo(root, port):
         (root / "operators.json").write_text(json.dumps(tokens), encoding="utf-8")
         (root / "identifiers.json").write_text(json.dumps({
             "original": proposal.proposal_id, "instance_id": runtime.instance,
+            "application_port": port,
         }, indent=2), encoding="utf-8")
         app = create_app(
             incident_path=incidents.file_path, runtime_path=sessions.path,
             remediation_path=store.file_path, authorization=auth,
             executor_factory=functools.partial(
                 execution.ActionExecutor, runtime=runtime, verifier=verifier,
+                automatic_compensation_request=not manual_approval,
             ),
         )
+        if manual_approval:
+            # Automated experiment setup only. The recovery is left for a browser
+            # Requester -> Approver -> Executor and never automatically approved.
+            store.approve(proposal.proposal_id, "w3-automated-setup-approver")
+            execution.ActionExecutor(
+                store, runtime=runtime, verifier=verifier,
+                automatic_compensation_request=False,
+            ).execute(proposal.proposal_id, "w3-automated-setup-executor")
+            if store.get(proposal.proposal_id).status.value != "verification_failed":
+                raise RuntimeError("w3_setup_requires_explicit_business_failure")
+            (root / "manual-acceptance.json").write_text(json.dumps({
+                "status": "pending_human_browser_acceptance",
+                "setup_origin": "automated_isolated_A_to_B",
+                "recovery_approval_origin": "not_recorded",
+                "natural_person_participation": "not_verified",
+            }, indent=2), encoding="utf-8")
         return app, runtime, store
     except BaseException:
         runtime.close()
@@ -111,6 +134,8 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=18020)
     parser.add_argument("--app-port", type=int, default=18120)
     parser.add_argument("--review", action="store_true")
+    parser.add_argument("--manual-approval", action="store_true",
+                        help="W3：自动布置隔离 B，等待浏览器申请、审批与独立执行；证据限 300 秒。")
     args = parser.parse_args(argv)
     root = (args.root or Path(tempfile.mkdtemp(prefix="incident-w2-")) / "experiment").resolve()
     if (not root.is_relative_to(Path(tempfile.gettempdir()).resolve())
@@ -135,7 +160,7 @@ def main(argv=None):
             str(ROOT / "scripts" / "w2_demo_build.py"),
             r"D:\prometheus-demo", str(root / "artifacts"),
         ], check=True, timeout=30)
-        app, runtime, store = create_demo(root, args.app_port)
+        app, runtime, store = create_demo(root, args.app_port, manual_approval=args.manual_approval)
     import uvicorn
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=args.port, proxy_headers=False, access_log=False,
@@ -151,7 +176,10 @@ def main(argv=None):
 
     threading.Thread(target=stop_on_file, daemon=True).start()
     print(json.dumps({"root": str(root), "api_port": args.port,
-                      "app_port": args.app_port, "review_only": args.review}), flush=True)
+                      "app_port": args.app_port, "review_only": args.review,
+                      "manual_approval": args.manual_approval,
+                      "credentials_file": str(root / "operators.json")
+                      if not args.review else None}), flush=True)
     try:
         server.run()
     finally:

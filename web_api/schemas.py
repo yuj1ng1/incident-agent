@@ -89,14 +89,29 @@ class VerificationCheckView(PublicModel):
 
 class DemoRecoveryView(PublicModel):
     environment: Literal["isolated_real_demo"] = "isolated_real_demo"
-    artifact_source: str
     artifact_sha256: str
     source_commit: str
     target_commit: str
     release_id: str
     source_release_id: str | None = None
     instance_id: str
-    startup_configuration: str
+    configuration_digest: str
+    configuration_summary: str
+
+
+class CompensationEvidenceView(PublicModel):
+    original_proposal_id: str
+    original_summary: str
+    original_action_type: str
+    original_digest: str
+    verification_id: str | None
+    verified_at: datetime | None
+    expires_at: datetime | None
+    checked_at: datetime
+    max_age_seconds: int
+    status: Literal["bound", "legacy", "stale", "mismatch", "manual_observation", "missing"]
+    outcome: Literal["passed", "failed", "no_data", "timeout", "stale", "mismatch", "unknown"]
+    valid: bool
 
 
 class VerificationView(PublicModel):
@@ -116,6 +131,9 @@ class AuditView(PublicModel):
     event: str
     actor: str
     reason: str | None
+    proposal_digest: str | None
+    command_id: str | None
+    authorization_result: Literal["approved", "rejected"] | None
 
 
 class CompensationRequestView(CompensationView):
@@ -148,6 +166,8 @@ class RemediationDetail(RemediationSummary):
     requests: list[CompensationRequestView]
     audit: list[AuditView]
     demo_recovery: DemoRecoveryView | None = None
+    source_evidence: CompensationEvidenceView | None
+    requested_by: str | None
 
 
 class RemediationCommand(PublicModel):

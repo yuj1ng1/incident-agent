@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { expect, it, vi } from 'vitest';
 import { App } from '../src/App';
@@ -15,6 +15,7 @@ const fixture: RemediationDetail = {
   rejected_by: null, rejected_at: null, rejection_reason: null, closure_reason: null,
   compensation: { status: 'blocked', reason: 'safe_compensation_target_not_registered', target: null, compensation_proposal_id: null },
   target: null, related_proposals: [], actions: [], verifications: [], requests: [], audit: [],
+  source_evidence: null, requested_by: null,
 };
 
 it('shows independent verification timeout without claiming recovery', async () => {
@@ -31,14 +32,16 @@ it('shows independent verification timeout without claiming recovery', async () 
 
 it('shows isolated real artifact provenance, actual process and blocking reason', async () => {
   open({ ...fixture, demo_recovery: {
-    environment: 'isolated_real_demo', artifact_source: 'C:\\Temp\\w2\\inventory-A.zip',
+    environment: 'isolated_real_demo',
     artifact_sha256: 'c'.repeat(64), source_commit: 'a'.repeat(40), target_commit: 'b'.repeat(40),
-    source_release_id: 'B', release_id: 'A', instance_id: 'w2-isolated-instance', startup_configuration: '{"port":18120}',
+    source_release_id: 'B', release_id: 'A', instance_id: 'w2-isolated-instance',
+    configuration_digest: 'd'.repeat(64), configuration_summary: '仅本机回环；无数据库',
   }, actions: [{ action_id: 'act-blocked', started_at: fixture.created_at, finished_at: fixture.created_at,
     success: false, status: 'demo_execution_blocked', execution_outcome: 'not_executed',
     reason: 'demo_artifact_hash_mismatch' }] });
   expect(await screen.findByText('隔离真实 Demo · 库存应用恢复')).toBeVisible();
-  expect(screen.getByText('C:\\Temp\\w2\\inventory-A.zip')).toBeVisible();
+  expect(screen.queryByText(/C:\\Temp/)).not.toBeInTheDocument();
+  expect(screen.getByText('d'.repeat(64))).toBeVisible();
   expect(screen.getByText('w2-isolated-instance')).toBeVisible();
   expect(screen.getByText('源制品版本')).toBeVisible();
   expect(screen.getByText('目标制品版本')).toBeVisible();
@@ -191,10 +194,69 @@ it('clears confirmation when the operator identity disconnects', async () => {
   await connect();
   fireEvent.click(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' }));
   fireEvent.click(screen.getByRole('button', { name: '断开操作身份' }));
+  fetch.mockImplementation(async url => url.endsWith('/api/operator')
+    ? json({ actor: 'different-approver', permissions: ['approve'] }) : json({ ...fixture, status: 'pending' }));
   await connect();
+  expect(screen.getByText('different-approver')).toBeVisible();
   expect(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' })).not.toBeChecked();
   expect(screen.getByRole('button', { name: '批准此提案' })).toBeDisabled();
   expect(fetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(0);
+});
+
+const sourceEvidence: NonNullable<RemediationDetail['source_evidence']> = {
+  original_proposal_id: 'rem-original', original_summary: 'Reviewed original deployment',
+  original_action_type: 'deploy-fixture', original_digest: 'b'.repeat(64),
+  verification_id: 'verify-source', verified_at: '2026-10-24T01:00:00Z',
+  expires_at: '2026-10-24T01:05:00Z', checked_at: '2026-10-24T01:00:01Z',
+  max_age_seconds: 300, status: 'bound', outcome: 'failed', valid: true,
+};
+
+it('shows original verification and expiry and blocks execution after the displayed deadline', async () => {
+  const current = Date.parse('2026-10-24T01:04:59Z');
+  const date = vi.spyOn(Date, 'now').mockReturnValue(current);
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  try {
+    open({ ...fixture, status: 'approved', original_proposal_id: 'rem-original', source_evidence: sourceEvidence });
+    await connect();
+    expect(screen.getByText('Reviewed original deployment')).toBeVisible();
+    expect(screen.getByText('仍有效 · 仅代表记录时的观测')).toBeVisible();
+    fireEvent.click(screen.getByRole('checkbox', { name: '确认执行已批准的精确目标和参数' }));
+    expect(screen.getByRole('button', { name: '执行已批准动作' })).toBeEnabled();
+    date.mockReturnValue(current + 2000);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByRole('button', { name: '执行已批准动作' })).toBeDisabled();
+    expect(screen.getByText('证据已过期')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('人工核查不会刷新原审批的证据');
+  } finally { vi.useRealTimers(); date.mockRestore(); }
+});
+
+it('clears an old approval confirmation when the proposal digest changes on refresh', async () => {
+  const fetch = open({ ...fixture, status: 'pending' });
+  await connect();
+  fireEvent.click(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' }));
+  fetch.mockImplementation(async () => json({ ...fixture, status: 'pending', proposal_digest: 'c'.repeat(64) }));
+  fireEvent.click(screen.getByRole('button', { name: '刷新数据' }));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' })).not.toBeChecked());
+  expect(screen.getByRole('button', { name: '批准此提案' })).toBeDisabled();
+});
+
+it('ignores a late approval response from an identity that has disconnected', async () => {
+  const pending = { ...fixture, status: 'pending' as const };
+  const fetch = open(pending);
+  await connect();
+  fireEvent.click(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' }));
+  let finish!: (response: Response) => void;
+  fetch.mockImplementation(async (url, options) => options?.method === 'POST'
+    ? new Promise<Response>(resolve => { finish = resolve; })
+    : json(url.endsWith('/api/operator') ? { actor: 'another-approver', permissions: ['approve'] } : pending));
+  fireEvent.click(screen.getByRole('button', { name: '批准此提案' }));
+  fireEvent.click(screen.getByRole('button', { name: '断开操作身份' }));
+  await connect();
+  await act(async () => finish(json({ ...pending, status: 'approved' })));
+  expect(screen.getByText('another-approver')).toBeVisible();
+  expect(screen.getByRole('checkbox', { name: '确认已核对本次审批的精确目标和参数' })).not.toBeChecked();
+  expect(screen.queryByText('操作响应已收到，请核对当前状态和独立验证结果。')).not.toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('前一操作结果尚未确认');
 });
 
 it('handles remediation list empty, loading, error and pagination via the real API contract', async () => {

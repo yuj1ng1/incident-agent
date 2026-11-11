@@ -44,6 +44,61 @@
           "title": "Finished At",
           "type": "string"
         },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pid"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "release_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Release Id"
+        },
+        "resulting_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Resulting Commit Sha"
+        },
+        "resulting_configuration_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Resulting Configuration Digest"
+        },
         "started_at": {
           "format": "date-time",
           "title": "Started At",
@@ -147,6 +202,32 @@
           "title": "Actor",
           "type": "string"
         },
+        "authorization_result": {
+          "anyOf": [
+            {
+              "enum": [
+                "approved",
+                "rejected"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Authorization Result"
+        },
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Command Id"
+        },
         "event": {
           "title": "Event",
           "type": "string"
@@ -159,6 +240,17 @@
           "format": "date-time",
           "title": "Occurred At",
           "type": "string"
+        },
+        "proposal_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Proposal Digest"
         },
         "reason": {
           "anyOf": [
@@ -177,7 +269,10 @@
         "occurred_at",
         "event",
         "actor",
-        "reason"
+        "reason",
+        "proposal_digest",
+        "command_id",
+        "authorization_result"
       ],
       "title": "AuditView",
       "type": "object"
@@ -225,6 +320,116 @@
         "started_at"
       ],
       "title": "BudgetUsage",
+      "type": "object"
+    },
+    "CompensationEvidenceView": {
+      "additionalProperties": false,
+      "properties": {
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expires At"
+        },
+        "max_age_seconds": {
+          "title": "Max Age Seconds",
+          "type": "integer"
+        },
+        "original_action_type": {
+          "title": "Original Action Type",
+          "type": "string"
+        },
+        "original_digest": {
+          "title": "Original Digest",
+          "type": "string"
+        },
+        "original_proposal_id": {
+          "title": "Original Proposal Id",
+          "type": "string"
+        },
+        "original_summary": {
+          "title": "Original Summary",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "no_data",
+            "timeout",
+            "stale",
+            "mismatch",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "bound",
+            "legacy",
+            "stale",
+            "mismatch",
+            "manual_observation",
+            "missing"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "valid": {
+          "title": "Valid",
+          "type": "boolean"
+        },
+        "verification_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verification Id"
+        },
+        "verified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verified At"
+        }
+      },
+      "required": [
+        "original_proposal_id",
+        "original_summary",
+        "original_action_type",
+        "original_digest",
+        "verification_id",
+        "verified_at",
+        "expires_at",
+        "checked_at",
+        "max_age_seconds",
+        "status",
+        "outcome",
+        "valid"
+      ],
+      "title": "CompensationEvidenceView",
       "type": "object"
     },
     "CompensationRequestView": {
@@ -408,6 +613,67 @@
         "compensation_proposal_id"
       ],
       "title": "CompensationView",
+      "type": "object"
+    },
+    "DemoRecoveryView": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "configuration_digest": {
+          "title": "Configuration Digest",
+          "type": "string"
+        },
+        "configuration_summary": {
+          "title": "Configuration Summary",
+          "type": "string"
+        },
+        "environment": {
+          "const": "isolated_real_demo",
+          "default": "isolated_real_demo",
+          "title": "Environment",
+          "type": "string"
+        },
+        "instance_id": {
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "release_id": {
+          "title": "Release Id",
+          "type": "string"
+        },
+        "source_commit": {
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_release_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Release Id"
+        },
+        "target_commit": {
+          "title": "Target Commit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_sha256",
+        "source_commit",
+        "target_commit",
+        "release_id",
+        "instance_id",
+        "configuration_digest",
+        "configuration_summary"
+      ],
+      "title": "DemoRecoveryView",
       "type": "object"
     },
     "HumanRequestView": {
@@ -1365,6 +1631,16 @@
           "title": "Created At",
           "type": "string"
         },
+        "demo_recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/DemoRecoveryView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "execution_outcome": {
           "enum": [
             "not_executed",
@@ -1457,6 +1733,17 @@
           "title": "Related Proposals",
           "type": "array"
         },
+        "requested_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Requested By"
+        },
         "requests": {
           "items": {
             "$ref": "#/components/schemas/CompensationRequestView"
@@ -1476,6 +1763,16 @@
         "service": {
           "title": "Service",
           "type": "string"
+        },
+        "source_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/CompensationEvidenceView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -1542,7 +1839,9 @@
         "actions",
         "verifications",
         "requests",
-        "audit"
+        "audit",
+        "source_evidence",
+        "requested_by"
       ],
       "title": "RemediationDetail",
       "type": "object"
@@ -2065,6 +2364,17 @@
     "VerificationCheckView": {
       "additionalProperties": false,
       "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Artifact Sha256"
+        },
         "http_status": {
           "anyOf": [
             {
@@ -2079,6 +2389,39 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pid"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "release_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Release Id"
         },
         "success": {
           "anyOf": [

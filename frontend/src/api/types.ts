@@ -74,11 +74,17 @@ export interface RemediationSummary {
 export type RemediationPage = Page<RemediationSummary>;
 export interface RemediationDetail extends RemediationSummary {
   demo_recovery?: {
-    environment: 'isolated_real_demo'; artifact_source: string; artifact_sha256: string;
+    environment: 'isolated_real_demo'; artifact_sha256: string;
     source_commit: string; target_commit: string; release_id: string;
     source_release_id?: string | null;
-    instance_id: string; startup_configuration: string;
+    instance_id: string; configuration_digest: string; configuration_summary: string;
   } | null;
+  source_evidence: { original_proposal_id: string; original_summary: string; original_action_type: string;
+    original_digest: string; verification_id: string | null; verified_at: string | null;
+    expires_at: string | null; checked_at: string; max_age_seconds: number;
+    status: 'bound' | 'legacy' | 'stale' | 'mismatch' | 'manual_observation' | 'missing';
+    outcome: 'passed' | 'failed' | 'no_data' | 'timeout' | 'stale' | 'mismatch' | 'unknown'; valid: boolean } | null;
+  requested_by: string | null;
   reason: string; parameters: Record<string, string>; hidden_parameter_count: number;
   proposal_digest: string; expected_commit_sha: string; approved_by: string | null;
   approved_at: string | null; approval_valid: boolean; rejected_by: string | null;
@@ -97,7 +103,8 @@ export interface RemediationDetail extends RemediationSummary {
       reason?: string | null;
       release_id?: string | null; artifact_sha256?: string | null; pid?: number | null }[] }[];
   requests: CompensationRequestView[];
-  audit: { event_id: string; occurred_at: string; event: string; actor: string; reason: string | null }[];
+  audit: { event_id: string; occurred_at: string; event: string; actor: string; reason: string | null;
+    proposal_digest: string | null; command_id: string | null; authorization_result: 'approved' | 'rejected' | null }[];
 }
 
 export interface IncidentSummary {

@@ -63,6 +63,33 @@ def contract_for(proposal):
     return COMPENSATION_REGISTRY.get((proposal.service, proposal.action_type))
 
 
+def compensation_requester(data, proposal):
+    """Read the initiating identity from the authoritative, persisted assessment."""
+    link = proposal.compensation
+    if link is None:
+        return None
+    requests = [event["details"].get("assessment") for event in data["audit"]
+                if event["event"] == "compensation_evaluated"
+                and event["proposal_id"] == link.original_proposal_id]
+    matches = [request for request in requests if request
+               and request.get("command_id") == link.command_id
+               and request.get("compensation_proposal_id") == proposal.proposal_id
+               and request.get("status") == "approval_required"]
+    if len(matches) != 1:
+        raise RemediationError("compensation_requester_unconfirmed")
+    return actor_name(matches[0]["requested_by"])
+
+
+def check_compensation_actor(data, proposal, actor, operation):
+    if proposal.compensation is None:
+        return
+    requester = compensation_requester(data, proposal)
+    if actor == requester:
+        raise RemediationError("compensation_requester_cannot_" + operation)
+    if operation == "execute" and actor == proposal.approved_by:
+        raise RemediationError("compensation_approver_cannot_execute")
+
+
 def _source_facts(
     data,
     original,

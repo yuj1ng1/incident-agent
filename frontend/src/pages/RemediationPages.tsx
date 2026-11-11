@@ -50,14 +50,25 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
   const inFlight = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const commands = useRef<Record<string, { payload: string; id: string }>>({});
+  const identityGeneration = useRef(0);
+  const [now, setNow] = useState(Date.now());
   useEffect(() => { if (result.data) { setRecord(result.data); setConfirm(false); setError(''); setNotice(''); } }, [result.data]);
-  useEffect(() => { setConfirm(false); }, [token]);
+  useEffect(() => {
+    identityGeneration.current++;
+    controller.current?.abort();
+    commands.current = {};
+    setConfirm(false); setReason(''); setNotice('');
+    if (inFlight.current) setError('身份已更换，前一操作结果尚未确认。请刷新核查。');
+    inFlight.current = false; setBusy('');
+  }, [token]);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => () => controller.current?.abort(), []);
 
   async function submit(operation: string) {
     if (!record || !operator || inFlight.current) return;
     if (['approve', 'reject', 'execute', 'close-execution'].includes(operation) && !confirm) return;
     inFlight.current = true; setBusy(operation); setError(''); setNotice('');
+    const generation = identityGeneration.current;
     const needsReason = ['compensation-requests', 'reject', 'close-execution'].includes(operation);
     const body = { proposal_digest: record.proposal_digest, ...(needsReason ? { reason: reason.trim() } : {}),
       ...(operation === 'compensation-requests' ? { target_id: record.compensation.target?.target_id || null } : {}) };
@@ -68,16 +79,21 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
     controller.current = new AbortController();
     try {
       const current = await postJson<RemediationDetail>(`${apiPath}/${operation}`, token, { ...body, command_id: commandId }, controller.current.signal);
+      if (generation !== identityGeneration.current) return;
       if (current.proposal_id !== proposalId) throw new Error('返回记录身份不匹配，请刷新核查。');
       setRecord(current); setConfirm(false);
       setNotice(operation === 'compensation-requests' ? '申请已记录，请查看下方资格评估与关联提案。' : '操作响应已收到，请核对当前状态和独立验证结果。');
     } catch (failure) {
+      if (generation !== identityGeneration.current) return;
       setError(`${(failure as Error).message} 当前页面保留操作前的记录，请刷新核查结果。`);
-    } finally { inFlight.current = false; setBusy(''); }
+    } finally { if (generation === identityGeneration.current) { inFlight.current = false; setBusy(''); } }
   }
   const can = (permission: 'request' | 'approve' | 'execute') => Boolean(operator?.permissions.includes(permission));
   const disabled = Boolean(busy || result.loading || result.error || error);
   const target = record?.target || record?.compensation.target;
+  const evidence = record?.source_evidence;
+  const evidenceExpired = Boolean(evidence?.expires_at && now > Date.parse(evidence.expires_at));
+  const evidenceBlocked = Boolean(record?.original_proposal_id && evidence && (!evidence.valid || evidenceExpired));
   return <><PageHeader title="Remediation 详情" description="动作结果与业务恢复分别记录；所有执行均经过后端审批和状态校验。"
     back={{ to: '/remediations', label: '返回 Remediations' }} reload={result.reload} loading={result.loading || Boolean(busy)} fetchedAt={result.fetchedAt} />
     {!record ? <DataState loading={result.loading} error={result.error} retry={result.reload}><EmptyState /></DataState> : <>
@@ -85,18 +101,19 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
       {result.loading && <p role="status">正在刷新记录…</p>}
       <div className="detail-heading"><State item={record} /><span>{record.original_proposal_id ? '补偿提案' : '原修复提案'} · {record.service}</span></div>
       <div className="detail-grid"><div className="detail-main">
-        {record.demo_recovery && <Panel title="隔离真实 Demo · 库存应用恢复" subtitle="A/B 共用 Git 源码，B 是受控错误配置。审批使用独立测试身份；这是新建隔离恢复能力。">
+        {record.demo_recovery && <Panel title="隔离真实 Demo · 库存应用恢复" subtitle="A/B 共用 Git 源码，B 是受控错误配置。操作身份来自后端；角色分离不能证明不同自然人参与。">
           <Fields items={[
             ['源制品版本', record.demo_recovery.source_release_id],
             ['目标制品版本', record.demo_recovery.release_id],
             ['源 Git 版本', <code>{record.demo_recovery.source_commit}</code>],
             ['目标 Git 版本', <code>{record.demo_recovery.target_commit}</code>],
-            ['制品绝对来源', <code>{record.demo_recovery.artifact_source}</code>],
             ['制品 SHA-256', <code>{record.demo_recovery.artifact_sha256}</code>],
             ['隔离实例', <code>{record.demo_recovery.instance_id}</code>],
+            ['配置 SHA-256', <code>{record.demo_recovery.configuration_digest}</code>],
           ]} />
-          <details className="remediation-entry"><summary>固定启动与配置（审批绑定）</summary>
-            <p><code>{record.demo_recovery.startup_configuration}</code></p>
+          <details className="remediation-entry"><summary>固定配置摘要（审批绑定）</summary>
+            <p>{record.demo_recovery.configuration_summary}</p>
+            <p>执行会停止当前隔离进程并启动目标制品，存在短暂服务中断；启动或结果未知时禁止重放。</p>
           </details>
         </Panel>}
         <Panel title={record.summary}><Fields items={[
@@ -106,6 +123,17 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
           ['申请理由', record.reason], ['风险', record.risk], ['预期版本', <code>{record.expected_commit_sha}</code>],
           ['审批摘要', <code>{record.proposal_digest}</code>], ['动作结果', remediationLabels[record.execution_outcome]],
         ]} /></Panel>
+        {evidence && <Panel title="原修复与补偿证据有效期" subtitle="证据最长有效 300 秒。浏览器展示仅供核查，执行前仍由后端重新检查。">
+          <Fields items={[
+            ['原修复', <Link className="record-link" to={pathFor(evidence.original_proposal_id)}>{evidence.original_proposal_id}</Link>],
+            ['原修复内容', evidence.original_summary], ['原执行动作', evidence.original_action_type],
+            ['原提案摘要', <code>{evidence.original_digest}</code>],
+            ['原业务验证', evidence.outcome === 'failed' ? '业务验证明确失败' : remediationLabels[evidence.outcome]],
+            ['证据记录时间', formatTime(evidence.verified_at)], ['证据到期时间', formatTime(evidence.expires_at)],
+            ['当前证据状态', evidenceExpired ? '证据已过期' : evidence.valid ? '仍有效 · 仅代表记录时的观测' : (remediationLabels[evidence.status] || '缺少可信证据')],
+          ]} />
+          {(evidenceExpired || !evidence.valid) && <p role="alert">旧证据不能证明当前实例和业务状态，审批与执行将被阻断。请停止本次受控实验并创建新的隔离实验，重新申请和审批；人工核查不会刷新原审批的证据，也不会延长有效期。</p>}
+        </Panel>}
         <Panel title="独立业务验证" subtitle="这是本提案动作后的验证记录。人工核查仅描述核查时的业务状态，不能证明历史动作已执行。">
           {record.verifications.length ? record.verifications.map(v => <article className="remediation-entry" key={v.verification_id}>
             <h3>{v.purpose === 'manual_check' ? '人工核查' : '动作后验证'} · {v.outcome === 'failed' ? '业务验证明确失败' : remediationLabels[v.outcome]}</h3>
@@ -133,7 +161,7 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
               ['配置 SHA-256', <code>{target.configuration_digest}</code>], ['前置条件', target.preconditions],
               ['预期副作用', target.side_effects], ['业务验证标准', target.verification_policy], ['数据兼容条件', target.data_compatibility],
             ]} />}
-            {record.original_proposal_id && <p>原提案：<Link className="record-link" to={pathFor(record.original_proposal_id)}>{record.original_proposal_id}</Link></p>}
+            {record.original_proposal_id && !evidence && <p>原提案：<Link className="record-link" to={pathFor(record.original_proposal_id)}>{record.original_proposal_id}</Link></p>}
             {record.related_proposals.filter(p => p.proposal_id !== record.original_proposal_id).map(p => <p key={p.proposal_id}><Link className="record-link" to={pathFor(p.proposal_id)}>{p.proposal_id}</Link> · {remediationState(p)}</p>)}
           </div>
           {record.requests.map(request => <article className="remediation-entry" key={request.assessment_id}>
@@ -144,10 +172,13 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
         <Panel title="审计时间线" subtitle="最多展示最近 100 条事件，原始记录保存在后端 Store。">
           {record.audit.length ? <ol className="remediation-audit">{record.audit.map(event => <li key={event.event_id}>
             <time>{formatTime(event.occurred_at)}</time><strong>{event.event}</strong><span>{event.actor}</span>{event.reason && <p>{event.reason}</p>}
+            {event.proposal_digest && <p>提案摘要：<code>{event.proposal_digest}</code> · 授权结果：{event.authorization_result || '见事件'}</p>}
+            {event.command_id && <p>操作标识：<code>{event.command_id}</code></p>}
           </li>)}</ol> : <EmptyState title="暂无审计事件" />}
         </Panel>
       </div><aside className="detail-aside">
         <Panel title="审批记录"><Fields items={[
+          ['申请身份', record.requested_by],
           ['批准人', record.approved_by], ['批准时间', formatTime(record.approved_at)], ['审批内容一致', record.approval_valid ? '是' : '未批准或摘要不匹配'],
           ['拒绝人', record.rejected_by], ['拒绝时间', formatTime(record.rejected_at)], ['拒绝理由', record.rejection_reason], ['收口理由', record.closure_reason],
         ]} /></Panel>
@@ -162,16 +193,16 @@ function RemediationRecord({ proposalId }: { proposalId: string }) {
                   {record.compensation.status === 'blocked' ? '记录被阻断的回滚申请' : '申请回滚'}</button>
               </>}
               {record.status === 'pending' && <>
-                <p>批准仅授权当前提案摘要；原修复审批不会批准补偿。</p>
+                <p>批准仅授权当前提案摘要、制品 SHA-256 与目标配置；原修复审批不会批准补偿。申请、审批、执行身份必须分离。</p>
                 {!can('approve') && <p>当前身份无审批权限。</p>}
                 <label className="confirm-operation"><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} disabled={disabled || !can('approve')} />确认已核对本次审批的精确目标和参数</label>
-                <button className="button" disabled={disabled || !can('approve') || !confirm} onClick={() => submit('approve')}>批准此提案</button>
+                <button className="button" disabled={disabled || !can('approve') || !confirm || evidenceBlocked} onClick={() => submit('approve')}>批准此提案</button>
                 <button className="button" disabled={disabled || !can('approve') || !confirm || !reason.trim()} onClick={() => submit('reject')}>拒绝此提案</button>
               </>}
               {record.status === 'approved' && <>
                 {!can('execute') && <p>当前身份无执行权限。</p>}
                 <label className="confirm-operation"><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} disabled={disabled} />确认执行已批准的精确目标和参数</label>
-                <button className="button" disabled={disabled || !can('execute') || !record.approval_valid || !confirm} onClick={() => submit('execute')}>执行已批准动作</button>
+                <button className="button" disabled={disabled || !can('execute') || !record.approval_valid || !confirm || evidenceBlocked} onClick={() => submit('execute')}>执行已批准动作</button>
               </>}
               {(record.status === 'executing' || (record.status === 'failed' && record.execution_outcome === 'unknown')) && <>
                 <p>执行可能仍在进行或已经中断。核查不会重放动作，人工收口也不会将未知结果改写为成功。</p>

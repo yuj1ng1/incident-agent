@@ -116,7 +116,11 @@ def test_real_artifact_process_rollback_and_web_evidence(case):
     assert result["demo_recovery"]["environment"] == "isolated_real_demo"
     assert result["demo_recovery"]["source_release_id"] == "B"
     assert result["demo_recovery"]["release_id"] == "A"
-    assert result["demo_recovery"]["artifact_source"] == str(case.runtime.releases["A"].path)
+    assert "artifact_source" not in result["demo_recovery"]
+    assert "startup_configuration" not in result["demo_recovery"]
+    assert result["demo_recovery"]["artifact_sha256"] == case.runtime.releases["A"].sha256
+    assert result["demo_recovery"]["configuration_digest"] == case.runtime.configuration_digest(case.runtime.releases["A"])
+    assert case.store.get(child).parameters["artifact_source"] == str(case.runtime.releases["A"].path)
     assert result["actions"][0]["release_id"] == "A"
     assert result["actions"][0]["pid"] != source_pid
     assert result["verifications"][0]["outcome"] == "passed"

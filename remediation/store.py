@@ -275,6 +275,8 @@ class RemediationStore:
         by = actor_name(by)
         with self.transaction() as data:
             original = self.from_data(data, proposal_id)
+            from remediation.compensation import check_compensation_actor
+            check_compensation_actor(data, original, by, "approve")
             if self.check_command(data, original, "approved", by, command_id, expected_digest):
                 return original
             if original.compensation is not None:
@@ -282,8 +284,9 @@ class RemediationStore:
                 execution_contract(data, original)
             proposal = approve_proposal(original, by)
             self.put(data, proposal)
-            self.event(data, proposal, "approved", by, **(
-                {"command_id": command_id, "proposal_digest": expected_digest}
+            self.event(data, proposal, "approved", by,
+                proposal_digest=approval_digest(proposal), authorization_result="approved", **(
+                {"command_id": command_id}
                 if command_id else {}
             ))
         return proposal
@@ -300,12 +303,15 @@ class RemediationStore:
         by = actor_name(by)
         with self.transaction() as data:
             original = self.from_data(data, proposal_id)
+            from remediation.compensation import check_compensation_actor
+            check_compensation_actor(data, original, by, "approve")
             if self.check_command(data, original, "rejected", by, command_id, expected_digest, reason):
                 return original
             proposal = reject_proposal(original, by, reason)
             self.put(data, proposal)
-            self.event(data, proposal, "rejected", by, reason=reason, **(
-                {"command_id": command_id, "proposal_digest": expected_digest}
+            self.event(data, proposal, "rejected", by, reason=reason,
+                proposal_digest=approval_digest(proposal), authorization_result="rejected", **(
+                {"command_id": command_id}
                 if command_id else {}
             ))
         return proposal

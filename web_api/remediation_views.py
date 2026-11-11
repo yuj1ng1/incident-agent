@@ -4,10 +4,11 @@ from datetime import timedelta
 
 from models.remediation import ActionResult, CompensationAssessment, VerificationResult, utc_now
 from remediation.approval import approval_digest
-from remediation.compensation import evaluate
+from remediation.compensation import compensation_requester, contract_for, evaluate
+from remediation.state import RemediationError
 from web_api.queries import public_text
 from web_api.schemas import (
-    ActionView, AuditView, CompensationRequestView, CompensationTargetView,
+    ActionView, AuditView, CompensationEvidenceView, CompensationRequestView, CompensationTargetView,
     CompensationView, DemoRecoveryView, RemediationDetail, RemediationSummary,
     VerificationCheckView, VerificationView,
 )
@@ -18,6 +19,11 @@ def safe_text(value, limit=1000):
         return None
     # Full URLs may carry secrets in paths as well as queries/userinfo.
     value = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>]+", "[url omitted]", str(value))
+    value = re.sub(
+        r"(?i)(?<!\w)[a-z]:[\\/][^\s<>\"']+|\\\\[^\s<>\"']+"
+        r"|(?<![\w/])/(?:[^/\s<>]+/)+[^\s<>]*",
+        "[local path omitted]", value,
+    )
     return public_text(value, limit)
 
 
@@ -72,6 +78,38 @@ def summary_view(
     )
 
 
+def source_evidence_view(store, data, proposal):
+    original = (store.from_data(data, proposal.compensation.original_proposal_id)
+                if proposal.compensation else proposal)
+    records = [VerificationResult.model_validate(v) for v in data["verifications"]
+               if v["proposal_id"] == original.proposal_id
+               and v.get("purpose", "post_action") == "post_action"]
+    if not records and not proposal.compensation:
+        return None
+    verification = records[0] if len(records) == 1 else None
+    actions = [a for a in data["actions"] if a["proposal_id"] == original.proposal_id]
+    contract = contract_for(original)
+    max_age = (contract.evidence_max_age_seconds if contract
+               and 1 <= contract.evidence_max_age_seconds <= 300 else 300)
+    checked_at = utc_now()
+    status = evidence_status(verification, original, actions) if verification else "missing"
+    expires_at = (verification.verified_at + timedelta(seconds=max_age)
+                  if verification else None)
+    if verification and status == "bound" and checked_at > expires_at:
+        status = "stale"
+    return CompensationEvidenceView(
+        original_proposal_id=safe_text(original.proposal_id, 120),
+        original_summary=safe_text(original.summary),
+        original_action_type=safe_text(original.action_type, 200),
+        original_digest=approval_digest(original),
+        verification_id=verification.verification_id if verification else None,
+        verified_at=verification.verified_at if verification else None,
+        expires_at=expires_at, checked_at=checked_at, max_age_seconds=max_age,
+        status=status, outcome=verification.outcome.value if verification else "unknown",
+        valid=status == "bound" and verification.outcome.value in {"passed", "failed"},
+    )
+
+
 def detail_view(
     store,
     data,
@@ -92,15 +130,24 @@ def detail_view(
     parameters = {key: safe_text(value, 200) for key, value in proposal.parameters.items()
                   if key in {"service", "target_id"} and isinstance(value, str)}
     demo_fields = (
-        "artifact_source", "artifact_sha256", "source_commit", "target_commit",
-        "release_id", "instance_id", "startup_configuration",
+        "artifact_sha256", "source_commit", "target_commit",
+        "release_id", "instance_id", "configuration_digest",
     )
     demo = None
     if (proposal.action_type in {"w2_inventory_deploy_b", "w2_inventory_restore_a"}
             and all(isinstance(proposal.parameters.get(key), str) for key in demo_fields)):
         demo = DemoRecoveryView(**{
             key: safe_text(proposal.parameters[key], 2000) for key in demo_fields
-        }, source_release_id=safe_text(proposal.parameters.get("source_release_id"), 80))
+        }, source_release_id=safe_text(proposal.parameters.get("source_release_id"), 80),
+            configuration_summary=(
+                "仅本机回环；单实例；无数据库；固定隔离入口；"
+                "库存错误配置=" + ("关闭" if proposal.parameters["release_id"] == "A" else "开启")
+            ),
+        )
+    try:
+        requester = compensation_requester(data, proposal)
+    except RemediationError:
+        requester = None
     return RemediationDetail(
         **summary_view(store, data, proposal).model_dump(),
         reason=safe_text(proposal.reason, 2000),
@@ -122,6 +169,8 @@ def detail_view(
         target=target_view(proposal.compensation.target) if proposal.compensation else None,
         related_proposals=[summary_view(store, data, p) for p in related[:100]],
         demo_recovery=demo,
+        source_evidence=source_evidence_view(store, data, proposal),
+        requested_by=safe_text(requester, 200),
         actions=[ActionView(
             action_id=safe_text(a["action_id"], 120), started_at=a["started_at"],
             finished_at=a["finished_at"], success=a["success"], status=safe_text(a["status"], 200),
@@ -166,5 +215,10 @@ def detail_view(
             event_id=safe_text(e["event_id"], 120), occurred_at=e["occurred_at"],
             event=safe_text(e["event"], 200), actor=safe_text(e["actor"], 200),
             reason=safe_text(e["details"].get("reason")),
+            proposal_digest=e["details"].get("proposal_digest")
+            if re.fullmatch(r"[0-9a-f]{64}", str(e["details"].get("proposal_digest"))) else None,
+            command_id=safe_text(e["details"].get("command_id"), 200),
+            authorization_result=e["details"].get("authorization_result")
+            if e["details"].get("authorization_result") in {"approved", "rejected"} else None,
         ) for e in events[-100:]],
     )

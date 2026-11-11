@@ -9,7 +9,9 @@ from models.remediation import (
     ServiceIdentity, VerificationOutcome as V, VerificationResult, utc_now,
 )
 from remediation.approval import actor_name, approval_digest
-from remediation.compensation import contract_for, execution_contract, record_request
+from remediation.compensation import (
+    check_compensation_actor, contract_for, execution_contract, record_request,
+)
 from remediation.demo_action import disable_demo_regression, validate_parameters
 from remediation.state import RemediationError, transition
 from remediation.store import FileLock
@@ -21,12 +23,20 @@ logger = logging.getLogger(__name__)
 
 
 class ActionExecutor:
-    def __init__(self, store, runtime=None, verifier=None, boundary_hook=None):
+    def __init__(
+        self,
+        store,
+        runtime=None,
+        verifier=None,
+        boundary_hook=None,
+        automatic_compensation_request=True,
+    ):
         self.store = store
         self.runtime = runtime
         self.verifier = verifier or DemoVerifier()
         self._verifier_override = verifier is not None
         self.boundary_hook = boundary_hook
+        self.automatic_compensation_request = automatic_compensation_request
 
     def _boundary(self, phase, proposal_id):
         # Test-only observation seam; production never terminates processes here.
@@ -46,6 +56,7 @@ class ActionExecutor:
         with FileLock(SERVICE_LOCK):
             with self.store.transaction() as data:
                 proposal = self.store.from_data(data, proposal_id)
+                check_compensation_actor(data, proposal, actor, "execute")
                 if self.store.check_command(
                     data, proposal, "execution_started", actor, command_id, expected_digest,
                 ):
@@ -97,6 +108,11 @@ class ActionExecutor:
                     identity = ServiceIdentity.model_validate(contract.inspect_identity(proposal, self.runtime))
                     if identity != proposal.compensation.source_identity:
                         raise RemediationError("compensation_current_identity_changed")
+                    # A slow identity probe must not carry evidence past its TTL.
+                    latest = self.store.load()
+                    if self.store.from_data(latest, proposal_id) != proposal:
+                        raise RemediationError("proposal_changed_before_side_effect")
+                    execution_contract(latest, proposal)
                 except Exception as exc:
                     preflight_failed = True
                     reason = str(exc) if isinstance(exc, RemediationError) else ""
@@ -186,7 +202,8 @@ class ActionExecutor:
                 final = transition(proposal, S.SUCCEEDED if verification.success else S.VERIFICATION_FAILED)
                 self.store.put(data, final)
                 self.store.event(data, final, "remediation_" + final.status.value, actor)
-                if not final.compensation and verification.outcome == V.FAILED and not verification.success:
+                if (self.automatic_compensation_request and not final.compensation
+                        and verification.outcome == V.FAILED and not verification.success):
                     # Same atomic commit as the failure: restart cannot lose the assessment.
                     record_request(
                         data, self.store, final, "remediation_verifier",

@@ -353,7 +353,7 @@ def test_concurrent_requests_approvals_and_executions_cannot_duplicate_effect(co
     assert approvals.count(S.APPROVED) == 1
     def execute(number):
         try:
-            return ActionExecutor(comp.store).execute(pending.proposal_id, "operator").status
+            return ActionExecutor(comp.store).execute(pending.proposal_id, "independent-executor").status
         except RemediationError:
             return "denied"
     with ThreadPoolExecutor(2) as pool:
