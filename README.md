@@ -30,7 +30,7 @@ CI 依赖、预算边界、Remediation 人工收口与全局模型阻塞的验�
 
 Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回答；
 等待人类时显示 `[Human Input Required]`、Request ID 和问题。
-通知使用 SQLite 中的简单标记避免每次轮询或重启重复展示。
+通知使用 MySQL 中的工作队列标记避免每次轮询或重启重复展示。
 终端故障不影响结果保存，CLI 可随时主动查询历史结果：
 
 ```powershell
@@ -42,7 +42,7 @@ Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回�
 ```
 
 `show-session` 包含 `investigation_result.answer`、Session 计数、Incident 累计预算、
-再调查拒绝原因、HumanRequest 和投影重试信息；`show-incident` 包含完整归档历史。自定义 `--store`、`--incidents`、`--remediations` 参数放在子命令之前。
+再调查拒绝原因、HumanRequest 和投影重试信息；`show-incident` 包含完整归档历史。自定义 `--store` 现在传 MySQL URL（默认读取 `INCIDENT_AGENT_DATABASE_URL`）；`--incidents`、`--remediations` 参数放在子命令之前。
 模型认证/余额错误会全局阻塞请求；取消 Session 不代表问题已修复。
 修正认证/余额后，可显式运行 `runtime_cli.py unblock-model --actor 本地操作员`；
 暂停的 Session 仍需 `resume`，已取消的 Session 不会因轮询复活。人工重开使用
@@ -50,6 +50,10 @@ Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回�
 并重新核对当前 firing 告警；同一命令 ID 可安全重试。修复批准与执行继续使用独立 `remediation_cli.py`。
 
 本次问题核实、预算规则、测试结果和未验证范围见 [Runtime 质量修复验证记录](docs/RUNTIME_QUALITY_FIX_VALIDATION_2026-10-09_19-01-18.md)。
+
+项目说明和报告统一存放在 `docs/`：[完整项目说明](docs/PROJECT_GUIDE_2026-10-07_18-16-15.md)、[代码证据报告](docs/CODE_EVIDENCE_REPORT_2026-10-07_17-04-57.md)、[回归测试报告](docs/REGRESSION_REPORT_2026-10-06_14-32-43.md)。文件名中的时间为归档前最后修改时间（Asia/Shanghai）。
+
+专题说明：[修复流程指南](docs/REMEDIATION_GUIDE_2026-10-07_19-04-33.md)、[修复验证报告](docs/REMEDIATION_VALIDATION_2026-10-07_19-07-56.md)、[服务注册指南](docs/SERVICE_REGISTRY_GUIDE_2026-10-08_10-41-45.md)、[服务注册验证报告](docs/SERVICE_REGISTRY_VALIDATION_2026-10-08_10-43-29.md)。新增和更新说明文档时，遵循根目录 [AGENTS.md](AGENTS.md) 的存放、时间命名和链接维护规则。
 
 ## 当前内容
 
@@ -69,6 +73,14 @@ Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回�
 
 在项目根目录安装依赖，将 `.env.example` 复制为 `.env` 并填写 `DEEPSEEK_API_KEY`。服务地址和模型名称在 `config.py` 中配置。
 
+Runtime 使用 MySQL 8.4 作为权威存储。先创建数据库和最小权限账号，把连接写入 `.env` 的
+`INCIDENT_AGENT_DATABASE_URL`，再执行迁移（连接串中的密码不要提交到 Git）：
+
+```powershell
+$env:INCIDENT_AGENT_DATABASE_URL = 'mysql+pymysql://incident_agent:CHANGE_ME@127.0.0.1:3306/incident_agent?charset=utf8mb4'
+python -m alembic upgrade head
+```
+
 默认连接 Prometheus `http://localhost:9090`、Loki `http://localhost:3100` 和 order-service `http://localhost:8001`。告警解析要求 firing alert 的 labels 包含 service、metric、severity，annotations 包含 threshold，value 能转换为数值。
 
 ```powershell
@@ -82,23 +94,27 @@ Incident 数据文件在首次启动时自动创建。真实 `.env`、运行数�
 
 ## 回归验证
 
+Runtime 测试使用隔离 MySQL 库：测试会按临时目录创建 `ia_test_*` schema，并在会话结束时删除。
+测试账号需要在该前缀下具备建库/删库权限，不要把生产库配置为测试 URL。
+
 ```powershell
+$env:INCIDENT_AGENT_TEST_DATABASE_URL = 'mysql+pymysql://incident_agent_test:CHANGE_ME@127.0.0.1:3307/incident_agent_test?charset=utf8mb4'
 python -B -m pytest tests -q --disable-warnings
 ```
 
-2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，数据与日志写入临时目录；生产装配测试提供占位密钥，不需要真实密钥。最新结果见 [Runtime 稳定性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)。
+2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，Incident 与日志写入临时目录，Runtime 写入隔离 MySQL schema；生产装配测试提供占位密钥，不需要真实密钥。最新结果见 [Runtime 稳定性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)。
 
-2026-10-06 还验证了真实启动、两轮告警查询及一次使用合成告警的真实模型调查。详细验证记录及修复说明见 [REGRESSION_REPORT.md](REGRESSION_REPORT.md)。真实服务当时没有 firing 告警，生命周期变化由可控响应覆盖。
+2026-10-06 还验证了真实启动、两轮告警查询及一次使用合成告警的真实模型调查。详细验证记录及修复说明见 [回归测试报告](docs/REGRESSION_REPORT_2026-10-06_14-32-43.md)。真实服务当时没有 firing 告警，生命周期变化由可控响应覆盖。
 
 本次修复了浮点阈值边界、未完成模型响应误记成功、非法告警快照误触发恢复、调查异常丢失已收集证据，以及 NaN/Infinity 被保存为有效指标的问题。
 
 ## 已知限制
 
-IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。SQLite Runtime、Incident JSON 和 Remediation JSON 分别承担调查状态、告警历史和修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
+IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。MySQL Runtime、Incident JSON 和 Remediation JSON 分别承担调查状态、告警历史和修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
 
 默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。每次尝试最多 7 轮模型、13 次工具；同一 Incident 的自动 Session 共用原有 3 次尝试、21 次模型、39 次工具及时间/恢复限制。分类 FAILED 退避后有限重试，EXHAUSTED/CANCELLED 需人工重开。
 
-热文件默认保留最近 3 次 Runtime 调查，完整历史可查询。归档及审计继续占用磁盘；备份需要完整 data 目录，不能只复制 incidents.json。
+热文件默认保留最近 3 次 Runtime 调查，完整历史可查询。MySQL Runtime 需要按部署流程备份；Incident 归档及审计继续占用 `data/` 磁盘，备份需要完整 data 目录，不能只复制 incidents.json。
 
 生产及测试依赖分别固定于 `requirements.lock.txt`、`requirements-test.lock.txt`。
 

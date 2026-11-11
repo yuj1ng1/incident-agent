@@ -2,25 +2,25 @@
 import argparse
 import json
 from pathlib import Path
-import sqlite3
 import sys
 
 def main(argv=None):
     from dotenv import load_dotenv
     load_dotenv()
     from pydantic import ValidationError
+    from sqlalchemy.exc import SQLAlchemyError
     from incident_store import IncidentStore
     from investigation.manager import InvestigationManager, live_alert_for_incident
     from investigation.models import HumanCommand
     from investigation.state import RuntimeErrorBase
-    from investigation.store import DEFAULT_STORE, RuntimeStore
+    from investigation.store import RuntimeStore
     from remediation.planner import RemediationPlanner
     from remediation.store import RemediationStore, StoreError
     from storage_lock import FileLockError
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="本地持久化调查管理；修复审批继续使用 remediation_cli.py")
-    parser.add_argument("--store", default=str(DEFAULT_STORE))
+    parser.add_argument("--store", default=None, help="MySQL URL；默认读取 INCIDENT_AGENT_DATABASE_URL")
     parser.add_argument("--incidents", default=str(Path(__file__).resolve().parent / "data" / "incidents.json"))
     parser.add_argument("--remediations", default=str(Path(__file__).resolve().parent / "data" / "remediation.json"))
     commands = parser.add_subparsers(dest="operation", required=True)
@@ -106,7 +106,7 @@ def main(argv=None):
             return 2 if command.processing_status == "rejected" else 0
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
-    except (RuntimeErrorBase, ValidationError, sqlite3.Error, ValueError, OSError, FileLockError, StoreError) as exc:
+    except (RuntimeErrorBase, ValidationError, SQLAlchemyError, ValueError, OSError, FileLockError, StoreError) as exc:
         # Validation errors may contain user payload; print the class/code only.
         code = str(exc) if isinstance(exc, (RuntimeErrorBase, StoreError, FileLockError)) else type(exc).__name__
         print(json.dumps({

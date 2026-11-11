@@ -841,6 +841,7 @@ def run_case(
     from investigation.worker import Worker
     from prompts.agent_prompt import agent_prompt
     from runtime_support import create_runtime, create_session
+    from sqlalchemy.engine import make_url
 
     key, key_source = credentials()
     if live and not key:
@@ -946,7 +947,9 @@ def run_case(
         "real_model_api_requests": provider.real_requests,
         "api_request_counter_semantics": "local SDK create entry, not server receipt or billing",
         "provider_request_entries": provider.requests,
+        "session_id": saved.session_id,
         "session_status": saved.status.value,
+        "runtime_database": make_url(manager.store.database_url).database,
         "error_category": saved.last_error_category,
         "runtime_model_reservations": saved.total_model_requests,
         "tool_executions": saved.total_tool_executions,

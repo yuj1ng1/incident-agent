@@ -247,7 +247,7 @@ def main():
     from investigation.store import RuntimeStore
     from investigation.worker import Worker
     store = IncidentStore(output / "incidents.json")
-    manager = InvestigationManager(RuntimeStore(output / "runtime.sqlite3"), store)
+    manager = InvestigationManager(RuntimeStore(), store)
     monitor = IncidentMonitor(client, store, 5, manager)
     scenarios = [
         ("order-500", "HighHttp5xxRate", "order-service"),

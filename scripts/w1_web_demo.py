@@ -46,7 +46,7 @@ def create_demo(root):
     faults_path = root / 'http-faults.json'
     faults_path.write_text('{}', encoding='utf-8')
     incidents = IncidentStore(root / "incidents.json")
-    runtime = RuntimeStore(root / "runtime.sqlite3")
+    runtime = RuntimeStore()
     store = RemediationStore(root / "remediation.json")
     # This process cannot dispatch any ordinary production repair action.
     execution.ACTION_REGISTRY = MappingProxyType({})
@@ -242,7 +242,7 @@ def create_demo(root):
     (root / "operators.json").write_text(json.dumps(tokens), encoding="utf-8")
     (root / "scenarios.json").write_text(json.dumps(identifiers, indent=2), encoding="utf-8")
     app = create_app(
-        incident_path=incidents.file_path, runtime_path=runtime.path,
+        incident_path=incidents.file_path, runtime_url=runtime.database_url,
         remediation_path=store.file_path, authorization=auth,
     )
 

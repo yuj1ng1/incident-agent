@@ -253,7 +253,7 @@ def test_crash_at_replacement_boundaries_retains_only_committed_model_history(
     with pytest.raises(Crash):
         worker.run_once()
     saved = manager.store.get(session.session_id)
-    reopened = RuntimeStore(manager.store.path, read_only=True)
+    reopened = RuntimeStore(manager.store.database_url, read_only=True)
     checkpoint = reopened.load_checkpoint(reopened.get(session.session_id))
     assert checkpoint == manager.store.load_checkpoint(saved)
     assert len(analyses(checkpoint["history"])) == 1

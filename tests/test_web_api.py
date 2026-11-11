@@ -1,9 +1,8 @@
-"""HTTP behavior against temporary JSON/SQLite, with no live model or repair."""
+"""HTTP behavior against temporary stores, with no live model or repair."""
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -11,6 +10,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from incident_store import IncidentStore
 from investigation.models import SessionStatus as S
@@ -18,6 +19,7 @@ from investigation.state import RuntimeErrorBase
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence, HistoryArchive
+from mysql_support import empty_database_url
 from p53c1_support import (
     PRESET_ANSWER,
     finish_and_reopen,
@@ -36,7 +38,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def api(tmp_path):
     manager = create_runtime(tmp_path)
     session = create_session(manager)
-    app = create_app(incident_path=manager.incident_store.file_path, runtime_path=manager.store.path)
+    app = create_app(
+        incident_path=manager.incident_store.file_path,
+        runtime_url=manager.store.database_url,
+    )
     with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         yield manager, session, client
 
@@ -85,7 +90,7 @@ def test_mock_investigation_totals_match_the_http_results(tmp_path):
     with TestClient(
         create_app(
             incident_path=tmp_path / "incidents.json",
-            runtime_path=run.manager.store.path,
+            runtime_url=run.manager.store.database_url,
         ),
         base_url="http://127.0.0.1",
     ) as client:
@@ -181,7 +186,7 @@ def test_raw_secrets_and_model_tool_data_are_excluded(api, monkeypatch):
     assert answer["answer_truncated"] is True and len(answer["answer"]) == 8000
 
 
-@pytest.mark.parametrize("corruption", ["json", "json_shape", "incident", "sqlite", "schema", "checkpoint", "session"])
+@pytest.mark.parametrize("corruption", ["json", "json_shape", "incident", "table", "projection", "checkpoint", "session"])
 def test_store_corruption_is_a_safe_failure(api, corruption, caplog):
     manager, session, client = api
     if corruption in {"json", "json_shape", "incident"}:
@@ -197,23 +202,33 @@ def test_store_corruption_is_a_safe_failure(api, corruption, caplog):
         path = "/api/incidents"
     else:
         path = f"/api/sessions/{session.session_id}"
-        if corruption == "sqlite":
-            manager.store.path.write_bytes(b"not SQLite hidden-error-secret")
+        if corruption == "table":
+            with manager.store.transaction() as db:
+                db.execute(text("DROP TABLE runtime_metadata"))
         else:
             if corruption == "checkpoint":
                 with manager.store.transaction() as db:
                     current = manager.store.get(session.session_id, db)
                     manager.store.checkpoint(current, manager.store.load_checkpoint(current, db), db)
                     manager.store.save(current, db)
-            with sqlite3.connect(manager.store.path) as db:
-                if corruption == "schema":
-                    db.execute("PRAGMA user_version=999")
+            with manager.store.transaction() as db:
+                if corruption == "projection":
+                    db.execute(
+                        text("UPDATE investigation_sessions SET status='PAUSED' WHERE session_id=:sid"),
+                        {"sid": session.session_id},
+                    )
                 elif corruption == "session":
-                    db.execute("UPDATE investigation_sessions SET data=?", ('{"password":"hidden-error-secret"}',))
+                    db.execute(
+                        text("UPDATE investigation_sessions SET data=:data WHERE session_id=:sid"),
+                        {"data": '{"password":"hidden-error-secret"}', "sid": session.session_id},
+                    )
                 else:
                     current = manager.store.get(session.session_id)
                     assert current.checkpoint_id is not None
-                    db.execute("DELETE FROM investigation_checkpoints WHERE checkpoint_id=?", (current.checkpoint_id,))
+                    db.execute(
+                        text("DELETE FROM investigation_checkpoints WHERE checkpoint_id=:cid"),
+                        {"cid": current.checkpoint_id},
+                    )
     result = client.get(path)
     assert result.status_code == 500 and result.json() == {"detail": "store_read_failed"}
     assert "hidden-error-secret" not in result.text + caplog.text
@@ -237,13 +252,13 @@ def test_detail_never_opens_history_archives(api):
 
 def test_creation_and_startup_do_not_create_files_or_business_objects(tmp_path):
     root = tmp_path / "absent"
-    with patch.object(RuntimeStore, "__init__", side_effect=AssertionError("startup opened SQLite")), \
+    with patch.object(RuntimeStore, "__init__", side_effect=AssertionError("startup opened MySQL")), \
             patch.object(IncidentStore, "__init__", side_effect=AssertionError("startup opened JSON")), \
             patch("openai.OpenAI", side_effect=AssertionError("startup created model client")), \
             patch("investigation.scheduler.Scheduler.__init__", side_effect=AssertionError("startup scheduler")), \
             patch("investigation.worker.Worker.__init__", side_effect=AssertionError("startup worker")), \
             patch("monitor.incident_monitor.IncidentMonitor.__init__", side_effect=AssertionError("startup monitor")):
-        app = create_app(incident_path=root / "incidents.json", runtime_path=root / "runtime.sqlite3")
+        app = create_app(incident_path=root / "incidents.json", runtime_url=None)
         with TestClient(app, base_url="http://127.0.0.1") as client:
             assert client.get("/healthz").status_code == 200
             assert client.get("/docs").status_code == 200
@@ -275,7 +290,10 @@ print('inert import verified')
 
 
 def test_missing_stores_are_unavailable_and_not_created(tmp_path):
-    app = create_app(incident_path=tmp_path / "incidents.json", runtime_path=tmp_path / "runtime.sqlite3")
+    app = create_app(
+        incident_path=tmp_path / "incidents.json",
+        runtime_url=empty_database_url(tmp_path),
+    )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         assert client.get("/healthz").status_code == 200
         for path in ("/api/incidents", "/api/sessions"):
@@ -286,23 +304,26 @@ def test_missing_stores_are_unavailable_and_not_created(tmp_path):
 
 def test_store_read_only_mode_and_request_hashes(api):
     manager, session, client = api
-    paths = (manager.store.path, manager.incident_store.file_path)
-    before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
-    files_before = set(paths[0].parent.rglob("*"))
-    readonly = RuntimeStore(paths[0], read_only=True)
+    before = (
+        manager.store.get(session.session_id).state_version,
+        hashlib.sha256(manager.incident_store.file_path.read_bytes()).hexdigest(),
+    )
+    readonly = RuntimeStore(manager.store.database_url, read_only=True)
     with pytest.raises(RuntimeErrorBase, match="read_only"):
         with readonly.transaction():
             pass
     with readonly.read() as db:
-        with pytest.raises(sqlite3.OperationalError, match="readonly"):
-            db.execute("DELETE FROM investigation_sessions")
-    incidents = IncidentStore(paths[1], read_only=True)
+        with pytest.raises(OperationalError):
+            db.execute(text("DELETE FROM investigation_sessions"))
+    incidents = IncidentStore(manager.incident_store.file_path, read_only=True)
     with pytest.raises(PermissionError, match="read_only"):
         incidents.save(incidents.create_empty_data())
     for path in ("/api/incidents", "/api/sessions", f"/api/incidents/{session.incident_id}", f"/api/sessions/{session.session_id}"):
         assert client.get(path).status_code == 200
-    assert before == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
-    assert set(paths[0].parent.rglob("*")) == files_before
+    assert before == (
+        manager.store.get(session.session_id).state_version,
+        hashlib.sha256(manager.incident_store.file_path.read_bytes()).hexdigest(),
+    )
 
 
 def test_concurrent_readers_observe_consistent_uncommitted_writer_snapshot(api):
@@ -403,16 +424,18 @@ def test_workbench_can_read_safe_store_errors_across_origins(api, failure, statu
 def test_legacy_data_is_mapped_without_migration_or_backfill(api):
     manager, session, client = api
     incident = manager.incident_store.get_incident(session.incident_id, include_history=False)
-    # Legacy v1 JSON and the original SQLite v1 database are read in place.
+    # Legacy v1 JSON is still read in place; Runtime rows are read without rewrites.
     manager.incident_store.file_path.write_text(json.dumps({incident.fingerprint: incident.model_dump(mode="json")}), encoding="utf-8")
-    with sqlite3.connect(manager.store.path) as db:
-        db.execute("DELETE FROM runtime_metadata WHERE key='work_outboxes_v1'")
-        db.execute("DROP INDEX sessions_budget_group")
-    paths = (manager.incident_store.file_path, manager.store.path)
-    before = {p: p.read_bytes() for p in paths}
+    before = (
+        manager.store.get(session.session_id).state_version,
+        manager.incident_store.file_path.read_bytes(),
+    )
     assert client.get("/api/incidents").json()["items"][0]["incident_id"] == session.incident_id
     assert client.get(f"/api/sessions/{session.session_id}").json()["session"]["status"] == "QUEUED"
-    assert before == {p: p.read_bytes() for p in paths}
+    assert before == (
+        manager.store.get(session.session_id).state_version,
+        manager.incident_store.file_path.read_bytes(),
+    )
 
 
 def test_old_plaintext_answers_are_redacted_without_rewriting_store(api):

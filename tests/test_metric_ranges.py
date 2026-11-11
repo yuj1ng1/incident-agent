@@ -663,7 +663,7 @@ def test_full_checkpoint_cache_and_model_context_separate_historical_and_current
     ))
     # Open the same temporary DB anew: full samples, not the model summary, survive.
     from investigation.store import RuntimeStore
-    reopened = RuntimeStore(manager.store.path, clock=lambda: store_time.now)
+    reopened = RuntimeStore(manager.store.database_url, clock=lambda: store_time.now)
     restored = reopened.load_checkpoint(reopened.get(completed.session_id))
     assert restored["records"] == checkpoint["records"]
 

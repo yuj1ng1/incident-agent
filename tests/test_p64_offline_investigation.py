@@ -4,12 +4,19 @@ import json
 
 import pytest
 
+from mysql_support import runtime_database_url
 from scripts.p64_offline_investigation import (
     MOCK_ANSWER,
     UNSUPPORTED_ANSWER,
-    run_case,
+    run_case as _run_case,
 )
 from scripts.p61_readonly_integration import BoundaryViolation
+
+
+def run_case(root, scenario="multi_round", **kwargs):
+    return _run_case(
+        root, scenario, database_url=runtime_database_url(root), **kwargs,
+    )
 
 
 def records(report, name):

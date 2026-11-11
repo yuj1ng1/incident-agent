@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import time
@@ -12,10 +11,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from sqlalchemy import inspect
 
 from investigation.models import Checkpoint, HumanCommand, InvestigationSession, SessionStatus as S
 from investigation.scheduler import Scheduler
-from investigation.state import LostClaim
+from investigation.state import LostClaim, RuntimeIntegrityError
 from investigation.worker import Worker
 from remediation.planner import RemediationPlanner
 from remediation.store import RemediationStore, StoreError
@@ -255,12 +255,15 @@ def test_unique_index_rejects_second_nonterminal_session(runtime):
         incident_id=first.incident_id, alert_fingerprint=first.alert_fingerprint,
         service=first.service, status=S.QUEUED,
     )
-    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+    with pytest.raises(RuntimeIntegrityError, match="session_insert_conflict"):
         with manager.store.transaction() as db:
             manager.store.insert(duplicate, db)
     assert [s.session_id for s in manager.store.list_sessions()] == [first.session_id]
-    with manager.store.read() as db:
-        assert db.execute("SELECT sql FROM sqlite_master WHERE name='one_active_incident'").fetchone()[0]
+    indexes = {
+        index["name"]
+        for index in inspect(manager.store.engine).get_indexes("investigation_sessions")
+    }
+    assert "one_active_incident" in indexes
 
 
 def test_expired_remediation_retry_remains_operator_visible(runtime, tmp_path):
@@ -301,7 +304,7 @@ def test_unreadable_remediation_store_does_not_hide_saved_conclusion(runtime, tm
     output = io.StringIO()
     with redirect_stdout(output):
         code = runtime_cli([
-            "--store", str(manager.store.path), "--incidents", str(tmp_path / "incidents.json"),
+            "--store", manager.store.database_url, "--incidents", str(tmp_path / "incidents.json"),
             "--remediations", str(path), "show-session", session.session_id,
         ])
     assert code == 0
@@ -430,14 +433,19 @@ def test_legacy_checkpoint_fields_are_optional_and_not_rewritten_by_query(runtim
         latest = manager.store.get(session.session_id, db)
         manager.store.checkpoint(latest, checkpoint, db)
         manager.store.save(latest, db)
-    before = manager.store.path.read_bytes()
+    before = (
+        manager.store.get(session.session_id).state_version,
+        manager.store.load_checkpoint(manager.store.get(session.session_id)),
+    )
     restarted = create_runtime(tmp_path, clock=lambda: clock.now)
     workflow = restarted.workflow(session.session_id)
     assert workflow["remediation_attempts"] == 0
     assert workflow["remediation_error_category"] is None and not workflow["remediation_blocked"]
-    assert manager.store.path.read_bytes() == before
-    with manager.store.read() as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert (
+        manager.store.get(session.session_id).state_version,
+        manager.store.load_checkpoint(manager.store.get(session.session_id)),
+    ) == before
+    assert inspect(manager.store.engine).has_table("investigation_sessions")
 
 
 def test_retry_that_no_longer_has_candidate_does_not_erase_failed_proposal(runtime, tmp_path):

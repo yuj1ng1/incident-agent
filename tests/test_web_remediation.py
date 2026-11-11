@@ -35,7 +35,7 @@ def web(comp):
         for actor, token in TOKENS.items()
     ]))
     app = create_app(
-        incident_path=incident_path, runtime_path=comp.root / "absent.sqlite3",
+        incident_path=incident_path, include_runtime=False,
         remediation_path=comp.store.file_path, authorization=auth,
     )
     with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 32100)) as client:

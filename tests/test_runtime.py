@@ -1,11 +1,10 @@
-"""Real SQLite transactions and isolated model/tool integration regression checks."""
-from contextlib import closing, redirect_stdout
+"""Real MySQL transactions and isolated model/tool integration regression checks."""
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,13 +16,15 @@ from unittest.mock import Mock, patch
 import httpx2 as httpx
 import openai
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from investigation.checkpoint import encode, protect, restore_context, valid_chain
 from investigation.evidence_policy import cache_key, effective_records, fresh, stable
 from investigation.models import HumanCommand, InvestigationSession, RuntimeLimits, SessionStatus as S
-from investigation.state import LostClaim, RuntimeErrorBase, StateVersionConflict, transition
+from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, StateVersionConflict, transition
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
+from mysql_support import empty_database_url
 from runtime_cli import main as cli
 from runtime_support import FixtureAgent, SHA, call, create_runtime, create_session, response
 
@@ -78,19 +79,18 @@ class RuntimeTests(unittest.TestCase):
         with self.store.transaction() as db:
             self.assertIsNone(self.store.metadata(db, "rollback"))
 
-    def test_unknown_database_version_rejected(self):
-        path = self.root / "future.sqlite3"
-        with closing(sqlite3.connect(path)) as db:
-            db.execute("PRAGMA user_version=99")
+    def test_missing_schema_rejected(self):
         with self.assertRaises(RuntimeErrorBase):
-            RuntimeStore(path)
+            RuntimeStore(empty_database_url(self.root))
 
-    def test_corrupt_database_not_replaced(self):
-        path = self.root / "corrupt.sqlite3"
-        path.write_bytes(b"not a database")
-        with self.assertRaises(sqlite3.Error):
-            RuntimeStore(path)
-        self.assertEqual(path.read_bytes(), b"not a database")
+    def test_corrupt_projection_not_replaced(self):
+        with self.store.transaction() as db:
+            db.execute(
+                text("UPDATE investigation_sessions SET status='PAUSED' WHERE session_id=:sid"),
+                {"sid": self.session.session_id},
+            )
+        with self.assertRaises(RuntimeIntegrityError):
+            self.store.get(self.session.session_id)
 
     def test_restart_reads_pending_session(self):
         restarted = create_runtime(self.root)
@@ -99,7 +99,9 @@ class RuntimeTests(unittest.TestCase):
     def test_claim_excludes_second_worker(self):
         claim = self.store.claim("one", self.manager.limits)
         self.assertIsNotNone(claim)
-        self.assertIsNone(RuntimeStore(self.store.path).claim("two", self.manager.limits))
+        self.assertIsNone(
+            RuntimeStore(self.store.database_url).claim("two", self.manager.limits)
+        )
 
     def test_single_worker_across_multiple_sessions(self):
         create_session(self.manager, service="inventory-service")
@@ -139,7 +141,11 @@ class RuntimeTests(unittest.TestCase):
 
     def test_tool_cache_hits_are_separate(self):
         calls = [call(call_id="a"), call(call_id="b")]
-        result = Worker(self.manager, FixtureAgent([response(answer="", calls=calls), response()])).run_once()
+        agent = FixtureAgent(
+            [response(answer="", calls=calls), response()],
+            clock=self.store.clock,
+        )
+        result = Worker(self.manager, agent).run_once()
         self.assertEqual(result.total_tool_executions, 2)
         self.assertEqual(result.cache_hits, 1)
 
@@ -544,11 +550,14 @@ class RuntimeTests(unittest.TestCase):
     def test_checkpoint_retention_bounded(self):
         result = Worker(self.manager, FixtureAgent([response(answer="", calls=[call()]), response()])).run_once()
         with self.store.transaction() as db:
-            count = db.execute("SELECT count(*) FROM investigation_checkpoints WHERE session_id=?", (result.session_id,)).fetchone()[0]
+            count = db.execute(
+                text("SELECT count(*) FROM investigation_checkpoints WHERE session_id=:sid"),
+                {"sid": result.session_id},
+            ).scalar_one()
         self.assertLessEqual(count, self.manager.limits.checkpoints_to_keep)
 
     def test_cli_repeated_command(self):
-        args = ["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+        args = ["--store", self.store.database_url, "--incidents", str(self.root / "incidents.json"),
                 "--remediations", str(self.root / "remediation.json"),
                 "pause", self.session.session_id, "--actor", "local", "--command-id", "cli-id"]
         with redirect_stdout(io.StringIO()):
@@ -557,7 +566,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_cli_missing_session_reports_error(self):
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(cli(["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+            self.assertEqual(cli(["--store", self.store.database_url, "--incidents", str(self.root / "incidents.json"),
                                   "--remediations", str(self.root / "remediation.json"),
                                   "show-session", "missing"]), 2)
 
@@ -744,7 +753,7 @@ class ProcessRecoveryTests(unittest.TestCase):
                 self.assertTrue((Path(directory) / "ready").exists())
                 self.assertIsNone(manager.store.claim("second-process-owner", manager.limits))
                 command = subprocess.run(
-                    [sys.executable, "-B", "runtime_cli.py", "--store", str(manager.store.path),
+                    [sys.executable, "-B", "runtime_cli.py", "--store", manager.store.database_url,
                      "--incidents", str(Path(directory) / "incidents.json"), "send-message", session.session_id,
                      "--actor", "process-operator", "--command-id", "cross-process-message", "--text", "先检查数据库连接情况。"],
                     cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15,

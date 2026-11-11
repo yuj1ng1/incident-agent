@@ -1,13 +1,15 @@
-"""Publication races use real temporary stores and explicit synchronization."""
+"""Publication races use real stores and explicit synchronization."""
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import threading
-import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
+from db import tables
 from investigation.models import RuntimeLimits, SessionStatus as S
 from investigation.state import transition
 from investigation.worker import Worker
@@ -74,23 +76,61 @@ def test_recovery_snapshot_cannot_publish_after_worker_checkpoint(tmp_path):
     assert store.load_checkpoint(store.get(session.session_id))["projected"]
 
 
-@pytest.mark.parametrize("with_claim", [False, True])
-def test_publication_keeps_writer_fencing_until_json_commit(tmp_path, with_claim):
+def test_publication_holds_claim_lock_during_projection(tmp_path):
     manager = create_runtime(tmp_path)
     session = create_session(manager)
     claimed = manager.store.claim("fixture-worker", manager.limits)
     project = manager.incident_store.apply_runtime_projection
+    started, release = threading.Event(), threading.Event()
 
-    def locked_publication(current, checkpoint):
-        # A second real SQLite connection cannot replace the snapshot mid-write.
-        with sqlite3.connect(manager.store.path, timeout=0, isolation_level=None) as other:
-            with pytest.raises(sqlite3.OperationalError, match="locked"):
-                other.execute("BEGIN IMMEDIATE")
+    def blocked(current, checkpoint):
+        started.set()
+        assert release.wait(10)
         return project(current, checkpoint)
 
-    with patch.object(manager.incident_store, "apply_runtime_projection", side_effect=locked_publication):
-        manager.sync_incident(session.session_id, claim=("fixture-worker", claimed.fencing_token) if with_claim else None)
+    claim = ("fixture-worker", claimed.fencing_token)
+    with patch.object(manager.incident_store, "apply_runtime_projection", side_effect=blocked):
+        thread = threading.Thread(
+            target=manager.sync_incident,
+            args=(session.session_id,),
+            kwargs={"claim": claim},
+        )
+        thread.start()
+        try:
+            assert started.wait(10)
+            with pytest.raises(OperationalError):
+                with manager.store.transaction() as db:
+                    db.execute(
+                        select(tables.investigation_sessions)
+                        .where(tables.investigation_sessions.c.session_id == session.session_id)
+                        .with_for_update(nowait=True)
+                    )
+        finally:
+            release.set()
+            thread.join(10)
+    assert not thread.is_alive()
     assert manager.store.load_checkpoint(manager.store.get(session.session_id))["projected"]
+
+
+def test_publication_rejects_concurrent_newer_checkpoint(tmp_path):
+    manager = create_runtime(tmp_path)
+    session = create_session(manager)
+    project = manager.incident_store.apply_runtime_projection
+
+    def concurrent_newer(current, checkpoint):
+        with manager.store.transaction() as db:
+            newer = manager.store.get(session.session_id, db, for_update=True)
+            payload = manager.store.load_checkpoint(newer, db)
+            payload["phase"] = "model_started"
+            manager.store.checkpoint(newer, payload, db)
+            manager.store.save(newer, db)
+        return project(current, checkpoint)
+
+    with patch.object(manager.incident_store, "apply_runtime_projection", side_effect=concurrent_newer):
+        manager.sync_incident(session.session_id)
+    latest = manager.store.get(session.session_id)
+    assert not manager.store.load_checkpoint(latest)["projected"]
+    assert "incident_projection_superseded" in [e["event_type"] for e in manager.store.events(session.session_id)]
 
 
 @pytest.mark.parametrize("missing_result", [{}, {"result": None}], ids=["absent", "null"])
@@ -124,10 +164,18 @@ def test_exhausted_projection_without_result_is_failed_and_idempotent(tmp_path, 
     checkpoint = manager.store.load_checkpoint(current)
     assert checkpoint["projected"] and not checkpoint.get("result")
     assert current.status == S.EXHAUSTED
-    before = (manager.store.path.read_bytes(), manager.incident_store.file_path.read_bytes())
+    before = (
+        manager.store.get(session.session_id).state_version,
+        manager.store.load_checkpoint(manager.store.get(session.session_id)),
+        manager.incident_store.file_path.read_bytes(),
+    )
     manager.recover()
     manager.sync_incident(session.session_id)
-    assert before == (manager.store.path.read_bytes(), manager.incident_store.file_path.read_bytes())
+    assert before == (
+        manager.store.get(session.session_id).state_version,
+        manager.store.load_checkpoint(manager.store.get(session.session_id)),
+        manager.incident_store.file_path.read_bytes(),
+    )
 
 
 def test_expired_claim_exhaustion_projects_without_model_result(tmp_path):
@@ -196,7 +244,7 @@ def test_recovery_exhaustion_freezes_the_saved_result_totals(tmp_path):
     assert unused.executions == []
     view = RuntimeQueries(
         incident_path=manager.incident_store.file_path,
-        runtime_path=manager.store.path,
+        runtime_url=manager.store.database_url,
     ).session(session.session_id)
     assert (
         view.investigation_result.model_rounds,
@@ -270,9 +318,13 @@ def test_legacy_terminal_counts_are_immutable_during_projection(tmp_path, archiv
     )
     assert (record.model_rounds, record.tool_calls) == (3, 4)
     assert all(path.read_bytes() == content for path, content in archives.items())
-    before = (store.path.read_bytes(), manager.incident_store.file_path.read_bytes())
+    before = (
+        store.get(session.session_id).state_version,
+        manager.incident_store.file_path.read_bytes(),
+    )
     manager.recover()
     manager.sync_incident(session.session_id)
     assert before == (
-        store.path.read_bytes(), manager.incident_store.file_path.read_bytes(),
+        store.get(session.session_id).state_version,
+        manager.incident_store.file_path.read_bytes(),
     )

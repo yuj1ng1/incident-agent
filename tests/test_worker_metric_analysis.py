@@ -550,7 +550,7 @@ def test_saved_metric_recovers_after_crash_without_replay_or_fabricated_output(
     payload = json.loads(messages[0]["content"].rsplit("\n", 1)[-1])
     report = payload["metric_analysis"]["reports"][0]
     assert report["source_observation_ids"] == [metric["observation_id"]]
-    reopened = RuntimeStore(restarted.store.path, clock=lambda: clock.now)
+    reopened = RuntimeStore(restarted.store.database_url, clock=lambda: clock.now)
     checkpoint = reopened.load_checkpoint(reopened.get(finished.session_id))
     assert metric in checkpoint["records"]
     assert checkpoint["pending"] == []

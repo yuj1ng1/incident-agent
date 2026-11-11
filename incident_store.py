@@ -66,10 +66,14 @@ class IncidentStore:
 
         self._initialize()
 
-    @locked_update
     def _initialize(self):
-        if not self.file_path.exists():
-            self.save(self.create_empty_data())
+        if self.file_path.exists():
+            return
+        # Take the writer lock only for first creation; concurrent readers and
+        # writers of an existing store must not fail during construction.
+        with FileLock(str(self.file_path) + ".lock"):
+            if not self.file_path.exists():
+                self._write(self.create_empty_data())
 
     def create_empty_data(self):
         return {
@@ -104,6 +108,9 @@ class IncidentStore:
 
     @locked_update
     def save(self,data):
+        self._write(data)
+
+    def _write(self, data):
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -143,7 +150,7 @@ class IncidentStore:
         value = self.load()["incidents"].get(incident_id)
         return self._incident(value, include_history) if value is not None else None
 
-    def list_incidents(self, *, status=None, limit=20, offset=0):
+    def list_incidents(self, *, status=None, service=None, limit=20, offset=0):
         """Bounded newest-first query; archives are never opened by a list view."""
         if not 1 <= limit <= 1000 or offset < 0:
             raise ValueError("incident_pagination_invalid")
@@ -152,7 +159,9 @@ class IncidentStore:
             incident = self._incident(value, include_history=False)
             if incident.incident_id != incident_id:
                 raise ValueError("incident_store_identity_mismatch")
-            if status is None or incident.status == status:
+            if (status is None or incident.status == status) and (
+                service is None or incident.service == service
+            ):
                 incidents.append(incident)
         # The JSON store preserves creation insertion order, including legacy v1.
         return list(reversed(incidents))[offset:offset + limit]
@@ -604,9 +613,8 @@ class IncidentStore:
         with manager.store.read() as db:
             latest = manager.store.latest_session(incident_id, db)
             if command_id:
-                previous = db.execute("SELECT data FROM investigation_commands WHERE command_id=?", (command_id,)).fetchone()
-                if previous:
-                    existing = HumanCommand.model_validate_json(previous[0])
+                existing = manager.store.command(db, command_id)
+                if existing:
                     target = manager.store.get(existing.session_id, db)
                     if target.incident_id != incident_id:
                         raise ValueError("reopen_command_incident_conflict")

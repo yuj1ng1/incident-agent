@@ -1,7 +1,7 @@
 """Present the existing P6.4 offline investigation in a dedicated process.
 
 The model responses and HTTP responses are fixtures. Agent, Worker, tools,
-budgets, checkpoints and SQLite are the existing project implementations.
+budgets, checkpoints and MySQL are the existing project implementations.
 """
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -12,6 +12,9 @@ import json
 from pathlib import Path
 import sys
 from uuid import uuid4
+
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,18 +36,17 @@ def run_demo(output_dir, scenario="multi_round"):
     from investigation.store import RuntimeStore
 
     runtime = json.loads((root / "runtime/report.json").read_text(encoding="utf-8"))
-    store_path = root / "runtime/stores/runtime.sqlite3"
-    store = RuntimeStore(store_path, read_only=True)
+    store = RuntimeStore(read_only=True)
     saved = store.get(report["session"]["session_id"])
     checkpoint = store.load_checkpoint(saved)
     if (
         saved.model_dump(mode="json") != report["session"]
         or checkpoint != report["checkpoint"]
     ):
-        raise ValueError("demo_sqlite_report_mismatch")
+        raise ValueError("demo_mysql_report_mismatch")
     with store.read() as db:
         counts = {
-            table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            table: db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
             for table in (
                 "investigation_sessions",
                 "investigation_checkpoints",
@@ -52,9 +54,7 @@ def run_demo(output_dir, scenario="multi_round"):
                 "human_requests",
             )
         }
-        integrity = db.execute("PRAGMA quick_check").fetchone()[0]
-    if integrity != "ok":
-        raise ValueError("demo_sqlite_integrity_failed")
+    database = make_url(store.database_url).database
 
     manifest = json.loads((root / "sha256.json").read_text(encoding="utf-8"))
     for relative_path, expected in manifest.items():
@@ -71,9 +71,9 @@ def run_demo(output_dir, scenario="multi_round"):
         "session_status": saved.status.value,
         "mock_model_rounds": saved.total_model_requests,
         "tool_executions": saved.total_tool_executions,
-        "sqlite_read_only_reopen_matches": True,
-        "sqlite_quick_check": integrity,
-        "sqlite_counts": counts,
+        "mysql_read_only_reopen_matches": True,
+        "mysql_schema": database,
+        "mysql_counts": counts,
         "original_artifact_hashes_match": True,
         "result_trust": report["result_trust"],
         "real_model_requests": report["real_model_requests"],
@@ -87,7 +87,7 @@ def run_demo(output_dir, scenario="multi_round"):
     lines = [
         "Incident Agent D1 — 离线演示",
         "以下按刚完成的持久化记录展示流程；不是实时逐行跟踪。",
-        "模型选择及回答=脚本化 Mock；HTTP=离线夹具；SQLite/Runtime=实际执行。",
+        "模型选择及回答=脚本化 Mock；HTTP=离线夹具；MySQL/Runtime=实际执行。",
         "夹具中的 0.27、日志、aaaaaaaa… 版本均为合成值，不是现场事实。",
         "\n[1] 输入合成告警（重复观察由现有 Monitor 去重）",
         formatted(runtime["incident"]["alerts"][-1]),
@@ -130,10 +130,9 @@ def run_demo(output_dir, scenario="multi_round"):
                 "actual_network_request",
             )
         } for row in runtime["http_fixtures"]]),
-        "\n[5] 只读重新打开本次 SQLite，核对 Session / Checkpoint 和原件哈希",
-        str(store_path),
+        "\n[5] 只读重新打开本次 MySQL 记录，核对 Session / Checkpoint 和原件哈希",
+        database,
         formatted({
-            "quick_check": integrity,
             "counts": counts,
             "saved_records_match": True,
         }),

@@ -1,263 +1,309 @@
-"""Short SQLite IMMEDIATE transactions, CAS versions and expiring fenced claims."""
+"""MySQL Runtime store: short transactions, row locks and fenced claims."""
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import timedelta, timezone
 import json
-from pathlib import Path
-import sqlite3
 from uuid import uuid4
 
-from investigation.checkpoint import encode, projection_digest
-from investigation.models import Checkpoint, InvestigationSession, SessionStatus as S, utc_now
-from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, StateVersionConflict, TERMINAL, transition
+from sqlalchemy import case, delete, distinct, func, inspect, select, text, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.exc import IntegrityError, OperationalError
 
-DEFAULT_STORE = Path(__file__).resolve().parents[1] / "data" / "runtime.sqlite3"
-SCHEMA_VERSION = 1
+from db import tables
+from db.config import database_url as configured_database_url, get_engine
+from investigation.checkpoint import encode, projection_digest
+from investigation.models import (
+    Checkpoint,
+    HumanCommand,
+    HumanRequest,
+    InvestigationSession,
+    SessionStatus as S,
+    utc_now,
+)
+from investigation.state import (
+    LostClaim,
+    RuntimeErrorBase,
+    RuntimeIntegrityError,
+    StateVersionConflict,
+    TERMINAL,
+    transition,
+)
+
+
+def _load_document(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _utc_naive(value):
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _utc_iso(value):
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc).isoformat()
 
 
 class RuntimeStore:
-    def __init__(self, path=DEFAULT_STORE, clock=utc_now, *, read_only=False):
-        self.path = Path(path)
+    def __init__(self, database_url=None, clock=utc_now, *, read_only=False):
+        self.database_url = database_url or configured_database_url()
+        self.engine = get_engine(self.database_url)
         self.clock = clock
         self.read_only = read_only
-        if read_only:
-            if not self.path.is_file():
-                raise FileNotFoundError("runtime_store_not_found")
-            with self.read() as db:
-                if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                    raise RuntimeIntegrityError("unsupported_runtime_schema")
-                if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                    raise RuntimeIntegrityError("runtime_database_corrupt")
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # A corrupt or newer DB fails closed; never replace it with an empty DB.
-        with self.transaction() as db:
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > SCHEMA_VERSION:
-                raise RuntimeIntegrityError("unsupported_runtime_schema")
-            if version == 0:
-                existing = db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-                if existing:
-                    raise RuntimeIntegrityError("unversioned_runtime_database")
-                statements = [
-                    """CREATE TABLE investigation_sessions (
-                        session_id TEXT PRIMARY KEY, incident_id TEXT NOT NULL,
-                        status TEXT NOT NULL, state_version INTEGER NOT NULL,
-                        data TEXT NOT NULL)""",
-                    """CREATE UNIQUE INDEX one_active_incident ON investigation_sessions(incident_id)
-                        WHERE status NOT IN ('COMPLETED','EXHAUSTED','FAILED','CANCELLED')""",
-                    """CREATE TABLE investigation_checkpoints (
-                        checkpoint_id TEXT PRIMARY KEY,
-                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
-                        created_at TEXT NOT NULL, data TEXT NOT NULL)""",
-                    """CREATE TABLE investigation_commands (
-                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                        command_id TEXT NOT NULL UNIQUE,
-                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
-                        status TEXT NOT NULL, data TEXT NOT NULL)""",
-                    """CREATE TABLE human_messages (
-                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                        command_id TEXT NOT NULL UNIQUE REFERENCES investigation_commands(command_id),
-                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
-                        consumed_at TEXT, data TEXT NOT NULL)""",
-                    """CREATE TABLE human_requests (
-                        request_id TEXT PRIMARY KEY,
-                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
-                        status TEXT NOT NULL, data TEXT NOT NULL)""",
-                    """CREATE UNIQUE INDEX one_pending_request ON human_requests(session_id)
-                        WHERE status='pending'""",
-                    """CREATE TABLE investigation_events (
-                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                        event_id TEXT NOT NULL UNIQUE,
-                        session_id TEXT NOT NULL REFERENCES investigation_sessions(session_id),
-                        event_type TEXT NOT NULL, timestamp TEXT NOT NULL,
-                        actor TEXT NOT NULL, data TEXT NOT NULL)""",
-                    "CREATE TABLE runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-                    "PRAGMA user_version=1",
-                ]
-                for statement in statements:
-                    db.execute(statement)
-            if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise RuntimeIntegrityError("runtime_database_corrupt")
-            # Additive v1 indexes/outboxes: no table/column change or data reset.
-            for statement in (
-                "CREATE INDEX IF NOT EXISTS sessions_incident ON investigation_sessions(incident_id)",
-                "CREATE INDEX IF NOT EXISTS sessions_budget_group ON investigation_sessions(incident_id,json_extract(data,'$.budget_group_id'))",
-                "CREATE INDEX IF NOT EXISTS sessions_status ON investigation_sessions(status)",
-                "CREATE INDEX IF NOT EXISTS commands_pending ON investigation_commands(status,session_id)",
-                "CREATE INDEX IF NOT EXISTS requests_session ON human_requests(session_id,status)",
-                "CREATE INDEX IF NOT EXISTS events_session ON investigation_events(session_id,sequence)",
-            ):
-                db.execute(statement)
-            if not self.metadata(db, "work_outboxes_v1"):
-                # Existing databases are backfilled once. Subsequent ticks query
-                # indexed pending keys instead of opening historical checkpoints.
-                for session in self.list_sessions(db):
-                    checkpoint = self.load_checkpoint(session, db)
-                    if checkpoint.get("projection_blocked"):
-                        self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
-                    elif not checkpoint.get("projected") or (
-                        checkpoint.get("remediation_pending") and not checkpoint.get("remediation_blocked")
-                    ):
-                        self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
-                    if session.status in TERMINAL | {S.WAITING_HUMAN, S.PAUSED}:
-                        self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
-                self.metadata(db, "work_outboxes_v1", True, write=True)
+        try:
+            if not inspect(self.engine).has_table("investigation_sessions"):
+                raise RuntimeIntegrityError("runtime_schema_not_migrated")
+        except OperationalError:
+            raise RuntimeIntegrityError("runtime_database_unavailable") from None
 
     @contextmanager
     def transaction(self):
         if self.read_only:
             raise RuntimeErrorBase("runtime_store_read_only")
-        db = sqlite3.connect(str(self.path), timeout=5, isolation_level=None)
-        db.row_factory = sqlite3.Row
-        try:
-            db.execute("PRAGMA foreign_keys=ON")
-            db.execute("PRAGMA busy_timeout=5000")
-            db.execute("PRAGMA synchronous=FULL")
-            # DELETE journal intentionally avoids Windows WAL handling assumptions.
-            db.execute("BEGIN IMMEDIATE")
+        with self.engine.begin() as db:
             yield db
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
-        finally:
-            db.close()
 
     @contextmanager
     def read(self):
-        """Consistent read-only snapshot; never reserves the SQLite writer lock."""
-        db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
-                             timeout=5, isolation_level=None)
-        db.row_factory = sqlite3.Row
+        """Repeatable-read snapshot; the session default forbids writes."""
+        connection = self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        )
         try:
-            db.execute("PRAGMA query_only=ON")
-            db.execute("BEGIN")
-            yield db
-            db.commit()
+            connection.exec_driver_sql("SET SESSION TRANSACTION READ ONLY")
+            connection.commit()
+            with connection.begin():
+                yield connection
         finally:
-            db.close()
+            if connection.in_transaction():
+                connection.rollback()
+            try:
+                connection.exec_driver_sql("SET SESSION TRANSACTION READ WRITE")
+                connection.commit()
+            finally:
+                connection.close()
 
     @staticmethod
     def _session(row):
-        session = InvestigationSession.model_validate_json(row["data"])
-        if session.state_version != row["state_version"] or session.status.value != row["status"]:
+        session = InvestigationSession.model_validate(_load_document(row["data"]))
+        if (
+            session.session_id != row["session_id"]
+            or session.state_version != row["state_version"]
+            or session.status.value != row["status"]
+        ):
             raise RuntimeIntegrityError("runtime_projection_mismatch")
         return session
 
-    def get(self, session_id, db=None):
+    def _sessions(self, rows):
+        return [self._session(row) for row in rows]
+
+    def _add_work(self, db, kind, session_id):
+        db.execute(
+            mysql_insert(tables.runtime_work)
+            .values(
+                kind=kind,
+                session_id=session_id,
+                created_at=_utc_naive(self.clock()),
+            )
+            .prefix_with("IGNORE")
+        )
+
+    def add_work(self, db, kind, session_id):
+        self._add_work(db, kind, session_id)
+
+    def _remove_work(self, db, kind, session_id):
+        db.execute(
+            delete(tables.runtime_work).where(
+                tables.runtime_work.c.kind == kind,
+                tables.runtime_work.c.session_id == session_id,
+            )
+        )
+
+    def get(self, session_id, db=None, *, for_update=False):
         if db is None:
+            if for_update:
+                raise RuntimeErrorBase("runtime_transaction_required")
             with self.read() as connection:
                 return self.get(session_id, connection)
-        row = db.execute(
-            "SELECT * FROM investigation_sessions WHERE session_id=?", (session_id,)
-        ).fetchone()
+        statement = select(tables.investigation_sessions).where(
+            tables.investigation_sessions.c.session_id == session_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = db.execute(statement).mappings().first()
         if row is None:
             raise RuntimeIntegrityError("session_not_found")
         return self._session(row)
 
-    def list_sessions(self, db=None, *, statuses=None, incident_id=None,
-                      limit=None, offset=0, newest_first=False):
+    def list_sessions(
+        self,
+        db=None,
+        *,
+        statuses=None,
+        incident_id=None,
+        limit=None,
+        offset=0,
+        newest_first=False,
+    ):
         if offset < 0 or (limit is not None and not 1 <= limit <= 1000) or (offset and limit is None):
             raise RuntimeErrorBase("session_pagination_invalid")
         if db is None:
             with self.read() as connection:
-                return self.list_sessions(connection, statuses=statuses, incident_id=incident_id,
-                                          limit=limit, offset=offset, newest_first=newest_first)
-        conditions, values = [], []
+                return self.list_sessions(
+                    connection,
+                    statuses=statuses,
+                    incident_id=incident_id,
+                    limit=limit,
+                    offset=offset,
+                    newest_first=newest_first,
+                )
+        statement = select(tables.investigation_sessions)
         if statuses is not None:
             if not statuses:
                 return []
-            conditions.append("status IN (" + ",".join("?" for _ in statuses) + ")")
-            values.extend(S(status).value for status in statuses)
+            statement = statement.where(
+                tables.investigation_sessions.c.status.in_(
+                    [S(status).value for status in statuses]
+                )
+            )
         if incident_id is not None:
-            conditions.append("incident_id=?")
-            values.append(incident_id)
-        where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        order = " ORDER BY rowid DESC" if newest_first else " ORDER BY rowid"
-        page = " LIMIT ? OFFSET ?" if limit is not None else ""
+            statement = statement.where(
+                tables.investigation_sessions.c.incident_id == incident_id
+            )
+        order = (
+            tables.investigation_sessions.c.created_seq.desc()
+            if newest_first
+            else tables.investigation_sessions.c.created_seq
+        )
+        statement = statement.order_by(order)
         if limit is not None:
-            values.extend((limit, offset))
-        rows = db.execute("SELECT * FROM investigation_sessions" + where + order + page, values)
-        return [self._session(row) for row in rows]
+            statement = statement.limit(limit).offset(offset)
+        return self._sessions(db.execute(statement).mappings())
 
     def latest_session(self, incident_id, db):
-        row = db.execute(
-            "SELECT * FROM investigation_sessions WHERE incident_id=? ORDER BY rowid DESC LIMIT 1",
-            (incident_id,),
-        ).fetchone()
-        return self._session(row) if row else None
+        statement = (
+            select(tables.investigation_sessions)
+            .where(tables.investigation_sessions.c.incident_id == incident_id)
+            .order_by(tables.investigation_sessions.c.created_seq.desc())
+            .limit(1)
+        )
+        row = db.execute(statement).mappings().first()
+        return self._session(row) if row is not None else None
 
     def budget_usage(self, session, db):
-        group = [self._session(row) for row in db.execute(
-            """SELECT * FROM investigation_sessions WHERE incident_id=?
-                AND json_extract(data,'$.budget_group_id') IS ?""",
-            (session.incident_id, session.budget_group_id),
-        )]
+        statement = select(tables.investigation_sessions).where(
+            tables.investigation_sessions.c.incident_id == session.incident_id
+        )
+        if session.budget_group_id is None:
+            statement = statement.where(
+                tables.investigation_sessions.c.budget_group_id.is_(None)
+            )
+        else:
+            statement = statement.where(
+                tables.investigation_sessions.c.budget_group_id
+                == session.budget_group_id
+            )
+        group = self._sessions(db.execute(statement).mappings())
         return {
-            "attempts": sum(s.attempt_count for s in group),
-            "model_requests": sum(s.total_model_requests for s in group),
-            "tool_executions": sum(s.total_tool_executions for s in group),
-            "resumes": sum(s.resume_count for s in group),
-            "human_requests": sum(s.human_request_count for s in group),
-            "started_at": min((s.created_at for s in group), default=session.created_at),
+            "attempts": sum(item.attempt_count for item in group),
+            "model_requests": sum(item.total_model_requests for item in group),
+            "tool_executions": sum(item.total_tool_executions for item in group),
+            "resumes": sum(item.resume_count for item in group),
+            "human_requests": sum(item.human_request_count for item in group),
+            "started_at": min((item.created_at for item in group), default=session.created_at),
         }
 
     def pending_commands(self):
         with self.read() as db:
-            return [row[0] for row in db.execute(
-                "SELECT DISTINCT session_id FROM investigation_commands WHERE status='pending'"
-            )]
+            rows = db.execute(
+                select(distinct(tables.investigation_commands.c.session_id)).where(
+                    tables.investigation_commands.c.status == "pending"
+                )
+            )
+            return [row[0] for row in rows]
 
     def pending_work(self, kind):
         if kind not in {"projection", "notification"}:
             raise RuntimeErrorBase("unknown_pending_work")
-        prefix = "pending_" + kind + ":"
         with self.read() as db:
-            rows = db.execute(
-                """SELECT s.* FROM runtime_metadata m JOIN investigation_sessions s
-                    ON s.session_id=substr(m.key,?) WHERE m.key>=? AND m.key<? ORDER BY s.rowid""",
-                (len(prefix) + 1, prefix, prefix + "\uffff"),
+            statement = (
+                select(tables.investigation_sessions)
+                .join(
+                    tables.runtime_work,
+                    tables.runtime_work.c.session_id
+                    == tables.investigation_sessions.c.session_id,
+                )
+                .where(tables.runtime_work.c.kind == kind)
+                .order_by(tables.investigation_sessions.c.created_seq)
             )
-            return [self._session(row) for row in rows]
+            return self._sessions(db.execute(statement).mappings())
 
     def acknowledge_work(self, db, kind, session_id):
-        db.execute("DELETE FROM runtime_metadata WHERE key=?", ("pending_" + kind + ":" + session_id,))
+        self._remove_work(db, kind, session_id)
 
     def insert(self, session, db):
-        db.execute(
-            "INSERT INTO investigation_sessions VALUES (?,?,?,?,?)",
-            (session.session_id, session.incident_id, session.status.value,
-             session.state_version, session.model_dump_json()),
-        )
+        values = {
+            "session_id": session.session_id,
+            "incident_id": session.incident_id,
+            "status": session.status.value,
+            "state_version": session.state_version,
+            "budget_group_id": session.budget_group_id,
+            "priority": session.priority,
+            "queued_at": _utc_naive(session.queued_at),
+            "lease_until": _utc_naive(session.lease_until),
+            "fencing_token": session.fencing_token,
+            "data": session.model_dump_json(),
+        }
+        try:
+            db.execute(tables.investigation_sessions.insert().values(**values))
+        except IntegrityError as exc:
+            if getattr(exc.orig, "args", [None])[0] == 1062:
+                raise RuntimeIntegrityError("session_insert_conflict") from None
+            raise
         self.event(db, session.session_id, "session_created", "manager")
-        self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
+        self._add_work(db, "projection", session.session_id)
 
     def save(self, session, db):
-        previous = self.get(session.session_id, db)
+        previous = self.get(session.session_id, db, for_update=True)
         previous_version = session.state_version
+        previous_status = previous.status
+        previous_error = previous.last_error_category
         session.updated_at = self.clock()
         session.state_version += 1
         validated = InvestigationSession.model_validate(session.model_dump())
         changed = db.execute(
-            """UPDATE investigation_sessions SET status=?,state_version=?,data=?
-                WHERE session_id=? AND state_version=?""",
-            (validated.status.value, validated.state_version, validated.model_dump_json(),
-             validated.session_id, previous_version),
+            update(tables.investigation_sessions)
+            .where(
+                tables.investigation_sessions.c.session_id == validated.session_id,
+                tables.investigation_sessions.c.state_version == previous_version,
+            )
+            .values(
+                status=validated.status.value,
+                state_version=validated.state_version,
+                budget_group_id=validated.budget_group_id,
+                priority=validated.priority,
+                queued_at=_utc_naive(validated.queued_at),
+                lease_until=_utc_naive(validated.lease_until),
+                fencing_token=validated.fencing_token,
+                data=validated.model_dump_json(),
+            )
         ).rowcount
         if changed != 1:
             raise StateVersionConflict("session_version_conflict")
         visible = TERMINAL | {S.WAITING_HUMAN, S.PAUSED}
-        if session.status in visible and (
-            previous.status != session.status or previous.last_error_category != session.last_error_category
+        if validated.status in visible and (
+            previous_status != validated.status
+            or previous_error != validated.last_error_category
         ):
-            self.metadata(db, "pending_notification:" + session.session_id, True, write=True)
-        elif session.status not in visible:
-            self.acknowledge_work(db, "notification", session.session_id)
+            self._add_work(db, "notification", validated.session_id)
+        elif validated.status not in visible:
+            self._remove_work(db, "notification", validated.session_id)
 
-    def guard(self, db, session_id, owner, fence):
-        session = self.get(session_id, db)
+    def guard(self, db, session_id, owner, fence, *, session=None):
+        session = session or self.get(session_id, db, for_update=True)
         if (
             session.status != S.RUNNING
             or session.owner_token != owner
@@ -270,10 +316,14 @@ class RuntimeStore:
 
     def event(self, db, session_id, event_type, actor="runtime", **metadata):
         db.execute(
-            """INSERT INTO investigation_events
-                (event_id,session_id,event_type,timestamp,actor,data) VALUES (?,?,?,?,?,?)""",
-            ("evt-" + uuid4().hex, session_id, event_type,
-             self.clock().isoformat(), actor, encode(metadata)),
+            tables.investigation_events.insert().values(
+                event_id="evt-" + uuid4().hex,
+                session_id=session_id,
+                event_type=event_type[:80],
+                timestamp=_utc_naive(self.clock()),
+                actor=str(actor),
+                data=encode(metadata),
+            )
         )
 
     def events(self, session_id, limit=100):
@@ -282,10 +332,23 @@ class RuntimeStore:
         with self.read() as db:
             self.get(session_id, db)
             rows = db.execute(
-                """SELECT * FROM investigation_events WHERE session_id=?
-                    ORDER BY sequence DESC LIMIT ?""", (session_id, limit),
-            ).fetchall()
-            return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
+                select(tables.investigation_events)
+                .where(tables.investigation_events.c.session_id == session_id)
+                .order_by(tables.investigation_events.c.sequence.desc())
+                .limit(limit)
+            ).mappings()
+            return [
+                {
+                    "sequence": row["sequence"],
+                    "event_id": row["event_id"],
+                    "session_id": row["session_id"],
+                    "event_type": row["event_type"],
+                    "timestamp": _utc_iso(row["timestamp"]),
+                    "actor": row["actor"],
+                    "data": _load_document(row["data"]),
+                }
+                for row in reversed(list(rows))
+            ]
 
     def checkpoint(self, session, payload, db, keep=4, *, acknowledge=False):
         Checkpoint.model_validate(payload)
@@ -294,8 +357,6 @@ class RuntimeStore:
             and payload.get("result")
             and self.get(session.session_id, db).status not in TERMINAL
         ):
-            # Freeze Session totals after any proposal refresh, in the terminal
-            # transaction. Later projection/ack writes must preserve old results.
             payload["result"].update(
                 model_rounds=session.total_model_requests,
                 tool_calls=session.total_tool_executions,
@@ -308,27 +369,44 @@ class RuntimeStore:
             payload["projection_digest"] = projection_digest(session, payload)
         checkpoint_id = "cp-" + uuid4().hex
         db.execute(
-            "INSERT INTO investigation_checkpoints VALUES (?,?,?,?)",
-            (checkpoint_id, session.session_id, self.clock().isoformat(), encode(payload)),
+            tables.investigation_checkpoints.insert().values(
+                checkpoint_id=checkpoint_id,
+                session_id=session.session_id,
+                created_at=_utc_naive(self.clock()),
+                data=encode(payload),
+            )
         )
         session.checkpoint_id = checkpoint_id
-        self.event(db, session.session_id, "checkpoint_saved", phase=payload.get("phase"),
-                   checkpoint_id=checkpoint_id, observations=[r["observation_id"] for r in payload.get("records", [])])
+        self.event(
+            db,
+            session.session_id,
+            "checkpoint_saved",
+            phase=payload.get("phase"),
+            checkpoint_id=checkpoint_id,
+            observations=[record["observation_id"] for record in payload.get("records", [])],
+        )
         if payload.get("projection_blocked"):
-            self.metadata(db, "blocked_projection:" + session.session_id, True, write=True)
+            self._add_work(db, "blocked_projection", session.session_id)
             self.acknowledge_work(db, "projection", session.session_id)
         elif payload.get("projected") and (
             not payload.get("remediation_pending") or payload.get("remediation_blocked")
         ):
-            db.execute("DELETE FROM runtime_metadata WHERE key=?", ("blocked_projection:" + session.session_id,))
+            self._remove_work(db, "blocked_projection", session.session_id)
             self.acknowledge_work(db, "projection", session.session_id)
         else:
-            self.metadata(db, "pending_projection:" + session.session_id, True, write=True)
+            self._add_work(db, "projection", session.session_id)
         db.execute(
-            """DELETE FROM investigation_checkpoints WHERE session_id=? AND checkpoint_id NOT IN (
-                SELECT checkpoint_id FROM investigation_checkpoints WHERE session_id=?
-                ORDER BY rowid DESC LIMIT ?)""",
-            (session.session_id, session.session_id, keep),
+            text(
+                """DELETE FROM investigation_checkpoints
+                    WHERE session_id=:session_id AND checkpoint_id NOT IN (
+                        SELECT checkpoint_id FROM (
+                            SELECT checkpoint_id FROM investigation_checkpoints
+                            WHERE session_id=:session_id
+                            ORDER BY sequence DESC LIMIT :keep
+                        ) retained
+                    )"""
+            ),
+            {"session_id": session.session_id, "keep": keep},
         )
 
     def load_checkpoint(self, session, db=None):
@@ -344,51 +422,278 @@ class RuntimeStore:
                 "trace": [],
             }
         row = db.execute(
-            "SELECT session_id,data FROM investigation_checkpoints WHERE checkpoint_id=?",
-            (session.checkpoint_id,),
-        ).fetchone()
-        if row is None or row[0] != session.session_id:
+            select(
+                tables.investigation_checkpoints.c.session_id,
+                tables.investigation_checkpoints.c.data,
+            ).where(
+                tables.investigation_checkpoints.c.checkpoint_id
+                == session.checkpoint_id
+            )
+        ).mappings().first()
+        if row is None or row["session_id"] != session.session_id:
             raise RuntimeIntegrityError("checkpoint_missing_or_mismatched")
-        payload = json.loads(row[1])
+        payload = _load_document(row["data"])
         if payload.get("schema_version") != 1:
             raise RuntimeIntegrityError("unsupported_checkpoint_schema")
         Checkpoint.model_validate(payload)
         return payload
 
     def claim(self, owner, limits):
+        # Idle ticks must stay read-only; the transaction below re-checks.
         with self.read() as db:
-            if not db.execute("SELECT 1 FROM investigation_sessions WHERE status='QUEUED' LIMIT 1").fetchone():
+            queued = db.execute(
+                select(tables.investigation_sessions.c.session_id)
+                .where(tables.investigation_sessions.c.status == S.QUEUED.value)
+                .limit(1)
+            ).first()
+            if queued is None:
                 return None
+        now = self.clock()
         with self.transaction() as db:
-            sessions = self.list_sessions(db, statuses={S.RUNNING, S.QUEUED})
-            now = self.clock()
-            # Across all sessions there is at most one unexpired Worker claim.
-            if any(s.status == S.RUNNING and s.lease_until and s.lease_until > now for s in sessions):
+            db.execute(
+                mysql_insert(tables.runtime_coordination)
+                .values(name="worker_claim")
+                .prefix_with("IGNORE")
+            )
+            db.execute(
+                select(tables.runtime_coordination.c.name)
+                .where(tables.runtime_coordination.c.name == "worker_claim")
+                .with_for_update()
+            ).first()
+            running = db.execute(
+                select(tables.investigation_sessions)
+                .where(tables.investigation_sessions.c.status == S.RUNNING.value)
+                .with_for_update()
+            ).mappings()
+            if any(
+                row["lease_until"] is not None
+                and row["lease_until"] > _utc_naive(now)
+                for row in running
+            ):
                 return None
-            candidates = [s for s in sessions if s.status == S.QUEUED]
+            queued_rows = db.execute(
+                select(tables.investigation_sessions)
+                .where(tables.investigation_sessions.c.status == S.QUEUED.value)
+                .order_by(tables.investigation_sessions.c.created_seq)
+                .with_for_update(skip_locked=True)
+            ).mappings().all()
+            candidates = self._sessions(queued_rows)
             if not candidates:
                 return None
-            candidates.sort(key=lambda s: (
-                0 if (now - s.queued_at).total_seconds() >= limits.starvation_seconds else 1,
-                -s.priority if (now - s.queued_at).total_seconds() < limits.starvation_seconds else 0,
-                s.queued_at,
-                s.session_id,
-            ))
+            candidates.sort(
+                key=lambda session: (
+                    0
+                    if (now - session.queued_at).total_seconds()
+                    >= limits.starvation_seconds
+                    else 1,
+                    -session.priority
+                    if (now - session.queued_at).total_seconds()
+                    < limits.starvation_seconds
+                    else 0,
+                    session.queued_at,
+                    session.session_id,
+                )
+            )
             session = candidates[0]
             transition(session, S.RUNNING)
             session.owner_token = owner
             session.fencing_token += 1
             session.lease_until = now + timedelta(seconds=limits.lease_seconds)
             self.save(session, db)
-            self.event(db, session.session_id, "worker_claimed", owner, fence=session.fencing_token)
+            self.event(
+                db,
+                session.session_id,
+                "worker_claimed",
+                owner,
+                fence=session.fencing_token,
+            )
             return session
 
     def metadata(self, db, key, value=None, write=False):
+        if len(key) > 191:
+            raise RuntimeErrorBase("runtime_metadata_key_too_long")
         if write:
+            statement = mysql_insert(tables.runtime_metadata).values(
+                meta_key=key,
+                meta_value=encode(value),
+            )
             db.execute(
-                "INSERT INTO runtime_metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, encode(value)),
+                statement.on_duplicate_key_update(
+                    meta_value=statement.inserted.meta_value
+                )
             )
             return value
-        row = db.execute("SELECT value FROM runtime_metadata WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else None
+        row = db.execute(
+            select(tables.runtime_metadata.c.meta_value).where(
+                tables.runtime_metadata.c.meta_key == key
+            )
+        ).first()
+        return _load_document(row[0]) if row is not None else None
+
+    def command(self, db, command_id, *, for_update=False):
+        statement = select(tables.investigation_commands).where(
+            tables.investigation_commands.c.command_id == command_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = db.execute(statement).mappings().first()
+        if row is None:
+            return None
+        return HumanCommand.model_validate(_load_document(row["data"]))
+
+    def commands(
+        self,
+        db,
+        session_id,
+        *,
+        status=None,
+        for_update=False,
+        cancel_first=False,
+    ):
+        statement = select(tables.investigation_commands).where(
+            tables.investigation_commands.c.session_id == session_id
+        )
+        if status is not None:
+            statement = statement.where(
+                tables.investigation_commands.c.status == status
+            )
+        if cancel_first:
+            statement = statement.order_by(
+                case(
+                    (tables.investigation_commands.c.command_type == "cancel", 0),
+                    else_=1,
+                ),
+                tables.investigation_commands.c.sequence,
+            )
+        else:
+            statement = statement.order_by(tables.investigation_commands.c.sequence)
+        if for_update:
+            statement = statement.with_for_update()
+        return [
+            HumanCommand.model_validate(_load_document(row["data"]))
+            for row in db.execute(statement).mappings()
+        ]
+
+    def command_count(self, db, session_id):
+        return db.execute(
+            select(func.count())
+            .select_from(tables.investigation_commands)
+            .where(tables.investigation_commands.c.session_id == session_id)
+        ).scalar_one()
+
+    def command_text_bytes(self, db, session_id):
+        rows = db.execute(
+            select(tables.investigation_commands.c.data).where(
+                tables.investigation_commands.c.session_id == session_id
+            )
+        ).scalars()
+        total = 0
+        for value in rows:
+            value = _load_document(value)
+            text_value = (value.get("payload") or {}).get("text")
+            if isinstance(text_value, str):
+                total += len(text_value.encode("utf-8"))
+        return total
+
+    def insert_command(self, db, command):
+        db.execute(
+            tables.investigation_commands.insert().values(
+                command_id=command.command_id,
+                session_id=command.session_id,
+                status=command.processing_status,
+                command_type=command.command_type,
+                created_at=_utc_naive(self.clock()),
+                data=command.model_dump_json(),
+            )
+        )
+
+    def update_command(self, db, command):
+        db.execute(
+            update(tables.investigation_commands)
+            .where(tables.investigation_commands.c.command_id == command.command_id)
+            .values(
+                status=command.processing_status,
+                data=command.model_dump_json(),
+            )
+        )
+
+    def requests(self, db=None, session_id=None, *, for_update=False):
+        if db is None:
+            with self.read() as connection:
+                return self.requests(connection, session_id, for_update=for_update)
+        statement = select(tables.human_requests)
+        if session_id is not None:
+            statement = statement.where(
+                tables.human_requests.c.session_id == session_id
+            )
+        statement = statement.order_by(tables.human_requests.c.created_seq)
+        if for_update:
+            statement = statement.with_for_update()
+        values = []
+        for row in db.execute(statement).mappings():
+            values.append(HumanRequest.model_validate(_load_document(row["data"])))
+        return values
+
+    def put_request(self, db, request):
+        db.execute(
+            update(tables.human_requests)
+            .where(tables.human_requests.c.request_id == request.request_id)
+            .values(
+                status=request.status,
+                data=request.model_dump_json(),
+            )
+        )
+
+    def insert_request(self, db, request):
+        try:
+            db.execute(
+                tables.human_requests.insert().values(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    status=request.status,
+                    expires_at=_utc_naive(request.expires_at),
+                    data=request.model_dump_json(),
+                )
+            )
+        except IntegrityError as exc:
+            if getattr(exc.orig, "args", [None])[0] == 1062:
+                raise RuntimeIntegrityError("human_request_conflict") from None
+            raise
+
+    def human_messages(self, db, session_id, *, unconsumed=False, for_update=False):
+        statement = select(tables.human_messages).where(
+            tables.human_messages.c.session_id == session_id
+        )
+        if unconsumed:
+            statement = statement.where(
+                tables.human_messages.c.consumed_at.is_(None)
+            )
+        statement = statement.order_by(tables.human_messages.c.sequence)
+        if for_update:
+            statement = statement.with_for_update()
+        return [
+            {
+                "sequence": row["sequence"],
+                "command_id": row["command_id"],
+                "session_id": row["session_id"],
+                "consumed_at": _utc_iso(row["consumed_at"]),
+                "data": _load_document(row["data"]),
+            }
+            for row in db.execute(statement).mappings()
+        ]
+
+    def insert_human_message(self, db, command_id, session_id, payload):
+        db.execute(
+            tables.human_messages.insert().values(
+                command_id=command_id,
+                session_id=session_id,
+                data=encode(payload),
+            )
+        )
+
+    def consume_message(self, db, command_id):
+        db.execute(
+            update(tables.human_messages)
+            .where(tables.human_messages.c.command_id == command_id)
+            .values(consumed_at=_utc_naive(self.clock()))
+        )

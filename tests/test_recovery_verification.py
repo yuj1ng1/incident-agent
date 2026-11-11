@@ -18,6 +18,7 @@ import requests
 
 from alert_parser import AlertSnapshot
 from fingerprint import generate_alert_fingerprint
+from mysql_support import runtime_database_url
 from incident_factory import create_incident_from_alert
 from incident_store import IncidentStore
 from models.incident import AlertEvent, Evidence, Incident
@@ -799,13 +800,13 @@ def test_historical_data_remains_readable(env, legacy):
     env.transport.assert_not_called()
 
 
-def test_probe_runs_outside_file_and_sqlite_locks(env):
+def test_probe_runs_outside_file_and_database_locks(env):
     from investigation.store import RuntimeStore
-    runtime = RuntimeStore(env.path / "runtime.sqlite3")
+    runtime = RuntimeStore(runtime_database_url(env.path))
     incident = seed(env)
 
     def prove_lock_free(*args, **kwargs):
-        # Another store instance and a real SQLite writer can operate during HTTP.
+        # Another store instance and a real database writer can operate during HTTP.
         other = IncidentStore(env.store.file_path, clock=env.clock)
         data = other.load()
         other.save(data)

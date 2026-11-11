@@ -149,6 +149,7 @@ def run_case(
     root,
     scenario="offline_ok",
     *,
+    database_url=None,
     observations=None,
     alert_snapshot=None,
     alert_source=None,
@@ -203,6 +204,37 @@ def run_case(
         forbidden_attempts.append("forbidden_network_sdk_database_or_process")
         raise BoundaryViolation("p61_external_io_forbidden")
 
+    import socket
+    from sqlalchemy.engine import make_url
+
+    database = make_url(os.environ["INCIDENT_AGENT_DATABASE_URL"])
+    database_host = database.host or "127.0.0.1"
+    database_port = database.port or 3306
+
+    def database_address(address):
+        return (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[0] in {database_host, "localhost", "127.0.0.1", "::1"}
+            and address[1] == database_port
+        )
+
+    def allowed_socket(original):
+        def guarded(*args, **kwargs):
+            address = args[0] if args else kwargs.get("address")
+            if not database_address(address) and len(args) > 1:
+                address = args[1]
+            if database_address(address):
+                return original(*args, **kwargs)
+            return forbidden()
+
+        return guarded
+
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_create_connection = socket.create_connection
+    original_getaddrinfo = socket.getaddrinfo
+
     with ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, {
             "INCIDENT_AGENT_LOG_PATH": str(root / "agent.log"),
@@ -217,10 +249,17 @@ def run_case(
         stack.enter_context(patch.object(case_logger, "handlers", [log_handler]))
         stack.enter_context(patch.object(case_logger, "propagate", False))
         # Install guards before importing application modules or creating stores.
-        stack.enter_context(patch("socket.socket.connect", forbidden))
-        stack.enter_context(patch("socket.socket.connect_ex", forbidden))
-        stack.enter_context(patch("socket.create_connection", forbidden))
-        stack.enter_context(patch("socket.getaddrinfo", forbidden))
+        stack.enter_context(patch("socket.socket.connect", allowed_socket(original_connect)))
+        stack.enter_context(patch("socket.socket.connect_ex", allowed_socket(original_connect_ex)))
+        stack.enter_context(patch("socket.create_connection", allowed_socket(original_create_connection)))
+        stack.enter_context(patch(
+            "socket.getaddrinfo",
+            lambda host, port, *args, **kwargs: (
+                original_getaddrinfo(host, port, *args, **kwargs)
+                if host in {database_host, "localhost", "127.0.0.1", "::1"} and port == database_port
+                else forbidden()
+            ),
+        ))
         stack.enter_context(patch("requests.sessions.Session.request", forbidden))
         stack.enter_context(patch("openai.OpenAI", forbidden))
         stack.enter_context(patch("openai.AsyncOpenAI", forbidden))
@@ -449,7 +488,7 @@ def run_case(
         stores = root / "stores"
         stores.mkdir()
         manager = InvestigationManager(
-            RuntimeStore(stores / "runtime.sqlite3"),
+            RuntimeStore(database_url),
             IncidentStore(stores / "incidents.json"),
         )
         sdk = Mock(name="P61MockSdk")
@@ -531,7 +570,7 @@ def run_case(
         assert incident.recovery_verification is None
         if supplied_alerts is None:
             assert incident.alerts[-1].starts_at is None
-        reopened = RuntimeStore(manager.store.path, read_only=True)
+        reopened = RuntimeStore(database_url, read_only=True)
         assert reopened.get(saved.session_id) == saved
         assert reopened.load_checkpoint(saved) == checkpoint
         events = reopened.events(saved.session_id, limit=1000)
@@ -604,10 +643,15 @@ def run_case(
             ),
         }
         _write_json(root / "report.json", report)
+        _write_json(root / "runtime-database.json", {
+            "database": make_url(manager.store.database_url).database,
+            "session_id": saved.session_id,
+            "checkpoint_id": saved.checkpoint_id,
+        })
         manifest = {}
         for path in (
             root / "report.json",
-            manager.store.path,
+            root / "runtime-database.json",
             manager.incident_store.file_path,
         ):
             path = Path(path)

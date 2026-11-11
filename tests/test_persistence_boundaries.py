@@ -5,7 +5,6 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -14,9 +13,12 @@ import time
 import unittest
 from unittest.mock import patch
 
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
 from investigation.models import HumanCommand, SessionStatus as S
 from investigation.scheduler import Scheduler
-from investigation.state import LostClaim, RuntimeErrorBase
+from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError
 from investigation.worker import Worker
 from models.investigation import InvestigationRecord
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
@@ -131,18 +133,22 @@ class PersistenceBoundaryTests(unittest.TestCase):
                 self.store.save(stale, db)
             self.assertNotIsInstance(error.exception, LostClaim)
 
-    def test_corrupt_database_stops_scheduler_without_replacing_bytes(self):
-        self.store.path.write_bytes(b"isolated corrupt sqlite")
-        before = self.store.path.read_bytes()
+    def test_corrupt_projection_stops_scheduler_without_replacing_data(self):
+        with self.store.transaction() as db:
+            db.execute(
+                text("UPDATE investigation_sessions SET status='PAUSED' WHERE session_id=:sid"),
+                {"sid": self.session.session_id},
+            )
         scheduler = Scheduler(Worker(self.manager, FixtureAgent()))
         scheduler.run()
         self.assertTrue(scheduler.stop_requested.is_set())
-        self.assertEqual(self.store.path.read_bytes(), before)
+        with self.assertRaises(RuntimeIntegrityError):
+            self.store.get(self.session.session_id)
 
     def test_corruption_during_run_is_not_saved_as_investigation_failure(self):
         worker = Worker(self.manager, FixtureAgent())
-        with patch.object(worker, "_run", side_effect=sqlite3.DatabaseError("isolated corruption")):
-            with self.assertRaises(sqlite3.DatabaseError):
+        with patch.object(worker, "_run", side_effect=SQLAlchemyError("isolated corruption")):
+            with self.assertRaises(SQLAlchemyError):
                 worker.run_once()
         self.assertEqual(self.saved()[0].status, S.RUNNING)
         self.assertFalse(any(e["event_type"] == "investigation_failed"
@@ -323,10 +329,12 @@ class PersistenceBoundaryTests(unittest.TestCase):
         self.assertEqual(incident.investigation_suspended_reason, "non_retryable_failure_requires_human_reopen")
 
     def test_real_database_corruption_during_model_response_stops_scheduler(self):
-        corrupted = b"database corrupted at isolated response boundary"
-
         def corrupt(*args, **kwargs):
-            self.store.path.write_bytes(corrupted)
+            with self.store.transaction() as db:
+                db.execute(
+                    text("UPDATE investigation_sessions SET status='PAUSED' WHERE session_id=:sid"),
+                    {"sid": self.session.session_id},
+                )
             return response()
 
         agent = FixtureAgent()
@@ -334,13 +342,17 @@ class PersistenceBoundaryTests(unittest.TestCase):
         scheduler = Scheduler(Worker(self.manager, agent))
         scheduler.run()
         self.assertTrue(scheduler.stop_requested.is_set())
-        self.assertEqual(self.store.path.read_bytes(), corrupted)
+        with self.assertRaises(RuntimeIntegrityError):
+            self.store.get(self.session.session_id)
         self.assertEqual(agent.request_durable_response.call_count, 1)
 
     def test_persisted_state_version_mismatch_still_stops_scheduler(self):
         with self.store.transaction() as db:
-            db.execute("UPDATE investigation_sessions SET state_version=state_version+1 WHERE session_id=?",
-                       (self.session.session_id,))
+            db.execute(
+                text("UPDATE investigation_sessions SET state_version=state_version+1 "
+                     "WHERE session_id=:sid"),
+                {"sid": self.session.session_id},
+            )
         scheduler = Scheduler(Worker(self.manager, FixtureAgent()))
         scheduler.run()
         self.assertTrue(scheduler.stop_requested.is_set())

@@ -15,6 +15,7 @@ from investigation.manager import InvestigationManager
 from investigation.models import RuntimeLimits
 from investigation.store import RuntimeStore
 from models.incident import Alert
+from mysql_support import runtime_database_url
 
 SHA = "a" * 40
 
@@ -88,7 +89,10 @@ class FixtureAgent(Agent):
 def create_runtime(root, clock=None, limits=None):
     root = Path(root)
     incidents = IncidentStore(root / "incidents.json")
-    store = RuntimeStore(root / "runtime.sqlite3", **({"clock": clock} if clock else {}))
+    store = RuntimeStore(
+        runtime_database_url(root),
+        **({"clock": clock} if clock else {}),
+    )
     manager = InvestigationManager(store, incidents, limits=limits or RuntimeLimits())
     return manager
 

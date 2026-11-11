@@ -157,7 +157,7 @@ def main():
         def runtime(case, prompt=agent_prompt):
             directory = output_dir / case
             store = IncidentStore(directory / "incidents.json")
-            manager = InvestigationManager(RuntimeStore(directory / "runtime.sqlite3"), store,
+            manager = InvestigationManager(RuntimeStore(), store,
                                            RemediationPlanner(RemediationStore(directory / "remediation.json")))
             agent = Agent(client, prompt)
             monitor = IncidentMonitor(prometheus, store, 30, manager)

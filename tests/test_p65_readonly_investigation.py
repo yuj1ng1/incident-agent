@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from mysql_support import runtime_database_url
 from scripts import p65_readonly_investigation as p65
 from scripts.p65_model_boundary import (
     BASE_URL, BoundedResponses, MAX_MODELS, MODEL, TASK, encoded,
@@ -110,7 +111,7 @@ def test_three_rounds_send_actual_committed_outputs_and_preserve_trust(prepared,
     from investigation.checkpoint import valid_chain
     from investigation.store import RuntimeStore
 
-    reopened = RuntimeStore(tmp_path / "run/runtime.sqlite3", read_only=True)
+    reopened = RuntimeStore(read_only=True)
     saved = reopened.get(report["session"]["session_id"])
     assert reopened.load_checkpoint(saved) == report["checkpoint"]
     boundaries = json.loads((tmp_path / "run/worker-boundaries.json").read_bytes())

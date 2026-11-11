@@ -1,4 +1,4 @@
-"""Prepare P6.5 offline; --execute requires NEW, separately recorded approval.
+﻿"""Prepare P6.5 offline; --execute requires NEW, separately recorded approval.
 
 Run synchronously in a dedicated process. Temporary process-wide guards and
 tool function replacements follow the P6.1/P6.4 isolation convention.
@@ -314,6 +314,37 @@ def run_prepared(
         forbidden_attempts.append("external_io_or_remediation")
         raise BoundaryViolation("p65_external_io_forbidden")
 
+    import socket
+    from sqlalchemy.engine import make_url
+
+    database = make_url(os.environ["INCIDENT_AGENT_DATABASE_URL"])
+    database_host = database.host or "127.0.0.1"
+    database_port = database.port or 3306
+
+    def database_address(address):
+        return (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[0] in {database_host, "localhost", "127.0.0.1", "::1"}
+            and address[1] == database_port
+        )
+
+    def allowed_socket(original):
+        def guarded(*args, **kwargs):
+            address = args[0] if args else kwargs.get("address")
+            if not database_address(address) and len(args) > 1:
+                address = args[1]
+            if database_address(address):
+                return original(*args, **kwargs)
+            return forbidden()
+
+        return guarded
+
+    original_create_connection = socket.create_connection
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_getaddrinfo = socket.getaddrinfo
+
     try:
         key = ""
         if live:
@@ -363,28 +394,52 @@ def run_prepared(
                 stack.enter_context(patch(target, forbidden))
             if not live:
                 for target in (
-                    "socket.socket.connect", "socket.socket.connect_ex",
-                    "socket.create_connection", "socket.getaddrinfo",
-                    "socket.socket.sendto", "openai.OpenAI", "openai.AsyncOpenAI",
+                    "requests.get", "requests.sessions.Session.request", "psycopg.connect",
+                    "subprocess.Popen", "threading.Thread.start",
+                    "remediation.executor.ActionExecutor.execute",
+                    "recovery.worker.RecoveryWorker.start",
                 ):
+                    stack.enter_context(patch(target, forbidden))
+                stack.enter_context(patch("socket.socket.connect", allowed_socket(original_connect)))
+                stack.enter_context(patch("socket.socket.connect_ex", allowed_socket(original_connect_ex)))
+                stack.enter_context(patch("socket.create_connection", allowed_socket(original_create_connection)))
+                stack.enter_context(patch(
+                    "socket.getaddrinfo",
+                    lambda host, port, *args, **kwargs: (
+                        original_getaddrinfo(host, port, *args, **kwargs)
+                        if host in {database_host, "localhost", "127.0.0.1", "::1"} and port == database_port
+                        else forbidden()
+                    ),
+                ))
+                for target in ("socket.socket.sendto", "openai.OpenAI", "openai.AsyncOpenAI"):
                     stack.enter_context(patch(target, forbidden))
             else:
                 # Network opens only while the fixed-endpoint SDK operation is
-                # entered. Tool/Runtime I/O stays blocked even in paid mode.
-                import socket
-
-                for obj, name in (
-                    (socket.socket, "connect"), (socket.socket, "connect_ex"),
-                    (socket, "create_connection"), (socket, "getaddrinfo"),
+                # entered, or for the configured local database dependency.
+                for obj, name, original in (
+                    (socket.socket, "connect", original_connect),
+                    (socket.socket, "connect_ex", original_connect_ex),
+                    (socket, "create_connection", original_create_connection),
                 ):
-                    original = getattr(obj, name)
-
                     def guarded(*args, _original=original, **kwargs):
+                        address = args[0] if args else kwargs.get("address")
+                        if not database_address(address) and len(args) > 1:
+                            address = args[1]
+                        if database_address(address):
+                            return _original(*args, **kwargs)
                         if adapter is None or not adapter.in_sdk:
                             return forbidden()
                         return _original(*args, **kwargs)
 
                     stack.enter_context(patch.object(obj, name, guarded))
+                stack.enter_context(patch.object(
+                    socket, "getaddrinfo",
+                    lambda host, port, *args, _original=original_getaddrinfo, **kwargs: (
+                        _original(host, port, *args, **kwargs)
+                        if host in {database_host, "localhost", "127.0.0.1", "::1"} and port == database_port
+                        else (forbidden() if adapter is None or not adapter.in_sdk else _original(host, port, *args, **kwargs))
+                    ),
+                ))
                 stack.enter_context(patch("socket.socket.sendto", forbidden))
             from agent.agent import Agent
             from fingerprint import generate_alert_fingerprint
@@ -431,7 +486,7 @@ def run_prepared(
                 max_human_requests=0, model_timeout_seconds=TIMEOUT,
             )
             manager = InvestigationManager(
-                RuntimeStore(root / "runtime.sqlite3"),
+                RuntimeStore(),
                 IncidentStore(root / "incidents.json"), limits=limits,
             )
             # Synthetic event only bootstraps Runtime; it asserts no live firing.

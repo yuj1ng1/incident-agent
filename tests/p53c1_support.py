@@ -203,7 +203,7 @@ def finish_and_reopen(
     for item in function_items(checkpoint.get("history", [])):
         if item["type"] == "function_call":
             assert item == original_calls[item["call_id"]]
-    restarted = RuntimeStore(run.manager.store.path, read_only=True)
+    restarted = RuntimeStore(run.manager.store.database_url, read_only=True)
     assert restarted.get(run.session_id) == saved
     assert restarted.load_checkpoint(restarted.get(run.session_id)) == checkpoint
     view = InvestigationManager(
@@ -214,7 +214,7 @@ def finish_and_reopen(
     assert view["investigation_result"] == checkpoint["result"]
     api = RuntimeQueries(
         incident_path=run.root / "incidents.json",
-        runtime_path=restarted.path,
+        runtime_url=restarted.database_url,
     ).session(run.session_id)
     assert (
         api.investigation_result.model_rounds,

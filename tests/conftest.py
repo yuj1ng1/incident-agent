@@ -6,6 +6,8 @@ import tempfile
 from functools import wraps
 
 import pytest
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 
 _logs = tempfile.TemporaryDirectory(prefix="incident-agent-pytest-logs-")
@@ -15,14 +17,14 @@ os.environ["INCIDENT_AGENT_LOG_PATH"] = str(Path(_logs.name) / "agent.log")
 
 @pytest.fixture(autouse=True)
 def protect_operator_stores(monkeypatch):
-    """An omitted path must fail before opening any real project runtime data."""
+    """An omitted or real path must fail before opening operator data."""
     from incident_store import IncidentStore
-    from investigation.store import DEFAULT_STORE, RuntimeStore
-    from remediation.store import DEFAULT_STORE as REMEDIATION_STORE, RemediationStore
+    from investigation.store import RuntimeStore
+    from remediation.store import RemediationStore
 
     protected = Path(__file__).resolve().parents[1] / "data"
 
-    def guard_constructor(store_class, default_path=None):
+    def guard_path_constructor(store_class, default_path=None):
         original = store_class.__init__
 
         @wraps(original)
@@ -34,9 +36,61 @@ def protect_operator_stores(monkeypatch):
 
         monkeypatch.setattr(store_class, "__init__", isolated)
 
-    guard_constructor(IncidentStore)
-    guard_constructor(RuntimeStore, DEFAULT_STORE)
-    guard_constructor(RemediationStore, REMEDIATION_STORE)
+    guard_path_constructor(IncidentStore)
+    guard_path_constructor(RemediationStore)
+
+    original = RuntimeStore.__init__
+
+    @wraps(original)
+    def isolated(self, database_url=None, *args, **kwargs):
+        resolved = database_url or os.environ.get("INCIDENT_AGENT_DATABASE_URL")
+        if not resolved:
+            raise AssertionError("tests_require_isolated_mysql_url")
+        try:
+            database = make_url(str(resolved)).database or ""
+        except ArgumentError:
+            raise AssertionError("tests_must_pass_mysql_url_not_a_path") from None
+        if not database.startswith("ia_test_"):
+            raise AssertionError("tests_must_use_isolated_mysql_schema")
+        return original(self, database_url, *args, **kwargs)
+
+    monkeypatch.setattr(RuntimeStore, "__init__", isolated)
+
+
+@pytest.fixture(autouse=True)
+def release_test_database_connections():
+    """Each test owns a schema URL; do not keep one pool per historical URL."""
+    yield
+    from db.config import dispose_engines
+
+    dispose_engines()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolated_default_database(tmp_path_factory):
+    """Entry points using the default URL must still target an isolated schema."""
+    from mysql_support import TEST_DATABASE_URL_ENV, runtime_database_url
+
+    if not os.environ.get(TEST_DATABASE_URL_ENV):
+        yield
+        return
+    previous = os.environ.get("INCIDENT_AGENT_DATABASE_URL")
+    os.environ["INCIDENT_AGENT_DATABASE_URL"] = runtime_database_url(
+        tmp_path_factory.mktemp("default-store")
+    )
+    yield
+    if previous is None:
+        os.environ.pop("INCIDENT_AGENT_DATABASE_URL", None)
+    else:
+        os.environ["INCIDENT_AGENT_DATABASE_URL"] = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_test_databases(isolated_default_database):
+    yield
+    from mysql_support import drop_test_databases
+
+    drop_test_databases()
 
 
 def pytest_unconfigure(config):

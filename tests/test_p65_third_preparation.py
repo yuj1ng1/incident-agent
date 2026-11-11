@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from mysql_support import runtime_database_url
 from scripts import p65_readonly_investigation as p65
 from scripts.p65_model_boundary import encoded, sha, validate_approval
 from tests.test_p65_dynamic_budget import SECOND_SOURCE, second_frozen
@@ -178,7 +179,7 @@ def test_sealed_second_response_reaches_zero_tool_followup_with_committed_pairs(
     first = json.loads((root / "request-01.json").read_bytes())
     assert first["body"] == frozen
     assert first["sha256"] == plan["first_request_sha256"]
-    reopened = RuntimeStore(root / "runtime.sqlite3", read_only=True)
+    reopened = RuntimeStore(read_only=True)
     saved = reopened.get(report["session"]["session_id"])
     assert reopened.load_checkpoint(saved) == report["checkpoint"]
     assert "[Mock" in (root / "answer-original.txt").read_text(encoding="utf-8")

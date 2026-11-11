@@ -1,4 +1,4 @@
-"""Real CLI/SQLite process with an isolated Prometheus response fixture."""
+"""Real CLI/MySQL process with an isolated Prometheus response fixture."""
 import json
 from pathlib import Path
 import sys
@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from clients.prometheus_client import PrometheusClient
+from mysql_support import runtime_database_url
 from runtime_cli import main
 
 
@@ -21,7 +22,7 @@ if __name__ == "__main__":
     snapshot = json.loads((directory / "live-alert-fixture.json").read_text(encoding="utf-8"))
     with patch.object(PrometheusClient, "get_alerts", return_value=snapshot):
         raise SystemExit(main([
-            "--store", str(directory / "runtime.sqlite3"),
+            "--store", runtime_database_url(directory),
             "--incidents", str(directory / "incidents.json"),
             "--remediations", str(directory / "remediation.json"),
             "reopen", session_id, "--actor", "process-operator", "--reason", "configuration corrected",

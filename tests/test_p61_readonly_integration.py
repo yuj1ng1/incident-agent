@@ -5,6 +5,7 @@ import logging
 
 import pytest
 
+from mysql_support import runtime_database_url
 from scripts.p61_readonly_integration import run_case
 
 
@@ -15,7 +16,8 @@ def records(report, name):
 @pytest.fixture
 def run(tmp_path):
     def invoke(scenario="offline_ok"):
-        return run_case(tmp_path / scenario, scenario)
+        root = tmp_path / scenario
+        return run_case(root, scenario, database_url=runtime_database_url(root))
 
     return invoke
 
@@ -176,7 +178,8 @@ def test_captured_replay_preserves_original_times_and_recent_scope(tmp_path):
 
 
 def test_missing_captured_source_does_not_fall_back_to_mock_provider(tmp_path):
-    report = run_case(tmp_path / "missing", observations={})
+    root = tmp_path / "missing"
+    report = run_case(root, observations={}, database_url=runtime_database_url(root))
     assert len(report["checkpoint"]["records"]) == 4
     assert all(item["result"]["reason"] == "observation_not_collected"
                for item in report["checkpoint"]["records"])
@@ -194,7 +197,7 @@ def test_existing_application_log_handler_is_preserved(tmp_path, monkeypatch):
     handler = logging.FileHandler(operator_log, encoding="utf-8")
     try:
         monkeypatch.setattr(logger, "handlers", [handler])
-        run_case(tmp_path / "isolated")
+        run_case(tmp_path / "isolated", database_url=runtime_database_url(tmp_path / "isolated"))
         assert logger.handlers == [handler]
     finally:
         handler.close()
@@ -211,7 +214,7 @@ def test_root_log_handler_is_isolated_and_propagation_restored(tmp_path, monkeyp
     try:
         monkeypatch.setattr(root_logger, "handlers", [handler])
         monkeypatch.setattr(agent_logger, "propagate", True)
-        run_case(tmp_path / "isolated-root")
+        run_case(tmp_path / "isolated-root", database_url=runtime_database_url(tmp_path / "isolated-root"))
         assert agent_logger.propagate is True
         assert root_logger.handlers == [handler]
     finally:

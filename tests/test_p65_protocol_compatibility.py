@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
+from mysql_support import runtime_database_url
 from scripts import p65_readonly_investigation as p65
 from scripts.p65_model_boundary import (
     BoundedResponses, encoded, validate_response_schema,
@@ -282,7 +283,7 @@ def test_actual_first_response_uses_original_worker_budget_and_protocol(tmp_path
     assert "captured_result" not in log_result and "logs" not in log_result
     assert len([b for b in boundaries if b["phase"] == "tool_after_io"]) == 4
     assert len([e for e in report["events"] if e["event_type"] == "tool_reserved"]) == 4
-    reopened = RuntimeStore(root / "runtime.sqlite3", read_only=True)
+    reopened = RuntimeStore(read_only=True)
     saved = reopened.get(report["session"]["session_id"])
     assert reopened.load_checkpoint(saved) == report["checkpoint"]
     assert read_frozen(DEFAULT_SOURCE) == frozen

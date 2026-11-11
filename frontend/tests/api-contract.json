@@ -6,6 +6,9 @@
     "/api/incidents/{incident_id}": {
       "$ref": "#/components/schemas/IncidentDetail"
     },
+    "/api/incidents/{incident_id}/signals": {
+      "$ref": "#/components/schemas/IncidentSignals"
+    },
     "/api/operator": {
       "$ref": "#/components/schemas/OperatorView"
     },
@@ -895,6 +898,39 @@
       "title": "IncidentPage",
       "type": "object"
     },
+    "IncidentSignals": {
+      "additionalProperties": false,
+      "properties": {
+        "logs": {
+          "$ref": "#/components/schemas/LogSignal"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/components/schemas/MetricSignal"
+          },
+          "maxItems": 4,
+          "title": "Metrics",
+          "type": "array"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/SignalWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "window",
+        "metrics",
+        "logs"
+      ],
+      "title": "IncidentSignals",
+      "type": "object"
+    },
     "IncidentSummary": {
       "additionalProperties": false,
       "properties": {
@@ -1123,6 +1159,141 @@
       ],
       "title": "InvestigationStatus",
       "type": "string"
+    },
+    "LogSample": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "title": "Line",
+          "type": "string"
+        },
+        "timestamp": {
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp",
+        "line"
+      ],
+      "title": "LogSample",
+      "type": "object"
+    },
+    "LogSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/components/schemas/LogSample"
+          },
+          "maxItems": 50,
+          "title": "Entries",
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "no_data",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "entries",
+        "truncated"
+      ],
+      "title": "LogSignal",
+      "type": "object"
+    },
+    "MetricSample": {
+      "additionalProperties": false,
+      "properties": {
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "evaluated_at",
+        "value"
+      ],
+      "title": "MetricSample",
+      "type": "object"
+    },
+    "MetricSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "enum": [
+            "http_5xx_rate",
+            "http_latency_p95_seconds",
+            "process_cpu_cores",
+            "process_resident_memory_bytes"
+          ],
+          "title": "Metric",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/components/schemas/MetricSample"
+          },
+          "maxItems": 120,
+          "title": "Samples",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "no_data",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric",
+        "status",
+        "reason",
+        "samples"
+      ],
+      "title": "MetricSignal",
+      "type": "object"
     },
     "OperatorView": {
       "additionalProperties": false,
@@ -2361,6 +2532,32 @@
       "title": "SessionSummary",
       "type": "object"
     },
+    "SignalWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "step_seconds": {
+          "title": "Step Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "step_seconds"
+      ],
+      "title": "SignalWindow",
+      "type": "object"
+    },
     "VerificationCheckView": {
       "additionalProperties": false,
       "properties": {
@@ -2531,6 +2728,11 @@
       "exclude_unset": false
     },
     "/api/incidents/{incident_id}": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/incidents/{incident_id}/signals": {
       "exclude_defaults": false,
       "exclude_none": false,
       "exclude_unset": false

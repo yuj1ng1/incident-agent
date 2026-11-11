@@ -19,6 +19,51 @@ class Health(PublicModel):
     read_only: bool = True
 
 
+SignalStatus = Literal["ok", "no_data", "error"]
+SignalMetric = Literal[
+    "http_5xx_rate",
+    "http_latency_p95_seconds",
+    "process_cpu_cores",
+    "process_resident_memory_bytes",
+]
+
+
+class SignalWindow(PublicModel):
+    start: datetime
+    end: datetime
+    step_seconds: int
+
+
+class MetricSample(PublicModel):
+    evaluated_at: datetime
+    value: float
+
+
+class MetricSignal(PublicModel):
+    metric: SignalMetric
+    status: SignalStatus
+    reason: str | None
+    samples: list[MetricSample] = Field(max_length=120)
+
+
+class LogSample(PublicModel):
+    timestamp: str
+    line: str
+
+
+class LogSignal(PublicModel):
+    status: SignalStatus
+    reason: str | None
+    entries: list[LogSample] = Field(max_length=50)
+    truncated: bool
+
+
+class IncidentSignals(PublicModel):
+    window: SignalWindow | None
+    metrics: list[MetricSignal] = Field(max_length=4)
+    logs: LogSignal
+
+
 class OperatorView(PublicModel):
     actor: str
     permissions: list[Literal["request", "approve", "execute"]]

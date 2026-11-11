@@ -1,9 +1,9 @@
 """One background Worker leaves monitoring free while a session waits for humans."""
 import logging
 import threading
-import sqlite3
 
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from investigation.checkpoint import protect
 from investigation.models import InvestigationSession, SessionStatus as S
@@ -107,7 +107,7 @@ class Scheduler:
             except LostClaim:
                 logging.getLogger(__name__).warning("Runtime claim lost; continuing with durable state")
                 result = None
-            except (sqlite3.DatabaseError, RuntimeErrorBase, ValidationError, ValueError) as exc:
+            except (SQLAlchemyError, RuntimeErrorBase, ValidationError, ValueError) as exc:
                 logging.getLogger(__name__).error("Runtime stopped; store consistency failure category=%s", type(exc).__name__)
                 self.stop_requested.set()
                 break

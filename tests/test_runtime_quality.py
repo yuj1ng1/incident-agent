@@ -1,10 +1,9 @@
 """Quality regressions through the durable Runtime; no model/network charges."""
-from contextlib import closing, contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -12,6 +11,9 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from agent.agent import Agent
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
@@ -305,8 +307,8 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertTrue(self.saved()[1]["projected"])
 
     def test_store_corruption_is_not_isolated_as_projection_failure(self):
-        with patch.object(self.store, "list_sessions", side_effect=sqlite3.DatabaseError("corrupt")):
-            with self.assertRaises(sqlite3.DatabaseError):
+        with patch.object(self.store, "list_sessions", side_effect=SQLAlchemyError("corrupt")):
+            with self.assertRaises(SQLAlchemyError):
                 Worker(self.manager, FixtureAgent()).run_once()
 
     def test_projection_does_not_acknowledge_a_concurrently_saved_checkpoint(self):
@@ -479,7 +481,7 @@ class RuntimeQualityTests(unittest.TestCase):
             scheduler.tick()
         self.assertIn("[Investigation Completed]", output.getvalue())
 
-    def test_terminal_io_has_no_sqlite_transaction(self):
+    def test_terminal_io_has_no_write_transaction(self):
         scheduler = Scheduler(Worker(self.manager, FixtureAgent()))
         original = self.store.transaction
         depth = 0
@@ -495,9 +497,8 @@ class RuntimeQualityTests(unittest.TestCase):
         def display(*args, **kwargs):
             self.assertEqual(depth, 0)
             # An independent connection can write while stdout is executing.
-            with closing(sqlite3.connect(self.store.path, timeout=0.1)) as db:
-                with db:
-                    db.execute("UPDATE runtime_metadata SET value=value")
+            with self.store.transaction() as db:
+                db.execute(text("UPDATE runtime_metadata SET meta_value=meta_value"))
         with patch.object(self.store, "transaction", track), patch("builtins.print", side_effect=display):
             scheduler.tick()
 
@@ -510,7 +511,7 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertIn("[Human Input Required]", output.getvalue())
         self.assertIn(self.manager.requests()[0].request_id, output.getvalue())
         self.assertIn("最近是否改过数据库配置？", output.getvalue())
-        args = ["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+        args = ["--store", self.store.database_url, "--incidents", str(self.root / "incidents.json"),
                 "--remediations", str(self.root / "remediation.json"), "show-session", waiting.session_id]
         output = io.StringIO()
         with redirect_stdout(output):
@@ -541,7 +542,7 @@ class RuntimeQualityTests(unittest.TestCase):
         agent.request_durable_response.assert_not_called()
         output = io.StringIO()
         with redirect_stdout(output):
-            self.assertEqual(cli(["--store", str(self.store.path), "--incidents", str(self.root / "incidents.json"),
+            self.assertEqual(cli(["--store", self.store.database_url, "--incidents", str(self.root / "incidents.json"),
                                   "--remediations", str(self.root / "remediation.json"), "unblock-model", "--actor", "operator"]), 0)
         result = Worker(self.manager, agent).run_once()
         self.assertEqual(result.session_id, second.session_id)

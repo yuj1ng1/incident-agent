@@ -724,7 +724,7 @@ def test_failed_request_audit_survives_checkpoint_without_changing_budget_or_cac
     assert prometheus.get.call_count == (3 if attempted else 0)
     assert manager.store.get(session.session_id).total_tool_executions == 1
     assert not fresh(aligned_record(result), NOW)
-    reopened = RuntimeStore(manager.store.path, clock=lambda: NOW)
+    reopened = RuntimeStore(manager.store.database_url, clock=lambda: NOW)
     restored = reopened.load_checkpoint(reopened.get(session.session_id))
     assert restored["schema_version"] == 1
     assert restored["records"][0]["result"] == result
@@ -845,7 +845,7 @@ def test_full_checkpoint_cache_and_bounded_model_context(
     assert checkpoint["schema_version"] == 1
     assert list(records[0]["result"]["results"]) == NAMES
     assert all("promql" in item for item in records[0]["result"]["results"].values())
-    reopened = RuntimeStore(manager.store.path, clock=lambda: store_time.now)
+    reopened = RuntimeStore(manager.store.database_url, clock=lambda: store_time.now)
     restored = reopened.load_checkpoint(reopened.get(completed.session_id))
     assert restored["records"] == checkpoint["records"]
     context = agent.request_durable_response.call_args_list[-1].args[0][0]["content"]

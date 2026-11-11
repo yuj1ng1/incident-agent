@@ -6,13 +6,15 @@ import io
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
+
+from sqlalchemy import event as sa_event, text
+from sqlalchemy.exc import OperationalError
 
 from incident_store import IncidentStore
 from investigation.manager import live_alert_for_incident
@@ -23,6 +25,7 @@ from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence
 from models.investigation import InvestigationRecord
+from mysql_support import runtime_database_url
 from reinvestigation import should_reinvestigate
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
 
@@ -381,7 +384,7 @@ class HistoryRetentionTests(unittest.TestCase):
         incident = self.history()
         self.store.save_incident(incident.fingerprint, incident)
         child = subprocess.run([
-            sys.executable, "-B", str(ROOT / "runtime_cli.py"), "--store", str(self.root / "runtime.sqlite3"),
+            sys.executable, "-B", str(ROOT / "runtime_cli.py"), "--store", runtime_database_url(self.root),
             "--incidents", str(self.store.file_path), "--remediations", str(self.root / "remediation.json"),
             "show-incident", incident.incident_id,
         ], cwd=self.root, capture_output=True, text=True, encoding="utf-8", timeout=30)
@@ -495,12 +498,18 @@ class HistoryRetentionTests(unittest.TestCase):
         self.manager.limits.checkpoints_to_keep = 1
         agent = FixtureAgent([response(answer="", calls=[call(call_id="metric")]), response(answer="persisted final")])
         completed = Worker(self.manager, agent).run_once()
-        reopened = RuntimeStore(self.manager.store.path, clock=lambda: self.now)
+        reopened = RuntimeStore(self.manager.store.database_url, clock=lambda: self.now)
         payload = reopened.load_checkpoint(reopened.get(completed.session_id))
         self.assertEqual({r["name"] for r in payload["records"]}, {"get_running_version", "query_metrics"})
         self.assertEqual(payload["result"]["answer"], "persisted final")
         with reopened.read() as db:
-            self.assertEqual(db.execute("SELECT count(*) FROM investigation_checkpoints WHERE session_id=?", (completed.session_id,)).fetchone()[0], 1)
+            self.assertEqual(
+                db.execute(
+                    text("SELECT count(*) FROM investigation_checkpoints WHERE session_id=:sid"),
+                    {"sid": completed.session_id},
+                ).scalar_one(),
+                1,
+            )
         events = reopened.events(completed.session_id, 1000)
         self.assertTrue(all(e["data"].get("checkpoint_id") for e in events if e["event_type"] == "checkpoint_saved"))
         refs = {e.observation_id for e in self.store.get_incident(completed.incident_id).evidence}
@@ -541,7 +550,7 @@ class RuntimeWorkTests(unittest.TestCase):
                 views = []
                 for child in children:
                     output, errors = child.communicate(timeout=30)
-                    self.assertEqual(child.returncode, 0, errors)
+                    self.assertEqual(child.returncode, 0, f"{errors}\n{output}")
                     views.append(json.loads(output))
                 self.assertEqual({v["command_id"] for v in views}, {"same-reopen-command"})
                 command = manager.get_command("same-reopen-command")
@@ -552,7 +561,10 @@ class RuntimeWorkTests(unittest.TestCase):
                 self.assertEqual(len(grants), 1)
                 self.assertEqual(grants[0]["actor"], "process-operator")
                 with manager.store.read() as db:
-                    self.assertEqual(db.execute("SELECT count(*) FROM investigation_commands").fetchone()[0], 1)
+                    self.assertEqual(
+                        db.execute(text("SELECT count(*) FROM investigation_commands")).scalar_one(),
+                        1,
+                    )
             finally:
                 (root / "release-reopen").write_text("release")
                 for child in children:
@@ -595,35 +607,39 @@ class RuntimeWorkTests(unittest.TestCase):
                 self.assertEqual(hydrated.call_count, 3)
         self.assertEqual(measured, [(0, 3, 0), (0, 3, 0)])
 
-    def test_read_queries_use_one_select_without_n_plus_one_or_writer_lock(self):
+    def test_read_queries_use_one_select_without_writer_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = create_runtime(directory)
             session = create_session(manager)
             statements = []
-            with manager.store.read() as db:
-                db.set_trace_callback(statements.append)
-                sessions = manager.store.list_sessions(db)
-                self.assertEqual([s.session_id for s in sessions], [session.session_id])
-                other = sqlite3.connect(manager.store.path, timeout=0.1, isolation_level=None)
-                try:
-                    other.execute("BEGIN IMMEDIATE")  # Reads have no RESERVED writer lock.
-                    other.rollback()
-                finally:
-                    other.close()
-                with self.assertRaises(sqlite3.OperationalError):
-                    db.execute("UPDATE runtime_metadata SET value=value")
-            self.assertEqual(len([s for s in statements if s.startswith("SELECT")]), 1)
 
-    def test_pending_projection_and_command_survive_restart_and_outbox_backfill(self):
+            def record(connection, cursor, statement, parameters, context, executemany):
+                statements.append(statement)
+
+            sa_event.listen(manager.store.engine, "before_cursor_execute", record)
+            try:
+                with manager.store.read() as db:
+                    sessions = manager.store.list_sessions(db)
+                    self.assertEqual([s.session_id for s in sessions], [session.session_id])
+                    with manager.store.transaction() as writer:
+                        writer.execute(text("UPDATE runtime_metadata SET meta_value=meta_value"))
+                    with self.assertRaises(OperationalError):
+                        db.execute(text("UPDATE runtime_metadata SET meta_value=meta_value"))
+            finally:
+                sa_event.remove(manager.store.engine, "before_cursor_execute", record)
+            self.assertEqual(
+                len([s for s in statements if s.lstrip().upper().startswith("SELECT")]),
+                1,
+            )
+
+    def test_pending_command_survives_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = create_runtime(directory)
             session = create_session(manager)
             manager.submit(HumanCommand(session_id=session.session_id, actor="operator", command_type="pause"))
             with manager.store.transaction() as db:
                 command = HumanCommand(session_id=session.session_id, actor="operator", command_type="message", payload={"text": "pending durable clue"})
-                db.execute("INSERT INTO investigation_commands(command_id,session_id,status,data) VALUES (?,?,?,?)",
-                           (command.command_id, session.session_id, "pending", command.model_dump_json()))
-                db.execute("DELETE FROM runtime_metadata WHERE key='work_outboxes_v1' OR key LIKE 'pending_projection:%' OR key LIKE 'pending_notification:%'")
+                manager.store.insert_command(db, command)
             restarted = create_runtime(directory)
             restarted.recover()
             self.assertEqual(restarted.get_command(command.command_id).processing_status, "applied")
@@ -631,8 +647,6 @@ class RuntimeWorkTests(unittest.TestCase):
             self.assertEqual(view["human_messages"][0]["text"], "pending durable clue")
             self.assertEqual(view["session"]["status"], "PAUSED")
             self.assertEqual(restarted.store.pending_work("projection"), [])
-            with restarted.store.read() as db:
-                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
             self.assertEqual(len(restarted.store.pending_work("notification")), 1)
 
 

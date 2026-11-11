@@ -81,7 +81,7 @@ def _plan(scenario):
     return responses
 
 
-def run_case(output_dir, scenario="multi_round"):
+def run_case(output_dir, scenario="multi_round", *, database_url=None):
     """Keep every original bootstrap artifact and add independent P6.4 records."""
     if scenario not in SCENARIOS:
         raise ValueError("unknown_p64_scenario")
@@ -95,6 +95,37 @@ def run_case(output_dir, scenario="multi_round"):
         forbidden_attempts.append("network_model_database_or_process")
         raise bootstrap.BoundaryViolation("p64_external_io_forbidden")
 
+    import socket
+    from sqlalchemy.engine import make_url
+
+    database = make_url(os.environ["INCIDENT_AGENT_DATABASE_URL"])
+    database_host = database.host or "127.0.0.1"
+    database_port = database.port or 3306
+
+    def database_address(address):
+        return (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[0] in {database_host, "localhost", "127.0.0.1", "::1"}
+            and address[1] == database_port
+        )
+
+    def allowed_socket(original):
+        def guarded(*args, **kwargs):
+            address = args[0] if args else kwargs.get("address")
+            if not database_address(address) and len(args) > 1:
+                address = args[1]
+            if database_address(address):
+                return original(*args, **kwargs)
+            return forbidden()
+
+        return guarded
+
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_create_connection = socket.create_connection
+    original_getaddrinfo = socket.getaddrinfo
+
     with ExitStack() as stack:
         # Protect imports too. The reused bootstrap supplies its own log/HTTP
         # fixtures inside these outer transport and process boundaries.
@@ -104,9 +135,18 @@ def run_case(output_dir, scenario="multi_round"):
         case_logger = logging.getLogger("agent")
         stack.enter_context(patch.object(case_logger, "handlers", []))
         stack.enter_context(patch.object(case_logger, "propagate", False))
+        stack.enter_context(patch("socket.socket.connect", allowed_socket(original_connect)))
+        stack.enter_context(patch("socket.socket.connect_ex", allowed_socket(original_connect_ex)))
+        stack.enter_context(patch("socket.create_connection", allowed_socket(original_create_connection)))
+        stack.enter_context(patch(
+            "socket.getaddrinfo",
+            lambda host, port, *args, **kwargs: (
+                original_getaddrinfo(host, port, *args, **kwargs)
+                if host in {database_host, "localhost", "127.0.0.1", "::1"} and port == database_port
+                else forbidden()
+            ),
+        ))
         for target in (
-            "socket.socket.connect", "socket.socket.connect_ex",
-            "socket.create_connection", "socket.getaddrinfo",
             "socket.socket.sendto", "requests.sessions.Session.request",
             "requests.get", "openai.OpenAI", "openai.AsyncOpenAI",
             "psycopg.connect", "subprocess.Popen", "threading.Thread.start",
@@ -199,6 +239,7 @@ def run_case(output_dir, scenario="multi_round"):
         runtime = bootstrap.run_case(
             root / "runtime",
             "metrics_no_data" if scenario == "no_data" else "offline_ok",
+            database_url=database_url,
         )
         from investigation.result_trust import project_result_trust
 

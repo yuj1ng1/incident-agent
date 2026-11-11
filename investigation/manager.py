@@ -6,10 +6,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from config import ALERT_POLL_INTERVAL_SECONDS, RUNTIME_LIMITS
-from investigation.checkpoint import encode, protect
+from investigation.checkpoint import protect
 from investigation.result_trust import project_result_trust
 from investigation.models import HumanCommand, HumanInputArguments, HumanRequest, InvestigationSession, RuntimeLimits, SessionStatus as S
-from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, TERMINAL, budget_exhaustion, exhausted, transition
+from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, StateVersionConflict, TERMINAL, budget_exhaustion, exhausted, transition
 from incident_store import RuntimeProjectionResult
 from reinvestigation import reinvestigation_reason, utc_timestamp
 from storage_lock import FileLockError
@@ -139,32 +139,25 @@ class InvestigationManager:
             raise RuntimeErrorBase("invalid_command_payload")
         command.payload = protect(payload)
         with self.store.transaction() as db:
-            self.store.get(command.session_id, db)
-            old = db.execute(
-                "SELECT data FROM investigation_commands WHERE command_id=?", (command.command_id,)
-            ).fetchone()
+            self.store.get(command.session_id, db, for_update=True)
+            old = self.store.command(db, command.command_id, for_update=True)
             if old:
-                existing = HumanCommand.model_validate_json(old[0])
+                existing = old
                 fields = ("session_id", "actor", "command_type", "payload", "expected_version")
                 if any(getattr(existing, f) != getattr(command, f) for f in fields):
                     raise RuntimeErrorBase("command_id_conflict")
                 return existing
-            count = db.execute(
-                "SELECT count(*) FROM investigation_commands WHERE session_id=?", (command.session_id,)
-            ).fetchone()[0]
+            count = self.store.command_count(db, command.session_id)
             if count >= 100:
                 raise RuntimeErrorBase("session_command_limit")
             if command.command_type in {"message", "answer"}:
-                texts = db.execute(
-                    "SELECT json_extract(data,'$.payload.text') FROM investigation_commands WHERE session_id=?",
-                    (command.session_id,),
-                ).fetchall()
-                if sum(len((r[0] or "").encode("utf-8")) for r in texts) + len(command.payload["text"].encode("utf-8")) > 64000:
+                if (
+                    self.store.command_text_bytes(db, command.session_id)
+                    + len(command.payload["text"].encode("utf-8"))
+                    > 64000
+                ):
                     raise RuntimeErrorBase("human_context_size_limit")
-            db.execute(
-                "INSERT INTO investigation_commands (command_id,session_id,status,data) VALUES (?,?,?,?)",
-                (command.command_id, command.session_id, "pending", command.model_dump_json()),
-            )
+            self.store.insert_command(db, command)
             self.store.event(db, command.session_id, command.command_type + "_requested", command.actor,
                              command_id=command.command_id)
         # Persist first, then process non-running sessions. Running Worker delivers at safe points.
@@ -176,31 +169,23 @@ class InvestigationManager:
 
     def get_command(self, command_id):
         with self.store.read() as db:
-            row = db.execute(
-                "SELECT data FROM investigation_commands WHERE command_id=?", (command_id,)
-            ).fetchone()
-            if not row:
+            command = self.store.command(db, command_id)
+            if command is None:
                 raise RuntimeErrorBase("command_not_found")
-            return HumanCommand.model_validate_json(row[0])
+            return command
 
     def _requests(self, db, session_id):
-        rows = db.execute("SELECT data FROM human_requests WHERE session_id=? ORDER BY rowid", (session_id,))
-        return [HumanRequest.model_validate_json(row[0]) for row in rows]
+        return self.store.requests(db, session_id)
 
-    @staticmethod
-    def _put_request(db, request):
-        db.execute(
-            "UPDATE human_requests SET status=?,data=? WHERE request_id=?",
-            (request.status, request.model_dump_json(), request.request_id),
-        )
+    def _put_request(self, db, request):
+        self.store.put_request(db, request)
 
     def requests(self, session_id=None):
         with self.store.read() as db:
             if session_id:
                 self.store.get(session_id, db)
                 return self._requests(db, session_id)
-            return [HumanRequest.model_validate_json(r[0]) for r in
-                    db.execute("SELECT data FROM human_requests ORDER BY rowid")]
+            return self.store.requests(db)
 
     def unblock_model(self, actor):
         """Explicit local operator action; cancellation never implies authentication recovery."""
@@ -228,32 +213,26 @@ class InvestigationManager:
     def process_commands(self, session_id, claim=None, payload=None):
         with self.store.read() as db:
             session = self.store.get(session_id, db)
-            pending = db.execute(
-                "SELECT data FROM investigation_commands WHERE session_id=? AND status='pending'", (session_id,)
-            ).fetchall()
+            pending = self.store.commands(db, session_id, status="pending")
         if claim is None and (session.status == S.RUNNING or not pending):
             return session, False
         verified = {}
-        for row in pending:
-            command = HumanCommand.model_validate_json(row[0])
+        for command in pending:
             if command.command_type == "reopen":
                 verified[command.command_id] = self._verify_reopen(session)
         with self.store.transaction() as db:
-            session = self.store.get(session_id, db)
+            session = self.store.get(session_id, db, for_update=True)
             if session.status == S.RUNNING:
                 if claim is None:
                     return session, False
-                session = self.store.guard(db, session_id, *claim)
+                session = self.store.guard(db, session_id, *claim, session=session)
             checkpoint = payload if payload is not None else self.store.load_checkpoint(session, db)
-            rows = db.execute(
-                """SELECT data FROM investigation_commands WHERE session_id=? AND status='pending'
-                    ORDER BY CASE WHEN json_extract(data,'$.command_type')='cancel' THEN 0 ELSE 1 END, sequence""",
-                (session_id,),
-            ).fetchall()
+            rows = self.store.commands(
+                db, session_id, status="pending", for_update=True, cancel_first=True,
+            )
             changed = False
             context_changed = False
-            for row in rows:
-                command = HumanCommand.model_validate_json(row[0])
+            for command in rows:
                 try:
                     if command.expected_version is not None and command.expected_version != session.state_version:
                         raise RuntimeErrorBase("command_state_version_conflict")
@@ -279,15 +258,17 @@ class InvestigationManager:
                             self._put_request(db, request)
                             self.store.event(db, session_id, "human_request_answered", command.actor,
                                              request_id=request.request_id)
-                        db.execute(
-                            "INSERT INTO human_messages (command_id,session_id,data) VALUES (?,?,?)",
-                            (command.command_id, session_id, encode({
+                        self.store.insert_human_message(
+                            db,
+                            command.command_id,
+                            session_id,
+                            {
                                 "actor": command.actor,
                                 "text": command.payload["text"],
                                 "request_id": command.payload.get("request_id"),
                                 "command_id": command.command_id,
                                 "kind": "human_provided_unverified_context",
-                            })),
+                            },
                         )
                         self.store.event(db, session_id, "human_message_received", command.actor,
                                          command_id=command.command_id)
@@ -318,22 +299,17 @@ class InvestigationManager:
                     command.processing_status = "rejected"
                     command.result = str(exc)
                 command.processed_at = self.store.clock()
-                db.execute(
-                    "UPDATE investigation_commands SET status=?,data=? WHERE command_id=?",
-                    (command.processing_status, command.model_dump_json(), command.command_id),
-                )
+                self.store.update_command(db, command)
                 self.store.event(db, session_id, "command_processed", command.actor,
                                  command_id=command.command_id, result=command.result,
                                  status=command.processing_status)
             if claim is not None and session.status == S.RUNNING:
-                messages = db.execute(
-                    """SELECT command_id,data FROM human_messages WHERE session_id=?
-                        AND consumed_at IS NULL ORDER BY sequence""", (session_id,),
-                ).fetchall()
+                messages = self.store.human_messages(
+                    db, session_id, unconsumed=True, for_update=True,
+                )
                 for message in messages:
-                    checkpoint.setdefault("messages", []).append(json.loads(message["data"]))
-                    db.execute("UPDATE human_messages SET consumed_at=? WHERE command_id=?",
-                               (self.store.clock().isoformat(), message["command_id"]))
+                    checkpoint.setdefault("messages", []).append(message["data"])
+                    self.store.consume_message(db, message["command_id"])
                     self.store.event(db, session_id, "human_message_applied",
                                      command_id=message["command_id"])
                     context_changed = changed = True
@@ -364,7 +340,7 @@ class InvestigationManager:
             return session, context_changed
 
     def _verify_reopen(self, session):
-        """External verification precedes the short SQLite write transaction."""
+        """External verification precedes the short database write transaction."""
         incident = self.incident_store.get_incident(session.incident_id, include_history=False)
         if incident is None or incident.status == "resolved" or incident.alert_state != "firing":
             return "incident_not_active"
@@ -456,8 +432,7 @@ class InvestigationManager:
                 created_at=self.store.clock(),
                 expires_at=self.store.clock() + timedelta(seconds=self.limits.human_timeout_seconds),
             )
-            db.execute("INSERT INTO human_requests VALUES (?,?,?,?)",
-                       (request.request_id, session_id, "pending", request.model_dump_json()))
+            self.store.insert_request(db, request)
             session.human_request_count += 1
             transition(session, S.WAITING_HUMAN)
             session.owner_token = None
@@ -685,27 +660,29 @@ class InvestigationManager:
             checkpoint["projected"] = True
         # A concurrent Worker may have saved a newer checkpoint during file I/O.
         # Acknowledge only the snapshot actually projected; newer work stays pending.
-        with self.store.transaction() as db:
-            latest = self.store.get(session_id, db)
-            if latest.state_version != session.state_version:
+        try:
+            with self.store.transaction() as db:
+                latest = self.store.get(session_id, db)
+                if latest.state_version != session.state_version:
+                    self.store.event(db, session_id, "incident_projection_superseded")
+                    return
+                self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep, acknowledge=True)
+                self.store.save(session, db)
+                for name, metadata in events:
+                    self.store.event(db, session_id, name, **metadata)
+                    if name in {"incident_projection_blocked", "remediation_projection_failed",
+                                "remediation_attention_required", "remediation_projection_recovered"}:
+                        self.store.add_work(db, "notification", session_id)
+        except StateVersionConflict:
+            with self.store.transaction() as db:
                 self.store.event(db, session_id, "incident_projection_superseded")
-                return
-            self.store.checkpoint(session, checkpoint, db, self.limits.checkpoints_to_keep, acknowledge=True)
-            self.store.save(session, db)
-            for name, metadata in events:
-                self.store.event(db, session_id, name, **metadata)
-                if name in {"incident_projection_blocked", "remediation_projection_failed",
-                            "remediation_attention_required", "remediation_projection_recovered"}:
-                    self.store.metadata(db, "pending_notification:" + session_id, True, write=True)
 
     def workflow(self, session_id, include_remediations=True):
         with self.store.read() as db:
             session = self.store.get(session_id, db)
             checkpoint = self.store.load_checkpoint(session, db)
             requests = self._requests(db, session_id)
-            messages = db.execute(
-                "SELECT data,consumed_at FROM human_messages WHERE session_id=? ORDER BY sequence", (session_id,)
-            ).fetchall()
+            messages = self.store.human_messages(db, session_id)
             usage = self.store.budget_usage(session, db)
             usage["started_at"] = usage["started_at"].isoformat()
             refusal = self.store.metadata(db, "reinvestigation_refusal:" + session.incident_id)
@@ -743,7 +720,7 @@ class InvestigationManager:
             "remediation_blocked_reason": checkpoint.get("remediation_blocked_reason"),
             "remediation_store_error_category": remediation_store_error,
             "human_requests": [r.model_dump(mode="json") for r in requests],
-            "human_messages": [json.loads(r["data"]) | {"consumed_at": r["consumed_at"]} for r in messages],
+            "human_messages": [r["data"] | {"consumed_at": r["consumed_at"]} for r in messages],
             "checkpoint_summary": {
                 "phase": checkpoint["phase"],
                 "budget": checkpoint.get("budget", {}),

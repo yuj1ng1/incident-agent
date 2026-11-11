@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from mysql_support import runtime_database_url
+
 ROOT = Path(__file__).resolve().parents[1]
 LOG_TEMP = tempfile.TemporaryDirectory(prefix="incident-agent-regression-log-")
 REAL_FILE_HANDLER = logging.FileHandler
@@ -247,7 +249,7 @@ class IncidentRegressionTests(unittest.TestCase):
                     patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}), \
                     patch("dotenv.load_dotenv") as load_environment, \
                     patch("incident_store.IncidentStore", side_effect=lambda path: IncidentStore(self.work / "assembly-incidents.json")) as incident_factory, \
-                    patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(self.work / "assembly.sqlite3")), \
+                    patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(runtime_database_url(self.work))), \
                     patch("remediation.store.RemediationStore", side_effect=lambda: RemediationStore(self.work / "assembly-remediations.json")), \
                     patch("monitor.incident_monitor.IncidentMonitor", side_effect=IncidentMonitor) as monitor_factory, \
                     patch("investigation.scheduler.Scheduler", side_effect=Scheduler) as scheduler_factory, \
@@ -263,7 +265,7 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertIsInstance(manager.incident_store, IncidentStore)
             incident_factory.assert_called_once_with(ROOT / "data" / "incidents.json")
             self.assertEqual(manager.incident_store.file_path, self.work / "assembly-incidents.json")
-            self.assertEqual(manager.store.path, self.work / "assembly.sqlite3")
+            self.assertEqual(manager.store.database_url, runtime_database_url(self.work))
             self.assertEqual(worker.agent.model_client.client.max_retries, 0)
             self.assertTrue(worker.agent.model_client.client.is_closed())
             start.assert_called_once()

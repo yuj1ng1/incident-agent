@@ -936,7 +936,6 @@ def test_completed_incident_is_readable_in_a_fresh_python_process(investigation)
     script = """
 import json
 from pathlib import Path
-import socket
 import sys
 import requests
 
@@ -944,26 +943,27 @@ def forbidden(*args, **kwargs):
     raise AssertionError("child_external_network_forbidden")
 
 requests.sessions.Session.request = forbidden
-socket.socket.connect = forbidden
-socket.create_connection = forbidden
+sys.path.insert(0, str(Path.cwd() / "tests"))
 
 from incident_store import IncidentStore
 from investigation.manager import InvestigationManager
 from investigation.store import RuntimeStore
+from mysql_support import allow_isolated_mysql_sockets, runtime_database_url
 
 root = Path(sys.argv[1])
-store = RuntimeStore(root / "runtime.sqlite3", read_only=True)
-session = store.get(sys.argv[2])
-checkpoint = store.load_checkpoint(session)
-incidents = IncidentStore(root / "incidents.json")
-manager = InvestigationManager(store, incidents)
-incident = incidents.get_incident(session.incident_id)
-print(json.dumps({
-    "session": session.model_dump(mode="json"),
-    "checkpoint": checkpoint,
-    "result": manager.workflow(session.session_id)["investigation_result"],
-    "answers": [item.answer for item in incident.investigations],
-}, ensure_ascii=False))
+with allow_isolated_mysql_sockets(forbidden):
+    store = RuntimeStore(runtime_database_url(root), read_only=True)
+    session = store.get(sys.argv[2])
+    checkpoint = store.load_checkpoint(session)
+    incidents = IncidentStore(root / "incidents.json")
+    manager = InvestigationManager(store, incidents)
+    incident = incidents.get_incident(session.incident_id)
+    print(json.dumps({
+        "session": session.model_dump(mode="json"),
+        "checkpoint": checkpoint,
+        "result": manager.workflow(session.session_id)["investigation_result"],
+        "answers": [item.answer for item in incident.investigations],
+    }, ensure_ascii=False))
 """
     child = subprocess.run(
         [sys.executable, "-B", "-c", script, str(run.root), run.session_id],

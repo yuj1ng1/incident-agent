@@ -12,22 +12,24 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import socket
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import requests
+from sqlalchemy import select
 
 from agent.agent import Agent
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
+from db.tables import investigation_checkpoints
 from investigation.checkpoint import MAX_CHECKPOINT_BYTES, encode, valid_chain
 from investigation.evidence_policy import effective_records
 from investigation.models import Checkpoint, SessionStatus
 from investigation.state import RuntimeErrorBase
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
+from mysql_support import allow_isolated_mysql_sockets
 from prompts.agent_prompt import agent_prompt
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
 from test_metric_analysis import COLLECTED, history
@@ -65,24 +67,22 @@ def function_items(messages):
 def checkpoint_measurement(manager, session_id):
     saved = manager.store.get(session_id)
     with manager.store.read() as db:
-        text = db.execute(
-            "SELECT data FROM investigation_checkpoints WHERE checkpoint_id=?",
-            (saved.checkpoint_id,),
-        ).fetchone()[0]
-        retained = db.execute(
-            "SELECT COUNT(*), SUM(length(CAST(data AS BLOB))) "
-            "FROM investigation_checkpoints WHERE session_id=?",
-            (session_id,),
-        ).fetchone()
-    checkpoint = json.loads(text)
+        checkpoint = db.execute(select(investigation_checkpoints.c.data).where(
+            investigation_checkpoints.c.checkpoint_id == saved.checkpoint_id,
+        )).scalar_one()
+        retained = db.execute(select(investigation_checkpoints.c.data).where(
+            investigation_checkpoints.c.session_id == session_id,
+        )).scalars().all()
+    checkpoint = json.loads(checkpoint)
+    retained = [json.loads(payload) for payload in retained]
+    serialized = encode(checkpoint)
     Checkpoint.model_validate(checkpoint)
-    reopened = RuntimeStore(manager.store.path, read_only=True)
+    reopened = RuntimeStore(manager.store.database_url, read_only=True)
     assert reopened.load_checkpoint(reopened.get(session_id)) == checkpoint
-    assert encode(checkpoint) == text
     return {
-        "bytes": len(text.encode("utf-8")),
-        "retained_count": retained[0],
-        "retained_bytes": retained[1],
+        "bytes": len(serialized.encode("utf-8")),
+        "retained_count": len(retained),
+        "retained_bytes": sum(len(encode(payload).encode("utf-8")) for payload in retained),
         "analysis_messages": len(analyses(checkpoint.get("history", []))),
         "phase": checkpoint["phase"],
         "reopened_equal": True,
@@ -93,9 +93,8 @@ def checkpoint_measurement(manager, session_id):
 def offline(monkeypatch):
     forbidden = Mock(side_effect=AssertionError("external_network_forbidden"))
     monkeypatch.setattr(requests.sessions.Session, "request", forbidden)
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
-    yield
+    with allow_isolated_mysql_sockets(forbidden):
+        yield
     forbidden.assert_not_called()
 
 
@@ -583,7 +582,7 @@ def test_synthetic_checkpoint_margin_is_recovered_by_replacing_repeated_analysis
         with manager.store.transaction() as db:
             manager.store.checkpoint(finished, repeated, db)
             manager.store.save(finished, db)
-    reopened = RuntimeStore(manager.store.path, read_only=True)
+    reopened = RuntimeStore(manager.store.database_url, read_only=True)
     assert reopened.get(finished.session_id).checkpoint_id == saved_id
     assert reopened.load_checkpoint(reopened.get(finished.session_id)) == reduced
     if output := os.environ.get("INCIDENT_P53B1_REPORT_DIR"):

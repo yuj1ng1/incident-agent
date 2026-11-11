@@ -247,24 +247,37 @@ def session_summary(session):
 
 
 class RuntimeQueries:
-    def __init__(self, incident_path=ROOT / "data" / "incidents.json", runtime_path=ROOT / "data" / "runtime.sqlite3"):
-        # Storing paths is inert. Each request opens existing stores read-only.
+    def __init__(
+        self,
+        incident_path=ROOT / "data" / "incidents.json",
+        runtime_url=None,
+        *,
+        include_runtime=True,
+    ):
+        # Storing paths/URLs is inert. Each request opens existing stores read-only.
         self.incident_path = Path(incident_path)
-        self.runtime_path = Path(runtime_path)
+        self.runtime_url = runtime_url
+        self.include_runtime = include_runtime
 
-    def incidents(self, *, limit, offset, status):
+    def incidents(self, *, limit, offset, status, service=None):
         store = IncidentStore(self.incident_path, read_only=True)
-        items = store.list_incidents(limit=limit + 1, offset=offset, status=status)
+        items = store.list_incidents(
+            limit=limit + 1, offset=offset, status=status, service=service,
+        )
         return IncidentPage(items=[incident_summary(i) for i in items[:limit]],
                             limit=limit, offset=offset, has_more=len(items) > limit)
 
-    def incident(self, incident_id):
+    def incident_record(self, incident_id):
         store = IncidentStore(self.incident_path, read_only=True)
         incident = store.get_incident(incident_id, include_history=False)
+        if incident is not None and incident.incident_id != incident_id:
+            raise ValueError("incident_store_identity_mismatch")
+        return incident
+
+    def incident(self, incident_id):
+        incident = self.incident_record(incident_id)
         if incident is None:
             return None
-        if incident.incident_id != incident_id:
-            raise ValueError("incident_store_identity_mismatch")
         return IncidentDetail(
             **incident_summary(incident).model_dump(),
             recovery_verification=recovery_verification_view(incident),
@@ -282,14 +295,18 @@ class RuntimeQueries:
         )
 
     def sessions(self, *, limit, offset, status, incident_id):
-        store = RuntimeStore(self.runtime_path, read_only=True)
+        if not self.include_runtime:
+            return SessionPage(items=[], limit=limit, offset=offset, has_more=False)
+        store = RuntimeStore(self.runtime_url, read_only=True)
         items = store.list_sessions(limit=limit + 1, offset=offset, newest_first=True,
                                     statuses={status} if status else None, incident_id=incident_id)
         return SessionPage(items=[session_summary(s) for s in items[:limit]],
                            limit=limit, offset=offset, has_more=len(items) > limit)
 
     def session(self, session_id):
-        store = RuntimeStore(self.runtime_path, read_only=True)
+        if not self.include_runtime:
+            return None
+        store = RuntimeStore(self.runtime_url, read_only=True)
         # workflow only needs RuntimeStore when proposal contents are excluded.
         manager = InvestigationManager(store, incident_store=None)
         try:

@@ -83,7 +83,7 @@ def test_worker_completion_projects_pending_trust_on_all_public_result_paths(tmp
     assert workflow["result_trust"]["trusted"] is False
     with TestClient(create_app(
         incident_path=manager.incident_store.file_path,
-        runtime_path=manager.store.path,
+        runtime_url=manager.store.database_url,
     ), base_url="http://127.0.0.1") as client:
         detail = client.get(f"/api/sessions/{session.session_id}").json()
         history = client.get(f"/api/incidents/{session.incident_id}").json()

@@ -124,7 +124,7 @@ def recovery_record(
 @pytest.fixture
 def recovery_api(tmp_path):
     path = tmp_path / "incidents.json"
-    app = create_app(incident_path=path, runtime_path=tmp_path / "unused.sqlite3")
+    app = create_app(incident_path=path, include_runtime=False)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         def write(record):
             path.write_text(json.dumps({

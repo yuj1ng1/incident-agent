@@ -216,7 +216,13 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
     assert summary["limits"]["max_attempts"] == 1
     assert summary["limits"]["max_resumes"] == 0
     assert summary["limits"]["max_human_requests"] == 0
-    assert (root / "runtime.sqlite3").is_file()
+    assert summary["runtime_database"].startswith("ia_test_")
+    from investigation.models import SessionStatus
+    from investigation.store import RuntimeStore
+    from mysql_support import runtime_database_url
+
+    runtime = RuntimeStore(runtime_database_url(root), read_only=True)
+    assert runtime.get(summary["session_id"]).status == SessionStatus.COMPLETED
     assert (root / "incidents.json").is_file()
     checkpoint = read_json(root, "checkpoint.json")
     Checkpoint.model_validate(checkpoint)

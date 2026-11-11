@@ -24,7 +24,6 @@ if str(ROOT) not in sys.path:
 
 def create_demo(root, port, *, manual_approval=False):
     from incident_store import IncidentStore
-    from investigation.store import RuntimeStore
     from models.incident import Incident
     from models.remediation import RemediationProposal, Risk
     from remediation.isolated_demo import (
@@ -70,7 +69,6 @@ def create_demo(root, port, *, manual_approval=False):
             incident_id="inc-w2-isolated-inventory", service=SERVICE,
             severity="warning", status="investigating", alerts=[],
         ))
-        sessions = RuntimeStore(root / "runtime.sqlite3")
         store = RemediationStore(root / "remediation.json")
         proposal = store.create(RemediationProposal(
             proposal_id="rem-w2-deploy-b", incident_id="inc-w2-isolated-inventory",
@@ -99,7 +97,7 @@ def create_demo(root, port, *, manual_approval=False):
             "application_port": port,
         }, indent=2), encoding="utf-8")
         app = create_app(
-            incident_path=incidents.file_path, runtime_path=sessions.path,
+            incident_path=incidents.file_path, include_runtime=False,
             remediation_path=store.file_path, authorization=auth,
             executor_factory=functools.partial(
                 execution.ActionExecutor, runtime=runtime, verifier=verifier,
@@ -148,7 +146,7 @@ def main(argv=None):
         from web_api.app import create_app
         from web_api.auth import WebAuthorization
         app = create_app(
-            incident_path=root / "incidents.json", runtime_path=root / "runtime.sqlite3",
+            incident_path=root / "incidents.json", include_runtime=False,
             remediation_path=root / "remediation.json", authorization=WebAuthorization("[]"),
         )
     else:

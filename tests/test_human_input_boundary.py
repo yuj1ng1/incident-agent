@@ -1,11 +1,10 @@
 """Untrusted model calls must not be confused with corrupt durable records."""
-from contextlib import closing
 import json
-import sqlite3
 from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from investigation.models import SessionStatus as S
 from investigation.scheduler import Scheduler
@@ -64,9 +63,16 @@ def test_invalid_human_input_is_a_controlled_failure(tmp_path, arguments, caplog
     assert incident.consecutive_investigation_failures == 1
     # Check all retained checkpoints/events, not only the latest redacted view.
     with manager.store.read() as db:
-        persisted = "".join(row[0] for table in (
-            "investigation_sessions", "investigation_checkpoints", "investigation_events", "human_requests",
-        ) for row in db.execute(f"SELECT data FROM {table}"))
+        persisted = "".join(
+            json.dumps(json.loads(row[0]), ensure_ascii=False)
+            if isinstance(row[0], str)
+            else json.dumps(row[0], ensure_ascii=False)
+            for table in (
+                "investigation_sessions", "investigation_checkpoints",
+                "investigation_events", "human_requests",
+            )
+            for row in db.execute(text(f"SELECT data FROM {table}"))
+        )
     assert UNTRUSTED_TEXT not in persisted + caplog.text + manager.incident_store.file_path.read_text(encoding="utf-8")
     assert "store consistency failure" not in caplog.text
 
@@ -113,15 +119,14 @@ def test_manager_rejects_invalid_question_without_durable_changes(tmp_path, ques
     manager = create_runtime(tmp_path)
     create_session(manager)
     claimed = manager.store.claim("test-worker", manager.limits)
-    before = manager.store.path.read_bytes()
+    before = manager.store.get(claimed.session_id)
 
     with pytest.raises(RuntimeErrorBase, match="^invalid_human_request$"):
         manager.request_human(claimed.session_id, ("test-worker", claimed.fencing_token), question,
                               manager.store.load_checkpoint(claimed))
 
     assert manager.requests() == []
-    assert manager.store.get(claimed.session_id) == claimed
-    assert manager.store.path.read_bytes() == before
+    assert manager.store.get(claimed.session_id) == before
 
 
 def test_manager_keeps_fencing_for_invalid_input(tmp_path):
@@ -164,29 +169,39 @@ def test_scheduler_continues_with_other_incident_after_invalid_call(tmp_path, ar
     assert "store consistency failure" not in caplog.text
 
 
-@pytest.mark.parametrize("corruption", ["sqlite", "checkpoint-json", "checkpoint-validation", "session-validation"])
+@pytest.mark.parametrize("corruption", ["projection", "checkpoint-json", "checkpoint-validation", "session-validation"])
 def test_scheduler_still_stops_on_real_durable_corruption(tmp_path, corruption, caplog):
     manager = create_runtime(tmp_path)
     session = create_session(manager)
     other = create_session(manager, service="inventory-service")
-    if corruption == "sqlite":
-        manager.store.path.write_bytes(b"not SQLite")
+    with manager.store.transaction() as db:
+        current = manager.store.get(session.session_id, db)
+        manager.store.checkpoint(current, manager.store.load_checkpoint(current, db), db)
+        manager.store.save(current, db)
+    if corruption == "projection":
+        with manager.store.transaction() as db:
+            db.execute(
+                text("UPDATE investigation_sessions SET status='PAUSED' WHERE session_id=:sid"),
+                {"sid": session.session_id},
+            )
     else:
         with manager.store.transaction() as db:
-            current = manager.store.get(session.session_id, db)
-            manager.store.checkpoint(current, manager.store.load_checkpoint(current, db), db)
-            manager.store.save(current, db)
-        with closing(sqlite3.connect(manager.store.path)) as db, db:
             if corruption == "session-validation":
                 data = current.model_dump(mode="json") | {"human_request_count": -1}
-                db.execute("UPDATE investigation_sessions SET data=? WHERE session_id=?",
-                           (json.dumps(data), session.session_id))
+                db.execute(
+                    text("UPDATE investigation_sessions SET data=:data WHERE session_id=:sid"),
+                    {"data": json.dumps(data), "sid": session.session_id},
+                )
             else:
-                data = '{"phase":' if corruption == "checkpoint-json" else json.dumps({
-                    "schema_version": 1, "phase": "invalid",
-                })
-                db.execute("UPDATE investigation_checkpoints SET data=? WHERE checkpoint_id=?",
-                           (data, current.checkpoint_id))
+                data = (
+                    {"schema_version": 1, "phase": "ready", "records": "invalid"}
+                    if corruption == "checkpoint-json"
+                    else {"schema_version": 1, "phase": "invalid"}
+                )
+                db.execute(
+                    text("UPDATE investigation_checkpoints SET data=:data WHERE checkpoint_id=:cid"),
+                    {"data": json.dumps(data), "cid": current.checkpoint_id},
+                )
     agent = FixtureAgent()
     scheduler = Scheduler(Worker(manager, agent), interval=0)
     tick = scheduler.tick
@@ -202,7 +217,7 @@ def test_scheduler_still_stops_on_real_durable_corruption(tmp_path, corruption, 
     assert scheduler.stop_requested.is_set()
     assert "Runtime stopped; store consistency failure" in caplog.text
     agent.request_durable_response.assert_not_called()
-    if corruption != "sqlite":
+    if corruption != "projection":
         assert manager.store.get(other.session_id).status == S.QUEUED
 
 
@@ -210,9 +225,13 @@ def test_manager_does_not_mask_persisted_session_validation_error(tmp_path):
     manager = create_runtime(tmp_path)
     create_session(manager)
     claimed = manager.store.claim("test-worker", manager.limits)
-    with closing(sqlite3.connect(manager.store.path)) as db, db:
-        db.execute("UPDATE investigation_sessions SET data=? WHERE session_id=?", (
-            json.dumps(claimed.model_dump(mode="json") | {"human_request_count": -1}), claimed.session_id,
-        ))
+    with manager.store.transaction() as db:
+        db.execute(
+            text("UPDATE investigation_sessions SET data=:data WHERE session_id=:sid"),
+            {
+                "data": json.dumps(claimed.model_dump(mode="json") | {"human_request_count": -1}),
+                "sid": claimed.session_id,
+            },
+        )
     with pytest.raises(ValidationError):
         manager.request_human(claimed.session_id, ("test-worker", claimed.fencing_token), "部署背景？", {})

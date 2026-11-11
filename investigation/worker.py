@@ -1,12 +1,12 @@
 """Single synchronous Worker: durable I/O boundaries and cooperative interruption."""
 from datetime import datetime, timedelta
 import json
-import sqlite3
 from types import SimpleNamespace
 from uuid import uuid4
 
 import openai
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from agent_logger.logger_config import logger
 
 from config import MAX_AGENT_LOOPS, MAX_TOOL_CALLS
@@ -123,7 +123,7 @@ class Worker:
                 self._run(session.session_id, claim, checkpoint)
             except LostClaim:
                 raise
-            except (sqlite3.DatabaseError, RuntimeIntegrityError, ValidationError, json.JSONDecodeError):
+            except (SQLAlchemyError, RuntimeIntegrityError, ValidationError, json.JSONDecodeError):
                 raise
             except Exception as exc:
                 phase = "failure"

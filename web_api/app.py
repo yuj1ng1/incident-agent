@@ -2,7 +2,6 @@
 import logging
 from pathlib import Path
 import re
-import sqlite3
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -10,21 +9,24 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from investigation.models import SessionStatus
-from investigation.state import RuntimeErrorBase
+from investigation.state import RuntimeErrorBase, RuntimeIntegrityError
 from incident_store import IncidentStore
 from models.remediation import RemediationStatus
 from remediation.executor import ActionExecutor
 from remediation.state import RemediationError
 from remediation.store import RemediationStore, StoreError
 from web_api.auth import LOCAL_ORIGINS, WebAuthorization
+from web_api.observations import incident_signals
 from web_api.queries import ROOT, RemediationQueries, RuntimeQueries
 from web_api.remediation_views import safe_text
 from web_api.schemas import (
-    CompensationRequest, Health, IncidentDetail, IncidentPage, OperatorView,
+    CompensationRequest, Health, IncidentDetail, IncidentPage, IncidentSignals, OperatorView,
     ReasonCommand, RemediationCommand, RemediationDetail, RemediationPage,
     SessionDetail, SessionPage,
 )
@@ -37,7 +39,8 @@ PageOffset = Annotated[int, Query(ge=0, le=10000)]
 def create_app(
     *,
     incident_path: Path = ROOT / "data" / "incidents.json",
-    runtime_path: Path = ROOT / "data" / "runtime.sqlite3",
+    runtime_url: str | None = None,
+    include_runtime: bool = True,
     remediation_path: Path = ROOT / "data" / "remediation.json",
     authorization=None,
     executor_factory=ActionExecutor,
@@ -53,7 +56,7 @@ def create_app(
         allow_credentials=False,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
-    queries = RuntimeQueries(incident_path, runtime_path)
+    queries = RuntimeQueries(incident_path, runtime_url, include_runtime=include_runtime)
     remediations = RemediationQueries(remediation_path)
 
     @app.exception_handler(RequestValidationError)
@@ -78,19 +81,36 @@ def create_app(
     def query_failure(request: Request, exc: Exception):
         # Diagnostic class/errno only: never log input records or credential text.
         logger.error("Read-only API query failed category=%s errno=%s", type(exc).__name__, getattr(exc, "errno", None))
-        unavailable = isinstance(exc, FileNotFoundError) or (
-            isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+        unavailable = isinstance(exc, (FileNotFoundError, OperationalError)) or (
+            isinstance(exc, RuntimeIntegrityError)
+            and str(exc) in {"runtime_schema_not_migrated", "runtime_database_unavailable"}
         )
         return JSONResponse(status_code=503 if unavailable else 500,
                             content={"detail": "store_unavailable" if unavailable else "store_read_failed"})
 
-    for error in (OSError, sqlite3.Error, RuntimeErrorBase, ValidationError,
+    for error in (OSError, SQLAlchemyError, RuntimeErrorBase, ValidationError,
                   ValueError, KeyError, TypeError, ResponseValidationError):
         app.add_exception_handler(error, query_failure)
 
     @app.get("/healthz", response_model=Health)
     def healthz():
         return Health(read_only=not auth.enabled)
+
+    @app.get("/readyz", response_model=Health)
+    def readyz():
+        try:
+            queries.sessions(limit=1, offset=0, status=None, incident_id=None)
+            queries.incidents(limit=1, offset=0, status=None)
+        except (OSError, SQLAlchemyError, RuntimeErrorBase, RuntimeError) as exc:
+            reason = str(exc) if isinstance(exc, (RuntimeErrorBase, RuntimeError)) else ""
+            if reason not in {
+                "database_url_not_configured", "database_url_invalid",
+                "mysql_pymysql_database_url_required", "runtime_schema_not_migrated",
+                "runtime_database_unavailable",
+            }:
+                reason = "store_unavailable"
+            raise HTTPException(503, detail=reason) from None
+        return healthz()
 
     @app.get("/api/operator", response_model=OperatorView)
     def operator_identity(request: Request):
@@ -219,9 +239,13 @@ def create_app(
         return change(proposal_id, operator, close)
 
     @app.get("/api/incidents", response_model=IncidentPage)
-    def list_incidents(limit: PageLimit = 20, offset: PageOffset = 0,
-                       status: Literal["investigating", "resolved"] | None = None):
-        return queries.incidents(limit=limit, offset=offset, status=status)
+    def list_incidents(
+        limit: PageLimit = 20,
+        offset: PageOffset = 0,
+        status: Literal["investigating", "resolved"] | None = None,
+        service: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    ):
+        return queries.incidents(limit=limit, offset=offset, status=status, service=service)
 
     @app.get("/api/incidents/{incident_id}", response_model=IncidentDetail)
     def get_incident(incident_id: str):
@@ -229,6 +253,13 @@ def create_app(
         if result is None:
             raise HTTPException(status_code=404, detail="incident_not_found")
         return result
+
+    @app.get("/api/incidents/{incident_id}/signals", response_model=IncidentSignals)
+    async def get_incident_signals(incident_id: str):
+        incident = await run_in_threadpool(queries.incident_record, incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="incident_not_found")
+        return await incident_signals(incident)
 
     @app.get("/api/sessions", response_model=SessionPage)
     def list_sessions(limit: PageLimit = 20, offset: PageOffset = 0,

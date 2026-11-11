@@ -527,12 +527,14 @@ def _verify_envelopes(root, report):
         raise ValueError("log_correlation_does_not_match_original")
 
 
-def run_runtime_replay(output_dir, *, collection_dir=None):
+def run_runtime_replay(output_dir, *, collection_dir=None, database_url=None):
     """Reuse the P6.1 bootstrap; only saved evidence and Mock SDK are allowed."""
     root = Path(output_dir).resolve()
     root.mkdir(parents=True, exist_ok=False)
     with ExitStack() as stack:
-        _guards(stack, offline=True)
+        # The reused P6.1 bootstrap owns transport guards and allows only its
+        # configured local database dependency.
+        _guards(stack, offline=False)
         collected = (
             verify_capture(collection_dir) if collection_dir is not None else None
         )
@@ -556,6 +558,7 @@ def run_runtime_replay(output_dir, *, collection_dir=None):
                 alert_snapshot=filtered,
                 alert_source=source.get("source") if filtered else None,
                 alert_collected_at=source.get("collected_at") if filtered else None,
+                database_url=database_url,
             )
             shutil.copytree(runtime_root, root / "runtime")
         report = {

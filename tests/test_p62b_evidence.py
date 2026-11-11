@@ -10,6 +10,7 @@ import time
 import pytest
 import requests
 
+from mysql_support import runtime_database_url
 from scripts import p61_collect_observations
 from scripts.p61_readonly_integration import run_case
 from scripts.p62b_evidence import (
@@ -308,7 +309,10 @@ def test_existing_runtime_distinguishes_real_firing_from_synthetic_and_never_ren
 ):
     target, captured, _ = collection(state=state, missing=True)
     original = deepcopy(captured)
-    report = run_runtime_replay(tmp_path / "replay", collection_dir=target)
+    report = run_runtime_replay(
+        tmp_path / "replay", collection_dir=target,
+        database_url=runtime_database_url(tmp_path / "replay"),
+    )
     assert report["alert_input_origin"] == origin
     assert report["session"]["status"] == "COMPLETED"
     assert report["real_model_sdk_requests"] == report["remediation_executions"] == 0
@@ -350,7 +354,10 @@ def test_existing_runtime_distinguishes_real_firing_from_synthetic_and_never_ren
 
 
 def test_default_runtime_is_offline_synthetic_and_missing_evidence_remains_no_data(tmp_path):
-    report = run_runtime_replay(tmp_path / "default")
+    report = run_runtime_replay(
+        tmp_path / "default",
+        database_url=runtime_database_url(tmp_path / "default"),
+    )
     assert report["alert_input_origin"] == "synthetic_alert_input"
     assert report["full_real_alert_snapshot"] is None
     assert report["incident"]["evidence"] == []
