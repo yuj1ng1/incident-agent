@@ -4,5 +4,10 @@ pydantic>=2,<3
 requests
 psycopg[binary]
 PyYAML>=6,<7
+sqlalchemy>=2,<3
+alembic>=1.13,<2
+pymysql>=1.1,<2
+# PyMySQL needs cryptography for MySQL 8 caching_sha2_password authentication.
+cryptography>=42,<51
 fastapi==0.140.13
 uvicorn==0.54.0
