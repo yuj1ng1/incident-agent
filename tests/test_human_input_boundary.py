@@ -73,7 +73,9 @@ def test_invalid_human_input_is_a_controlled_failure(tmp_path, arguments, caplog
             )
             for row in db.execute(text(f"SELECT data FROM {table}"))
         )
-    assert UNTRUSTED_TEXT not in persisted + caplog.text + manager.incident_store.file_path.read_text(encoding="utf-8")
+    assert UNTRUSTED_TEXT not in persisted + caplog.text + json.dumps(
+        manager.incident_store.load(), ensure_ascii=False,
+    )
     assert "store consistency failure" not in caplog.text
 
 

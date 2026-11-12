@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -22,7 +22,7 @@ def test_service_and_status_filters_apply_before_incident_pagination(tmp_path):
     store = IncidentStore(tmp_path / "incidents.json")
     order = save_incident(store, "order-service")
     save_incident(store, "inventory-service")
-    with TestClient(create_app(incident_path=store.file_path), base_url="http://localhost") as client:
+    with TestClient(create_app(incident_url=store.database_url), base_url="http://localhost") as client:
         selected = client.get("/api/incidents?limit=1&service=order-service&status=investigating")
         assert selected.status_code == 200
         assert [item["incident_id"] for item in selected.json()["items"]] == [order.incident_id]
@@ -58,7 +58,7 @@ def test_incident_signals_share_one_window_and_keep_failures_visible(tmp_path, m
 
     monkeypatch.setattr(metrics, "query_metric_range", metric)
     monkeypatch.setattr(logs, "query_logs", log)
-    with TestClient(create_app(incident_path=store.file_path), base_url="http://localhost") as client:
+    with TestClient(create_app(incident_url=store.database_url), base_url="http://localhost") as client:
         result = client.get(f"/api/incidents/{incident.incident_id}/signals")
         missing = client.get("/api/incidents/inc-not-found/signals")
     assert result.status_code == 200

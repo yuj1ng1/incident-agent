@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from datetime import timedelta, timezone
 import json
+import time
 from uuid import uuid4
 
 from sqlalchemy import case, delete, distinct, func, inspect, select, text, update
@@ -439,6 +440,19 @@ class RuntimeStore:
         return payload
 
     def claim(self, owner, limits):
+        # Two schedulers can race on the coordination row; MySQL may pick a
+        # deadlock victim instead of merely blocking. Retry the whole short
+        # transaction so the loser re-reads committed state.
+        for attempt in range(3):
+            try:
+                return self._claim_once(owner, limits)
+            except OperationalError as error:
+                code = getattr(error.orig, "args", [None])[0]
+                if code not in {1205, 1213} or attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    def _claim_once(self, owner, limits):
         # Idle ticks must stay read-only; the transaction below re-checks.
         with self.read() as db:
             queued = db.execute(

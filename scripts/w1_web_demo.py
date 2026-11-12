@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def create_demo(root):
+def create_demo(root, incident_url=None, runtime_url=None):
     from incident_store import IncidentStore
     from investigation.models import Checkpoint, InvestigationSession, SessionStatus
     from investigation.store import RuntimeStore
@@ -45,8 +45,8 @@ def create_demo(root):
     root.mkdir(parents=True, exist_ok=False)
     faults_path = root / 'http-faults.json'
     faults_path.write_text('{}', encoding='utf-8')
-    incidents = IncidentStore(root / "incidents.json")
-    runtime = RuntimeStore()
+    incidents = IncidentStore(incident_url)
+    runtime = RuntimeStore(runtime_url)
     store = RemediationStore(root / "remediation.json")
     # This process cannot dispatch any ordinary production repair action.
     execution.ACTION_REGISTRY = MappingProxyType({})
@@ -242,7 +242,7 @@ def create_demo(root):
     (root / "operators.json").write_text(json.dumps(tokens), encoding="utf-8")
     (root / "scenarios.json").write_text(json.dumps(identifiers, indent=2), encoding="utf-8")
     app = create_app(
-        incident_path=incidents.file_path, runtime_url=runtime.database_url,
+        incident_url=incidents.database_url, runtime_url=runtime.database_url,
         remediation_path=store.file_path, authorization=auth,
     )
 

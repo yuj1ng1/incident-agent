@@ -34,7 +34,7 @@ def main():
     ) as client:
         agent = Agent(client=client, agent_prompt=agent_prompt)
         prometheus_client = PrometheusClient(base_url=PROMETHEUS_URL)
-        incident_store = IncidentStore(Path(__file__).resolve().parent / "data" / "incidents.json")
+        incident_store = IncidentStore()
         runtime_manager = InvestigationManager(
             RuntimeStore(),
             incident_store,

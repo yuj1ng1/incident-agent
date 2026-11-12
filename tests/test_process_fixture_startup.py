@@ -27,7 +27,7 @@ def test_claim_startup_persistent_file_lock_stops_at_deadline():
         with pytest.raises(FileLockError) as caught:
             fixture.create_claim_runtime("isolated-root")
     assert caught.value is error
-    create.assert_called_once_with("isolated-root")
+    create.assert_called_once_with("isolated-root", ensure_schema=False)
     sleep.assert_not_called()
 
 
@@ -39,5 +39,5 @@ def test_claim_startup_does_not_retry_configuration_or_data_errors():
         with pytest.raises(ValueError) as caught:
             fixture.create_claim_runtime("isolated-root")
     assert caught.value is error
-    create.assert_called_once_with("isolated-root")
+    create.assert_called_once_with("isolated-root", ensure_schema=False)
     sleep.assert_not_called()

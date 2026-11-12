@@ -11,14 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from incident_store import IncidentStore
 from investigation.models import InvestigationSession, SessionStatus as S
 from investigation.worker import Worker
+from mysql_support import incident_database_url
 from runtime_support import FixtureAgent, create_runtime
-from storage_lock import FileLockError
 
 
 def main():
     root, mode, identity = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
     if mode == "crash":
-        manager = create_runtime(root, clock=lambda: datetime.fromisoformat(identity))
+        manager = create_runtime(root, clock=lambda: datetime.fromisoformat(identity), ensure_schema=False)
         original = manager.incident_store.apply_runtime_projection
 
         def project(session, checkpoint):
@@ -31,17 +31,7 @@ def main():
         Worker(manager, FixtureAgent()).run_once()
         raise AssertionError("crash boundary was not reached")
 
-    # Store construction takes the same nonblocking lock as later writes.
-    # Contention before ready must use the existing bounded writer policy too.
-    deadline = time.monotonic() + 10
-    while True:
-        try:
-            store = IncidentStore(root / "incidents.json")
-            break
-        except FileLockError:
-            if time.monotonic() > deadline:
-                raise
-            time.sleep(0.002)
+    store = IncidentStore(incident_database_url(root / "incidents.json"))
     incident = store.get_incident(identity)
     session = InvestigationSession(session_id="writer-session", incident_id=identity,
                                    alert_fingerprint=incident.fingerprint, service=incident.service)
@@ -58,18 +48,10 @@ def main():
         record = {"observation_id": "writer-obs-" + str(index), "name": "query_metrics",
                   "success": True, "result": {"status": "ok", "value": index},
                   "collected_at": session.created_at.isoformat()}
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                if mode == "monitor":
-                    store.save_observation(incident.fingerprint, incident)
-                else:
-                    store.apply_runtime_projection(session, {"records": [record]})
-                break
-            except FileLockError:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(0.002)
+        if mode == "monitor":
+            store.save_observation(incident.fingerprint, incident)
+        else:
+            store.apply_runtime_projection(session, {"records": [record]})
     print(json.dumps({"writer": mode, "writes": 30}))
 
 

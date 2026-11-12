@@ -489,7 +489,7 @@ def run_case(
         stores.mkdir()
         manager = InvestigationManager(
             RuntimeStore(database_url),
-            IncidentStore(stores / "incidents.json"),
+            IncidentStore(database_url),
         )
         sdk = Mock(name="P61MockSdk")
         sdk.with_options.return_value = sdk
@@ -648,11 +648,15 @@ def run_case(
             "session_id": saved.session_id,
             "checkpoint_id": saved.checkpoint_id,
         })
+        _write_json(root / "incident-database.json", {
+            "database": make_url(manager.incident_store.database_url).database,
+            "incidents": len(manager.incident_store.load()["incidents"]),
+        })
         manifest = {}
         for path in (
             root / "report.json",
             root / "runtime-database.json",
-            manager.incident_store.file_path,
+            root / "incident-database.json",
         ):
             path = Path(path)
             manifest[str(path.relative_to(root))] = hashlib.sha256(

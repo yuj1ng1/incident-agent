@@ -24,7 +24,7 @@ from investigation.models import HumanCommand, InvestigationSession, RuntimeLimi
 from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError, StateVersionConflict, transition
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
-from mysql_support import empty_database_url
+from mysql_support import empty_database_url, incident_database_url
 from runtime_cli import main as cli
 from runtime_support import FixtureAgent, SHA, call, create_runtime, create_session, response
 
@@ -754,7 +754,7 @@ class ProcessRecoveryTests(unittest.TestCase):
                 self.assertIsNone(manager.store.claim("second-process-owner", manager.limits))
                 command = subprocess.run(
                     [sys.executable, "-B", "runtime_cli.py", "--store", manager.store.database_url,
-                     "--incidents", str(Path(directory) / "incidents.json"), "send-message", session.session_id,
+                     "--incidents", incident_database_url(Path(directory) / "incidents.json"), "send-message", session.session_id,
                      "--actor", "process-operator", "--command-id", "cross-process-message", "--text", "先检查数据库连接情况。"],
                     cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15,
                     env=dict(os.environ, PYTHONIOENCODING="cp1252"),

@@ -250,6 +250,67 @@ runtime_coordination = Table(
     **TABLE_OPTIONS,
 )
 
+incidents = Table(
+    "incidents",
+    metadata,
+    Column("created_seq", BigInteger, primary_key=True, autoincrement=True),
+    Column("incident_id", String(120), nullable=False),
+    Column("fingerprint", String(191)),
+    Column("service", String(200), nullable=False),
+    Column("status", String(100), nullable=False),
+    Column("alert_state", String(100), nullable=False),
+    Column("cleared_at", UTC_DATETIME),
+    Column("recovery_verified_at", UTC_DATETIME),
+    Column("recovery_status", String(32)),
+    Column("recovery_next_retry_at", UTC_DATETIME),
+    Column("data", DOCUMENT, nullable=False),
+    Column("updated_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("created_seq", name="pk_incidents"),
+    UniqueConstraint("incident_id", name="uq_incidents_incident_id"),
+    Index("ix_incidents_fingerprint_created", "fingerprint", "created_seq"),
+    Index("ix_incidents_status_created", "status", "created_seq"),
+    Index("ix_incidents_service", "service"),
+    Index(
+        "ix_incidents_recovery",
+        "status",
+        "alert_state",
+        "recovery_verified_at",
+    ),
+    **TABLE_OPTIONS,
+)
+
+incident_active = Table(
+    "incident_active",
+    metadata,
+    Column("fingerprint", String(191), primary_key=True),
+    Column("incident_id", String(120), nullable=False),
+    Column("updated_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("fingerprint", name="pk_incident_active"),
+    UniqueConstraint("incident_id", name="uq_incident_active_incident_id"),
+    ForeignKeyConstraint(
+        ["incident_id"],
+        ["incidents.incident_id"],
+        name="fk_incident_active_incident_id_incidents",
+    ),
+    **TABLE_OPTIONS,
+)
+
+incident_history_archives = Table(
+    "incident_history_archives",
+    metadata,
+    Column("sha256", String(64), primary_key=True),
+    Column("incident_id", String(120), nullable=False),
+    Column("session_ids", VALUE, nullable=False),
+    Column("body", DOCUMENT, nullable=False),
+    Column("created_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("sha256", name="pk_incident_history_archives"),
+    Index(
+        "ix_incident_history_archives_incident",
+        "incident_id",
+    ),
+    **TABLE_OPTIONS,
+)
+
 
 def create_runtime_schema(engine):
     """Create the same tables for isolated tests; production uses Alembic."""

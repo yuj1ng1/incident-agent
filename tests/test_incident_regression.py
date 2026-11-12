@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from mysql_support import runtime_database_url
+from mysql_support import incident_database_url, runtime_database_url
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_TEMP = tempfile.TemporaryDirectory(prefix="incident-agent-regression-log-")
@@ -248,7 +248,7 @@ class IncidentRegressionTests(unittest.TestCase):
             }) as get_alerts, patch("monitor.incident_monitor.time.sleep", side_effect=[None, KeyboardInterrupt]), \
                     patch.dict(os.environ, {"DEEPSEEK_API_KEY": "regression-test-placeholder"}), \
                     patch("dotenv.load_dotenv") as load_environment, \
-                    patch("incident_store.IncidentStore", side_effect=lambda path: IncidentStore(self.work / "assembly-incidents.json")) as incident_factory, \
+                    patch("incident_store.IncidentStore", side_effect=lambda *args, **kwargs: IncidentStore(self.work / "assembly-incidents.json")) as incident_factory, \
                     patch("investigation.store.RuntimeStore", side_effect=lambda: RuntimeStore(runtime_database_url(self.work))), \
                     patch("remediation.store.RemediationStore", side_effect=lambda: RemediationStore(self.work / "assembly-remediations.json")), \
                     patch("monitor.incident_monitor.IncidentMonitor", side_effect=IncidentMonitor) as monitor_factory, \
@@ -263,8 +263,11 @@ class IncidentRegressionTests(unittest.TestCase):
             self.assertIsInstance(worker.agent, Agent)
             self.assertIsInstance(monitor_factory.call_args.kwargs["prometheus_client"], PrometheusClient)
             self.assertIsInstance(manager.incident_store, IncidentStore)
-            incident_factory.assert_called_once_with(ROOT / "data" / "incidents.json")
-            self.assertEqual(manager.incident_store.file_path, self.work / "assembly-incidents.json")
+            incident_factory.assert_called_once_with()
+            self.assertEqual(
+                manager.incident_store.database_url,
+                incident_database_url(self.work / "assembly-incidents.json"),
+            )
             self.assertEqual(manager.store.database_url, runtime_database_url(self.work))
             self.assertEqual(worker.agent.model_client.client.max_retries, 0)
             self.assertTrue(worker.agent.model_client.client.is_closed())
@@ -272,7 +275,7 @@ class IncidentRegressionTests(unittest.TestCase):
             stop.assert_called_once()
             load_environment.assert_called_once()
             self.assertEqual(get_alerts.call_count, 2)
-            self.assertEqual(json.loads((self.work / "assembly-incidents.json").read_text()), {
+            self.assertEqual(manager.incident_store.load(), {
                 "version": 2, "incidents": {}, "active_by_fingerprint": {}
             })
         finally:
@@ -617,7 +620,7 @@ class IncidentRegressionTests(unittest.TestCase):
 
     def test_store_roundtrip_retains_evidence_and_investigations(self):
         self.poll(raw_alert())
-        reloaded = IncidentStore(self.store.file_path).get_active_incident(self.fp)
+        reloaded = IncidentStore(self.store.database_url).get_active_incident(self.fp)
         self.assertIsInstance(reloaded, Incident)
         self.assertEqual(reloaded.investigations[0].status, InvestigationStatus.COMPLETED)
         self.assertEqual(reloaded.last_investigated_at, NOW)

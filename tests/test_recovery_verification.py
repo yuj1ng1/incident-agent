@@ -18,7 +18,7 @@ import requests
 
 from alert_parser import AlertSnapshot
 from fingerprint import generate_alert_fingerprint
-from mysql_support import runtime_database_url
+from mysql_support import incident_digest, runtime_database_url
 from incident_factory import create_incident_from_alert
 from incident_store import IncidentStore
 from models.incident import AlertEvent, Evidence, Incident
@@ -176,7 +176,7 @@ def reread(env, incident):
 
 def run_child(env, mode, incident, *, receipt=None):
     args = [sys.executable, "-B", str(ROOT / "tests" / "recovery_process_fixture.py"), mode,
-            str(env.store.file_path), incident.incident_id, env.clock().isoformat()]
+            str(env.store.database_url), incident.incident_id, env.clock().isoformat()]
     if receipt is not None:
         path = env.path / "receipt.json"
         path.write_text(receipt.model_dump_json(), encoding="utf-8")
@@ -226,7 +226,7 @@ def test_transport_is_insufficient_and_sanitized(env, error, reason):
     assert saved.recovery_verified_at is None
     assert saved.recovery_verification.reason == reason
     assert saved.recovery_verification.status == "insufficient"
-    assert "never-save" not in env.store.file_path.read_text(encoding="utf-8")
+    assert "never-save" not in json.dumps(env.store.load(), ensure_ascii=False)
 
 
 @pytest.mark.parametrize("service", ["inventory-service", "not-registered"])
@@ -294,7 +294,7 @@ def test_invalid_bodies_and_headers_are_not_evidence(env, headers, raw, reason):
     env.worker.run_once()
     assert reread(env, incident).recovery_verification.reason == reason
     assert response.closed
-    assert "token=secret" not in env.store.file_path.read_text(encoding="utf-8")
+    assert "token=secret" not in json.dumps(env.store.load(), ensure_ascii=False)
 
 
 def test_success_does_not_persist_body_or_headers(env):
@@ -302,13 +302,13 @@ def test_success_does_not_persist_body_or_headers(env):
     env.transport.return_value = FakeResponse(body=GOOD_BODY | {"token": "never-save", "password": "never-save"},
                                              headers={"Set-Cookie": "session=never-save"})
     env.worker.run_once()
-    saved = IncidentStore(env.store.file_path, read_only=True).get_incident(incident.incident_id)
+    saved = IncidentStore(env.store.database_url, read_only=True).get_incident(incident.incident_id)
     receipt = RecoveryReceipt.model_validate_json(saved.recovery_evidence[0].detail)
     assert receipt.incident_id == incident.incident_id
     assert receipt.service == incident.service and receipt.target_id == "order_read_query"
     assert receipt.samples[0].http_status == 200
     assert receipt.completed_at.tzinfo is not None
-    assert "never-save" not in env.store.file_path.read_text(encoding="utf-8")
+    assert "never-save" not in json.dumps(env.store.load(), ensure_ascii=False)
 
 
 @pytest.mark.parametrize("alteration", ["missing", "naive", "old", "future", "before_clear"])
@@ -366,11 +366,11 @@ def test_repeated_polls_are_idempotent(env):
     claimed = claim(env, incident)
     receipt = env.verifier.verify(claimed)
     assert save_receipt(env.store, receipt)
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
     assert save_receipt(env.store, receipt) is False
     for _ in range(10):
         assert env.worker.run_once() is None
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     assert len(reread(env, incident).recovery_evidence) == 1
     env.transport.assert_called_once()
 
@@ -473,7 +473,7 @@ def test_failed_retries_are_durable_delayed_and_bounded(env):
     incident = seed(env)
     env.transport.return_value = FakeResponse(500)
     for attempt in range(3):
-        worker = RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier)
+        worker = RecoveryWorker(IncidentStore(env.store.database_url, clock=env.clock), env.verifier)
         assert worker.run_once() == incident.incident_id
         assert len(reread(env, incident).recovery_verification.attempts) == attempt + 1
         for _ in range(5):
@@ -490,7 +490,7 @@ def test_restart_discovers_cleared_incident_without_queued_memory(env):
     incident = seed(env)
     # Durable jobs survive downtime; age alone cannot decide eligibility.
     env.clock.advance(86400)
-    restarted = RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier)
+    restarted = RecoveryWorker(IncidentStore(env.store.database_url, clock=env.clock), env.verifier)
     restarted.run_once()
     saved = reread(env, incident)
     receipt = RecoveryReceipt.model_validate_json(saved.recovery_evidence[0].detail)
@@ -508,8 +508,8 @@ def test_first_worker_skips_yesterdays_legacy_clear_without_real_http(
     marker,
 ):
     incident = seed_legacy_clear(env, version, marker)
-    before = env.store.file_path.read_bytes()
-    restarted_store = IncidentStore(env.store.file_path, clock=env.clock)
+    before = incident_digest(env.store)
+    restarted_store = IncidentStore(env.store.database_url, clock=env.clock)
     restarted = RecoveryWorker(restarted_store, real_http_recovery.verifier)
 
     processed = restarted.run_once()
@@ -523,13 +523,13 @@ def test_first_worker_skips_yesterdays_legacy_clear_without_real_http(
     assert saved.recovery_verified_at is None
     assert saved.recovery_evidence == []
     assert saved.recovery_verification is None
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
 
 
 def test_background_startup_only_probes_durable_jobs(env, real_http_recovery):
     historical = seed_legacy_clear(env, 2, "missing")
     current = seed(env, fingerprint="new-episode")
-    restarted_store = IncidentStore(env.store.file_path, clock=env.clock)
+    restarted_store = IncidentStore(env.store.database_url, clock=env.clock)
     restarted = RecoveryWorker(
         restarted_store,
         real_http_recovery.verifier,
@@ -558,10 +558,10 @@ def test_background_startup_only_probes_durable_jobs(env, real_http_recovery):
 @pytest.mark.parametrize("marker", ["missing", "null"])
 def test_direct_claim_does_not_enroll_unregistered_clear(env, marker):
     incident = seed_legacy_clear(env, 2, marker)
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
     for _ in range(5):
         assert claim(env, incident) is None
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     env.transport.assert_not_called()
 
 
@@ -581,7 +581,7 @@ def test_legacy_clear_preserves_existing_history(env, previously_verified):
     if previously_verified:
         record["recovery_verified_at"] = incident.cleared_at.isoformat()
     env.store.save(data)
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
     for _ in range(5):
         assert env.worker.run_once() is None
         assert claim(env, incident) is None
@@ -591,7 +591,7 @@ def test_legacy_clear_preserves_existing_history(env, previously_verified):
     assert saved.recovery_verified_at == (
         incident.cleared_at if previously_verified else None
     )
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     env.transport.assert_not_called()
 
 
@@ -607,24 +607,24 @@ def test_normal_clear_commits_pending_task_before_first_worker(env):
     assert state.policy is None and state.attempts == []
     assert saved.recovery_verified_at is None and saved.recovery_evidence == []
     assert env.store.recovery_candidates() == [incident.incident_id]
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
     assert env.store.resolve_inactive_incidents(set()) == []
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     env.transport.assert_not_called()
 
 
 def test_pending_task_and_clear_are_committed_atomically(env, monkeypatch):
     incident = seed(env, cleared=False)
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
 
-    def fail_commit(data):
+    def fail_commit(*args, **kwargs):
         raise OSError("isolated_commit_failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(env.store, "save", fail_commit)
+        patch.setattr(env.store, "_upsert_incident", fail_commit)
         with pytest.raises(OSError, match="isolated_commit_failure"):
             env.store.resolve_inactive_incidents(set())
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     assert reread(env, incident).alert_state == "firing"
     assert reread(env, incident).recovery_verification is None
     assert env.store.recovery_candidates() == []
@@ -652,7 +652,7 @@ def test_legacy_firing_record_can_enqueue_when_cleared_after_upgrade(env, versio
     env.store.save(data)
     assert env.store.resolve_inactive_incidents(set()) == [incident.incident_id]
     restarted = RecoveryWorker(
-        IncidentStore(env.store.file_path, clock=env.clock),
+        IncidentStore(env.store.database_url, clock=env.clock),
         env.verifier,
     )
     assert restarted.run_once() == incident.incident_id
@@ -668,7 +668,7 @@ def test_abrupt_process_exit_recovers_after_lease(env):
     attempt = reread(env, incident).recovery_verification.attempts[-1]
     assert env.worker.run_once() is None
     env.clock.now = attempt.lease_until + timedelta(seconds=1)
-    restarted = RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier)
+    restarted = RecoveryWorker(IncidentStore(env.store.database_url, clock=env.clock), env.verifier)
     restarted.run_once()
     saved = reread(env, incident)
     assert saved.recovery_verification.attempts[0].outcome == "abandoned"
@@ -741,7 +741,7 @@ def test_cross_process_expired_owner_cannot_write_success(env):
 def test_two_processes_can_only_claim_once(env):
     incident = seed(env)
     args = [sys.executable, "-B", str(ROOT / "tests" / "recovery_process_fixture.py"), "claim",
-            str(env.store.file_path), incident.incident_id, env.clock().isoformat()]
+            str(env.store.database_url), incident.incident_id, env.clock().isoformat()]
     processes = [subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
     outputs = [process.communicate(timeout=15) for process in processes]
     assert all(process.returncode == 0 for process in processes), outputs
@@ -750,12 +750,11 @@ def test_two_processes_can_only_claim_once(env):
     assert len(reread(env, incident).recovery_verification.attempts) == 1
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows open-reader replacement semantics")
-def test_cross_process_reader_failure_is_bounded_and_resumes_safely(env):
+def test_cross_process_reader_does_not_block_recovery(env):
     incident = seed(env)
     ready, release = env.path / "reader-ready", env.path / "reader-release"
     args = [sys.executable, "-B", str(ROOT / "tests" / "recovery_process_fixture.py"), "hold_read",
-            str(env.store.file_path), incident.incident_id, env.clock().isoformat(), str(ready), str(release)]
+            str(env.store.database_url), incident.incident_id, env.clock().isoformat(), str(ready), str(release)]
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 5
@@ -763,18 +762,17 @@ def test_cross_process_reader_failure_is_bounded_and_resumes_safely(env):
             assert time.monotonic() < deadline
             time.sleep(0.01)
         started = time.monotonic()
-        with pytest.raises(PermissionError):
-            env.worker.run_once()
-        assert time.monotonic() - started < 1
-        assert reread(env, incident).recovery_verified_at is None
-        env.transport.assert_not_called()
+        env.worker.run_once()
+        assert time.monotonic() - started < 5
+        assert reread(env, incident).recovery_verified_at is not None
+        env.transport.assert_called_once()
     finally:
         release.touch()
         stdout, stderr = process.communicate(timeout=15)
     assert process.returncode == 0, stderr
     # The blocked reader sees the pending task committed with the clear.
     assert json.loads(stdout)["old_snapshot_has_recovery"] is True
-    RecoveryWorker(IncidentStore(env.store.file_path, clock=env.clock), env.verifier).run_once()
+    RecoveryWorker(IncidentStore(env.store.database_url, clock=env.clock), env.verifier).run_once()
     assert reread(env, incident).recovery_verified_at is not None
 
 
@@ -787,16 +785,16 @@ def test_historical_data_remains_readable(env, legacy):
     data = {incident.fingerprint: record} if legacy == 1 else {
         "version": 2, "incidents": {incident.incident_id: record}, "active_by_fingerprint": {},
     }
-    env.store.file_path.write_text(json.dumps(data), encoding="utf-8")
-    saved = IncidentStore(env.store.file_path, read_only=True).get_incident(incident.incident_id)
+    env.store.save(data)
+    saved = IncidentStore(env.store.database_url, read_only=True).get_incident(incident.incident_id)
     assert saved.alert_state == "cleared"
     assert saved.recovery_verified_at is None and saved.recovery_verification is None
     assert saved.recovery_evidence == []
-    before = env.store.file_path.read_bytes()
+    before = incident_digest(env.store)
     for _ in range(5):
         assert env.worker.run_once() is None
         assert claim(env, saved) is None
-    assert env.store.file_path.read_bytes() == before
+    assert incident_digest(env.store) == before
     env.transport.assert_not_called()
 
 
@@ -807,7 +805,7 @@ def test_probe_runs_outside_file_and_database_locks(env):
 
     def prove_lock_free(*args, **kwargs):
         # Another store instance and a real database writer can operate during HTTP.
-        other = IncidentStore(env.store.file_path, clock=env.clock)
+        other = IncidentStore(env.store.database_url, clock=env.clock)
         data = other.load()
         other.save(data)
         with runtime.transaction() as db:

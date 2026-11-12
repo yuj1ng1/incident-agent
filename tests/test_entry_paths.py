@@ -10,12 +10,11 @@ from web_api.queries import RuntimeQueries
 
 
 @pytest.mark.parametrize("entry", ["monitor", "cli"])
-def test_incident_path_matches_web_defaults_from_another_directory(tmp_path, monkeypatch, entry):
+def test_incident_url_matches_web_defaults_from_another_directory(tmp_path, monkeypatch, entry):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("INCIDENT_AGENT_MODEL_MODE", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture-only")
-    expected = Path(__file__).resolve().parents[1] / "data" / "incidents.json"
-    assert RuntimeQueries().incident_path == expected
+    assert RuntimeQueries().incident_url is None
 
     class StoreIntercepted(Exception):
         pass
@@ -28,7 +27,7 @@ def test_incident_path_matches_web_defaults_from_another_directory(tmp_path, mon
                 monitor_main()
             else:
                 runtime_main(["list-sessions"])
-    incidents.assert_called_once_with(expected if entry == "monitor" else str(expected))
+    incidents.assert_called_once_with() if entry == "monitor" else incidents.assert_called_once_with(None)
     if entry == "cli":
         runtime.assert_called_once_with(None)
     assert list(tmp_path.iterdir()) == []

@@ -1,4 +1,4 @@
-﻿"""Prepare P6.5 offline; --execute requires NEW, separately recorded approval.
+"""Prepare P6.5 offline; --execute requires NEW, separately recorded approval.
 
 Run synchronously in a dedicated process. Temporary process-wide guards and
 tool function replacements follow the P6.1/P6.4 isolation convention.
@@ -487,7 +487,7 @@ def run_prepared(
             )
             manager = InvestigationManager(
                 RuntimeStore(),
-                IncidentStore(root / "incidents.json"), limits=limits,
+                IncidentStore(), limits=limits,
             )
             # Synthetic event only bootstraps Runtime; it asserts no live firing.
             alert = Alert(

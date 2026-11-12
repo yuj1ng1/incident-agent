@@ -1,5 +1,6 @@
 """Isolated MySQL schemas for RuntimeStore tests; never the operator database."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import socket
@@ -69,7 +70,7 @@ def _create_database(name):
         with admin.begin() as connection:
             connection.exec_driver_sql(
                 f"CREATE DATABASE IF NOT EXISTS `{name}` "
-                "CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+                "CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin"
             )
     finally:
         admin.dispose()
@@ -78,21 +79,53 @@ def _create_database(name):
 
 def runtime_database_url(root):
     """Stable schema per test root so restart checks reuse the same database."""
-    key = str(Path(root).resolve())
-    cached = _urls.get(key)
+    return _store_database_url("", root)
+
+
+def incident_database_url(path):
+    """Separate schema per logical IncidentStore path in tests."""
+    return _store_database_url("incident-", path)
+
+
+def existing_store_database_url(kind, key):
+    """URL for a schema the parent test already created, without DDL."""
+    base = test_database_url()
+    return base.set(
+        database=_schema_name(kind, key),
+    ).render_as_string(hide_password=False)
+
+
+def _store_database_url(kind, key):
+    cache_key = kind + ":" + str(Path(key).resolve())
+    cached = _urls.get(cache_key)
     if cached is not None:
         return cached
     base = test_database_url()
-    name = _schema_name("", root)
+    name = _schema_name(kind, key)
     _create_database(name)
     url = base.set(database=name).render_as_string(hide_password=False)
-    engine = create_engine(url, poolclass=NullPool)
+    admin = _admin_engine()
     try:
-        if not inspect(engine).has_table("investigation_sessions"):
-            create_runtime_schema(engine)
+        with admin.connect() as control:
+            acquired = control.exec_driver_sql(
+                "SELECT GET_LOCK(%s, 60)",
+                (f"ia_schema_{name}",),
+            ).scalar()
+            if acquired != 1:
+                raise RuntimeError("test_schema_lock_timeout")
+            engine = create_engine(url, poolclass=NullPool)
+            try:
+                if not inspect(engine).has_table("investigation_sessions"):
+                    create_runtime_schema(engine)
+            finally:
+                engine.dispose()
+            control.exec_driver_sql(
+                "SELECT RELEASE_LOCK(%s)",
+                (f"ia_schema_{name}",),
+            )
     finally:
-        engine.dispose()
-    _urls[key] = url
+        admin.dispose()
+    _urls[cache_key] = url
     return url
 
 
@@ -102,6 +135,17 @@ def empty_database_url(root):
     name = _schema_name("empty_", root)
     _create_database(name)
     return base.set(database=name).render_as_string(hide_password=False)
+
+
+def incident_digest(store):
+    """Stable snapshot digest for no-write assertions in IncidentStore tests."""
+    payload = json.dumps(
+        store.load(),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def drop_test_databases():

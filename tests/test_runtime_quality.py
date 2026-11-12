@@ -1,4 +1,4 @@
-"""Quality regressions through the durable Runtime; no model/network charges."""
+﻿"""Quality regressions through the durable Runtime; no model/network charges."""
 from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
@@ -37,6 +37,8 @@ class RuntimeQualityTests(unittest.TestCase):
         self.manager = create_runtime(self.root, clock=lambda: self.now)
         self.store = self.manager.store
         self.session = create_session(self.manager)
+        # Store setup can take seconds; tool fixtures stamp results with real time.
+        self.now = datetime.now(timezone.utc)
 
     def saved(self):
         session = self.store.get(self.session.session_id)
@@ -99,6 +101,9 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertIn("invalid_or_unallowed_tool_call", context)
 
     def test_repeated_arguments_keep_each_calls_original_observation_and_freshness(self):
+        # The fixture tools stamp Prometheus times with the real clock; keep the
+        # simulated clock slightly ahead so those observations are not "future".
+        self.now = datetime.now(timezone.utc) + timedelta(seconds=5)
         for age in (0, 16):
             with self.subTest(age=age), tempfile.TemporaryDirectory() as directory:
                 manager = create_runtime(directory, clock=lambda: self.now)

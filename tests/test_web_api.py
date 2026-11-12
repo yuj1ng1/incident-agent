@@ -19,7 +19,7 @@ from investigation.state import RuntimeErrorBase
 from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence, HistoryArchive
-from mysql_support import empty_database_url
+from mysql_support import empty_database_url, incident_digest
 from p53c1_support import (
     PRESET_ANSWER,
     finish_and_reopen,
@@ -39,7 +39,7 @@ def api(tmp_path):
     manager = create_runtime(tmp_path)
     session = create_session(manager)
     app = create_app(
-        incident_path=manager.incident_store.file_path,
+        incident_url=manager.incident_store.database_url,
         runtime_url=manager.store.database_url,
     )
     with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
@@ -190,15 +190,21 @@ def test_raw_secrets_and_model_tool_data_are_excluded(api, monkeypatch):
 def test_store_corruption_is_a_safe_failure(api, corruption, caplog):
     manager, session, client = api
     if corruption in {"json", "json_shape", "incident"}:
-        if corruption == "json":
-            manager.incident_store.file_path.write_text('{"password":"hidden-error-secret"', encoding="utf-8")
-        else:
-            data = manager.incident_store.load()
-            if corruption == "json_shape":
-                data["incidents"] = []
+        with manager.incident_store.transaction() as db:
+            if corruption == "json":
+                data = '{"password":"hidden-error-secret"'
+            elif corruption == "json_shape":
+                data = "[]"
             else:
-                data["incidents"][session.incident_id]["alerts"] = "hidden-error-secret"
-            manager.incident_store.file_path.write_text(json.dumps(data), encoding="utf-8")
+                record = manager.incident_store.get_incident(
+                    session.incident_id, include_history=False,
+                ).model_dump(mode="json")
+                record["alerts"] = "hidden-error-secret"
+                data = json.dumps(record)
+            db.execute(
+                text("UPDATE incidents SET data=:data WHERE incident_id=:sid"),
+                {"data": data, "sid": session.incident_id},
+            )
         path = "/api/incidents"
     else:
         path = f"/api/sessions/{session.session_id}"
@@ -243,7 +249,7 @@ def test_detail_never_opens_history_archives(api):
     # Direct fixture write deliberately references an absent archive.
     data = manager.incident_store.load()
     data["incidents"][incident.incident_id] = incident.model_dump(mode="json")
-    manager.incident_store.file_path.write_text(json.dumps(data), encoding="utf-8")
+    manager.incident_store.save(data)
     with patch.object(IncidentStore, "_load_archive", side_effect=AssertionError("archive must not be read")):
         result = client.get(f"/api/incidents/{session.incident_id}")
         assert result.status_code == 200 and result.json()["archived_session_count"] == 1
@@ -291,7 +297,7 @@ print('inert import verified')
 
 def test_missing_stores_are_unavailable_and_not_created(tmp_path):
     app = create_app(
-        incident_path=tmp_path / "incidents.json",
+        incident_url=empty_database_url(tmp_path),
         runtime_url=empty_database_url(tmp_path),
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -306,7 +312,7 @@ def test_store_read_only_mode_and_request_hashes(api):
     manager, session, client = api
     before = (
         manager.store.get(session.session_id).state_version,
-        hashlib.sha256(manager.incident_store.file_path.read_bytes()).hexdigest(),
+        incident_digest(manager.incident_store),
     )
     readonly = RuntimeStore(manager.store.database_url, read_only=True)
     with pytest.raises(RuntimeErrorBase, match="read_only"):
@@ -315,14 +321,14 @@ def test_store_read_only_mode_and_request_hashes(api):
     with readonly.read() as db:
         with pytest.raises(OperationalError):
             db.execute(text("DELETE FROM investigation_sessions"))
-    incidents = IncidentStore(manager.incident_store.file_path, read_only=True)
+    incidents = IncidentStore(manager.incident_store.database_url, read_only=True)
     with pytest.raises(PermissionError, match="read_only"):
         incidents.save(incidents.create_empty_data())
     for path in ("/api/incidents", "/api/sessions", f"/api/incidents/{session.incident_id}", f"/api/sessions/{session.session_id}"):
         assert client.get(path).status_code == 200
     assert before == (
         manager.store.get(session.session_id).state_version,
-        hashlib.sha256(manager.incident_store.file_path.read_bytes()).hexdigest(),
+        incident_digest(manager.incident_store),
     )
 
 
@@ -425,16 +431,16 @@ def test_legacy_data_is_mapped_without_migration_or_backfill(api):
     manager, session, client = api
     incident = manager.incident_store.get_incident(session.incident_id, include_history=False)
     # Legacy v1 JSON is still read in place; Runtime rows are read without rewrites.
-    manager.incident_store.file_path.write_text(json.dumps({incident.fingerprint: incident.model_dump(mode="json")}), encoding="utf-8")
+    manager.incident_store.save({incident.fingerprint: incident.model_dump(mode="json")})
     before = (
         manager.store.get(session.session_id).state_version,
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )
     assert client.get("/api/incidents").json()["items"][0]["incident_id"] == session.incident_id
     assert client.get(f"/api/sessions/{session.session_id}").json()["session"]["status"] == "QUEUED"
     assert before == (
         manager.store.get(session.session_id).state_version,
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )
 
 
@@ -447,10 +453,10 @@ def test_old_plaintext_answers_are_redacted_without_rewriting_store(api):
     record = InvestigationRecord(investigated_at=utc_now(), status="completed",
                                  answer='{"api_key":"old-unconfigured-value"} API Key:other-unconfigured-value password="db password"')
     data["incidents"][session.incident_id]["investigations"] = [record.model_dump(mode="json")]
-    manager.incident_store.file_path.write_text(json.dumps(data), encoding="utf-8")
-    before = manager.incident_store.file_path.read_bytes()
+    manager.incident_store.save(data)
+    before = incident_digest(manager.incident_store)
     result = client.get(f"/api/incidents/{session.incident_id}")
     assert result.status_code == 200
     for secret in ("old-unconfigured-value", "other-unconfigured-value", "db password"):
         assert secret not in result.text
-    assert manager.incident_store.file_path.read_bytes() == before
+    assert incident_digest(manager.incident_store) == before

@@ -948,14 +948,14 @@ sys.path.insert(0, str(Path.cwd() / "tests"))
 from incident_store import IncidentStore
 from investigation.manager import InvestigationManager
 from investigation.store import RuntimeStore
-from mysql_support import allow_isolated_mysql_sockets, runtime_database_url
+from mysql_support import allow_isolated_mysql_sockets, incident_database_url, runtime_database_url
 
 root = Path(sys.argv[1])
 with allow_isolated_mysql_sockets(forbidden):
     store = RuntimeStore(runtime_database_url(root), read_only=True)
     session = store.get(sys.argv[2])
     checkpoint = store.load_checkpoint(session)
-    incidents = IncidentStore(root / "incidents.json")
+    incidents = IncidentStore(incident_database_url(root / "incidents.json"))
     manager = InvestigationManager(store, incidents)
     incident = incidents.get_incident(session.incident_id)
     print(json.dumps({

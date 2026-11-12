@@ -14,6 +14,7 @@ from investigation.models import RuntimeLimits, SessionStatus as S
 from investigation.state import transition
 from investigation.worker import Worker
 from models.investigation import InvestigationRecord
+from mysql_support import incident_digest
 from runtime_support import FixtureAgent, call, create_runtime, create_session
 from web_api.queries import RuntimeQueries
 
@@ -28,7 +29,7 @@ def test_recovery_snapshot_cannot_publish_after_worker_checkpoint(tmp_path):
     payload = store.load_checkpoint(claimed)
     worker._new_attempt(session.session_id, claim, payload)
     worker._tool(session.session_id, claim, payload, SimpleNamespace(**call()))
-    before = manager.incident_store.file_path.read_bytes()
+    before = incident_digest(manager.incident_store)
     snapshot_ready, release = threading.Event(), threading.Event()
     original_read = store.read
     failures = []
@@ -65,7 +66,7 @@ def test_recovery_snapshot_cannot_publish_after_worker_checkpoint(tmp_path):
         assert not failures
         publication.assert_not_called()
 
-    assert manager.incident_store.file_path.read_bytes() == before
+    assert incident_digest(manager.incident_store) == before
     latest = store.get(session.session_id)
     assert latest.checkpoint_id == newer.checkpoint_id
     assert not store.load_checkpoint(latest)["projected"]
@@ -167,14 +168,14 @@ def test_exhausted_projection_without_result_is_failed_and_idempotent(tmp_path, 
     before = (
         manager.store.get(session.session_id).state_version,
         manager.store.load_checkpoint(manager.store.get(session.session_id)),
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )
     manager.recover()
     manager.sync_incident(session.session_id)
     assert before == (
         manager.store.get(session.session_id).state_version,
         manager.store.load_checkpoint(manager.store.get(session.session_id)),
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )
 
 
@@ -243,7 +244,7 @@ def test_recovery_exhaustion_freezes_the_saved_result_totals(tmp_path):
     unused.request_durable_response.assert_not_called()
     assert unused.executions == []
     view = RuntimeQueries(
-        incident_path=manager.incident_store.file_path,
+        incident_url=manager.incident_store.database_url,
         runtime_url=manager.store.database_url,
     ).session(session.session_id)
     assert (
@@ -320,11 +321,11 @@ def test_legacy_terminal_counts_are_immutable_during_projection(tmp_path, archiv
     assert all(path.read_bytes() == content for path, content in archives.items())
     before = (
         store.get(session.session_id).state_version,
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )
     manager.recover()
     manager.sync_incident(session.session_id)
     assert before == (
         store.get(session.session_id).state_version,
-        manager.incident_store.file_path.read_bytes(),
+        incident_digest(manager.incident_store),
     )

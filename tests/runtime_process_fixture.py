@@ -1,4 +1,4 @@
-"""Only this dedicated child exits abruptly; never terminates another process."""
+﻿"""Only this dedicated child exits abruptly; never terminates another process."""
 import os
 import json
 from datetime import datetime
@@ -18,7 +18,7 @@ def create_claim_runtime(root):
     deadline = time.monotonic() + 10
     while True:
         try:
-            return create_runtime(root)
+            return create_runtime(root, ensure_schema=False)
         except FileLockError:
             if time.monotonic() > deadline:
                 raise
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     manager = (
         create_claim_runtime(sys.argv[1])
         if phase == "claim-contender"
-        else create_runtime(sys.argv[1])
+        else create_runtime(sys.argv[1], ensure_schema=False)
     )
     if phase == "claim-contender":
         owner = sys.argv[3]

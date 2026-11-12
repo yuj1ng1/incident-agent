@@ -25,7 +25,7 @@ from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence
 from models.investigation import InvestigationRecord
-from mysql_support import runtime_database_url
+from mysql_support import incident_digest, runtime_database_url
 from reinvestigation import should_reinvestigate
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
 
@@ -374,7 +374,7 @@ class HistoryRetentionTests(unittest.TestCase):
         self.assertEqual(len(hot.evidence), 4)
         self.assertEqual(len(hot.history_archives), 1)
         self.assertLess(len(hot.model_dump_json().encode("utf-8")), original_size // 2)
-        restored = IncidentStore(self.store.file_path).get_incident(incident.incident_id)
+        restored = IncidentStore(self.store.database_url).get_incident(incident.incident_id)
         self.assertEqual({e.observation_id or "legacy": e.model_dump(mode="json") for e in restored.evidence}, expected_evidence)
         self.assertEqual({r.session_id or "legacy": r.model_dump(mode="json") for r in restored.investigations}, expected_records)
         self.assertEqual(self.store.load()["version"], 2)
@@ -385,7 +385,7 @@ class HistoryRetentionTests(unittest.TestCase):
         self.store.save_incident(incident.fingerprint, incident)
         child = subprocess.run([
             sys.executable, "-B", str(ROOT / "runtime_cli.py"), "--store", runtime_database_url(self.root),
-            "--incidents", str(self.store.file_path), "--remediations", str(self.root / "remediation.json"),
+            "--incidents", self.store.database_url, "--remediations", str(self.root / "remediation.json"),
             "show-incident", incident.incident_id,
         ], cwd=self.root, capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(child.returncode, 0, child.stderr)
@@ -412,17 +412,16 @@ class HistoryRetentionTests(unittest.TestCase):
         incident = self.history()
         self.store.runtime_history_to_keep = 20
         self.store.save_incident(incident.fingerprint, incident)
-        original = self.store.file_path.read_bytes()
+        original = incident_digest(self.store)
         self.store.runtime_history_to_keep = 3
-        replace = os.replace
-        def fail_archive(source, target):
-            if Path(target).parent.name == "history":
-                raise OSError("isolated archive failure")
-            return replace(source, target)
-        with patch("incident_store.os.replace", side_effect=fail_archive):
+        with patch.object(
+            self.store,
+            "_load_archive",
+            side_effect=OSError("isolated archive failure"),
+        ):
             with self.assertRaises(OSError):
                 self.store.save_incident(incident.fingerprint, incident)
-        self.assertEqual(self.store.file_path.read_bytes(), original)
+        self.assertEqual(incident_digest(self.store), original)
         self.assertEqual(len(self.store.get_incident(incident.incident_id).evidence), 13)
         self.store.save_incident(incident.fingerprint, incident)
         self.assertEqual(len(self.store.get_incident(incident.incident_id).evidence), 13)
@@ -431,63 +430,87 @@ class HistoryRetentionTests(unittest.TestCase):
         incident = self.history()
         self.store.runtime_history_to_keep = 20
         self.store.save_incident(incident.fingerprint, incident)
-        original = self.store.file_path.read_bytes()
+        original = incident_digest(self.store)
         self.store.runtime_history_to_keep = 3
-        with patch.object(self.store, "save", side_effect=OSError("crash before hot commit")):
+        with patch.object(
+            self.store,
+            "_upsert_incident",
+            side_effect=OSError("crash before hot commit"),
+        ):
             with self.assertRaises(OSError):
                 self.store.save_incident(incident.fingerprint, incident)
-        self.assertEqual(self.store.file_path.read_bytes(), original)
-        archive_files = list((self.root / "history").glob("*.json"))
-        self.assertEqual(len(archive_files), 1)
+        self.assertEqual(incident_digest(self.store), original)
+        with self.store.read() as db:
+            archived = db.execute(
+                text(
+                    "SELECT count(*) FROM incident_history_archives "
+                    "WHERE incident_id=:incident_id"
+                ),
+                {"incident_id": incident.incident_id},
+            ).scalar_one()
+        self.assertEqual(archived, 0)
+        incident = self.store.get_incident(incident.incident_id, include_history=False)
         self.store.save_incident(incident.fingerprint, incident)
-        self.assertEqual(list((self.root / "history").glob("*.json")), archive_files)
         self.assertEqual(len(self.store.get_incident(incident.incident_id).evidence), 13)
 
     def test_missing_or_corrupt_archive_fails_closed_instead_of_returning_empty_history(self):
         incident = self.history()
         self.store.save_incident(incident.fingerprint, incident)
         ref = self.store.get_incident(incident.incident_id, include_history=False).history_archives[0]
-        path = self.root / "history" / (ref.sha256 + ".json")
-        original = path.read_bytes()
-        path.write_bytes(original + b"corrupt")
+        with self.store.transaction() as db:
+            db.execute(
+                text(
+                    "UPDATE incident_history_archives "
+                    "SET body=CONCAT(body, 'corrupt') WHERE sha256=:sha"
+                ),
+                {"sha": ref.sha256},
+            )
         with self.assertRaisesRegex(ValueError, "checksum_mismatch"):
             self.store.get_incident(incident.incident_id)
-        path.write_bytes(original)
-        hidden = path.with_suffix(".unavailable")
-        path.rename(hidden)
-        try:
-            with self.assertRaises(FileNotFoundError):
-                self.store.get_incident(incident.incident_id)
-        finally:
-            hidden.rename(path)
+        with self.store.transaction() as db:
+            db.execute(
+                text("DELETE FROM incident_history_archives WHERE sha256=:sha"),
+                {"sha": ref.sha256},
+            )
+        with self.assertRaises(FileNotFoundError):
+            self.store.get_incident(incident.incident_id)
 
     def test_legacy_v1_history_is_not_archived_without_session_identity(self):
         incident = self.history(0)
         payload = {incident.fingerprint: incident.model_dump(mode="json")}
-        self.store.file_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.store.save(payload)
         restored = self.store.get_incident(incident.incident_id)
         self.store.save_incident(incident.fingerprint, restored)
         self.assertEqual(self.store.load()["version"], 2)
         self.assertEqual(self.store.get_incident(incident.incident_id).evidence, incident.evidence)
         self.assertEqual(self.store.get_incident(incident.incident_id).investigations, incident.investigations)
-        self.assertFalse((self.root / "history").exists())
+        with self.store.read() as db:
+            archived = db.execute(
+                text(
+                    "SELECT count(*) FROM incident_history_archives "
+                    "WHERE incident_id=:incident_id"
+                ),
+                {"incident_id": incident.incident_id},
+            ).scalar_one()
+        self.assertEqual(archived, 0)
 
     def test_archived_observation_cannot_be_duplicated_by_projection_replay(self):
         incident = self.history()
         self.store.save_incident(incident.fingerprint, incident)
         old = InvestigationSession(session_id="history-session-0", incident_id=incident.incident_id,
                                    alert_fingerprint=incident.fingerprint, service=incident.service, status=S.COMPLETED)
-        before = self.store.file_path.read_bytes()
+        before = incident_digest(self.store)
         with self.assertRaisesRegex(ValueError, "archive_projection_mismatch"):
             self.store.apply_runtime_projection(old, {"records": [], "result": {"success": True, "status": "completed", "answer": "duplicate"}})
-        self.assertEqual(self.store.file_path.read_bytes(), before)
+        self.assertEqual(incident_digest(self.store), before)
         self.assertEqual(len(self.store.get_incident(incident.incident_id).investigations), 13)
 
     def test_stale_manifest_and_changes_to_immutable_history_are_rejected(self):
         stale = self.history()
+        snapshot = stale.model_copy(deep=True)
         self.store.save_incident(stale.fingerprint, stale)
         with self.assertRaisesRegex(ValueError, "manifest_conflict"):
-            self.store.save_incident(stale.fingerprint, stale)
+            self.store.save_incident(snapshot.fingerprint, snapshot)
         full = self.store.get_incident(stale.incident_id)
         archived = next(r for r in full.investigations if r.session_id == "history-session-0")
         archived.answer = "silently changed historical fact"

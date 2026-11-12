@@ -64,7 +64,7 @@ def create_demo(root, port, *, manual_approval=False):
         execution.SERVICE_LOCK = root / "isolated-execution.lock"
         compensation.COMPENSATION_REGISTRY = MappingProxyType({(SERVICE, DEPLOY): contract})
 
-        incidents = IncidentStore(root / "incidents.json")
+        incidents = IncidentStore()
         incidents.save_incident("w2-isolated-inventory", Incident(
             incident_id="inc-w2-isolated-inventory", service=SERVICE,
             severity="warning", status="investigating", alerts=[],
@@ -97,7 +97,7 @@ def create_demo(root, port, *, manual_approval=False):
             "application_port": port,
         }, indent=2), encoding="utf-8")
         app = create_app(
-            incident_path=incidents.file_path, include_runtime=False,
+            incident_url=incidents.database_url, include_runtime=False,
             remediation_path=store.file_path, authorization=auth,
             executor_factory=functools.partial(
                 execution.ActionExecutor, runtime=runtime, verifier=verifier,
@@ -146,7 +146,7 @@ def main(argv=None):
         from web_api.app import create_app
         from web_api.auth import WebAuthorization
         app = create_app(
-            incident_path=root / "incidents.json", include_runtime=False,
+            incident_url=None, include_runtime=False,
             remediation_path=root / "remediation.json", authorization=WebAuthorization("[]"),
         )
     else:

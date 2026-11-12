@@ -38,13 +38,16 @@ PageOffset = Annotated[int, Query(ge=0, le=10000)]
 
 def create_app(
     *,
-    incident_path: Path = ROOT / "data" / "incidents.json",
+    incident_url: str | None = None,
+    incident_path: Path | None = None,
     runtime_url: str | None = None,
     include_runtime: bool = True,
     remediation_path: Path = ROOT / "data" / "remediation.json",
     authorization=None,
     executor_factory=ActionExecutor,
 ) -> FastAPI:
+    if incident_url is None and incident_path is not None:
+        incident_url = incident_path
     auth = authorization or WebAuthorization()
     app = FastAPI(title="Incident Agent 本地工作台 API", version="0.2.0", debug=False)
     # Direct browser GETs from the local workbench; no proxy or credentials.
@@ -56,7 +59,7 @@ def create_app(
         allow_credentials=False,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
-    queries = RuntimeQueries(incident_path, runtime_url, include_runtime=include_runtime)
+    queries = RuntimeQueries(incident_url, runtime_url, include_runtime=include_runtime)
     remediations = RemediationQueries(remediation_path)
 
     @app.exception_handler(RequestValidationError)
@@ -138,7 +141,7 @@ def create_app(
             raise HTTPException(503, "store_unavailable")
         store = RemediationStore(remediation_path)
         proposal = store.get(proposal_id)
-        incident = IncidentStore(incident_path, read_only=True).get_incident(
+        incident = IncidentStore(incident_url, read_only=True).get_incident(
             proposal.incident_id, include_history=False,
         )
         if (incident is None or incident.status not in {"investigating", "resolved"}

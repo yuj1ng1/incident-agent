@@ -530,14 +530,11 @@ class StoreMonitorTests(unittest.TestCase):
             },
         )
         resolved.pop("alert_state")
-        self.store.file_path.write_text(
-            json.dumps(
-                {
-                    "legacy-id": incident.model_dump(mode="json"),
-                    "resolved-id": resolved,
-                },
-            ),
-            encoding="utf-8",
+        self.store.save(
+            {
+                "legacy-id": incident.model_dump(mode="json"),
+                "resolved-id": resolved,
+            },
         )
         self.assertEqual(
             self.store.get_active_incident("legacy-id").incident_id,

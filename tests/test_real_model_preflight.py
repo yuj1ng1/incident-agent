@@ -223,7 +223,13 @@ def test_default_run_uses_real_runtime_but_no_sdk_or_external_tool(
 
     runtime = RuntimeStore(runtime_database_url(root), read_only=True)
     assert runtime.get(summary["session_id"]).status == SessionStatus.COMPLETED
-    assert (root / "incidents.json").is_file()
+    from incident_store import IncidentStore
+    from mysql_support import incident_database_url
+
+    incidents = IncidentStore(
+        incident_database_url(root / "incidents.json"), read_only=True,
+    ).load()["incidents"]
+    assert incidents
     checkpoint = read_json(root, "checkpoint.json")
     Checkpoint.model_validate(checkpoint)
     assert checkpoint["records"][:4] == read_json(root, "case.json")["records"]

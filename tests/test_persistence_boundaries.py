@@ -1,4 +1,4 @@
-"""Real temporary stores, controlled clocks, threads and isolated child processes."""
+﻿"""Real temporary stores, controlled clocks, threads and isolated child processes."""
 from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
@@ -16,6 +16,7 @@ from unittest.mock import patch
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from db import tables
 from investigation.models import HumanCommand, SessionStatus as S
 from investigation.scheduler import Scheduler
 from investigation.state import LostClaim, RuntimeErrorBase, RuntimeIntegrityError
@@ -101,7 +102,9 @@ class PersistenceBoundaryTests(unittest.TestCase):
                 replacement = Worker(other_manager, FixtureAgent()).run_once()
                 self.assertEqual(replacement.status, S.COMPLETED)
                 before = self.saved()
-                json_before = self.incidents.file_path.read_bytes()
+                before_incident = self.incidents.get_incident(
+                    self.session.incident_id
+                ).model_dump(mode="json")
                 other = create_session(self.manager, service="inventory-service")
                 release.set()
                 self.assertTrue(progressed.wait(5), "lost claim permanently stopped Scheduler")
@@ -110,8 +113,11 @@ class PersistenceBoundaryTests(unittest.TestCase):
                 after = self.saved()
                 self.assertEqual(after[0].checkpoint_id, before[0].checkpoint_id)
                 self.assertEqual(after[1], before[1])
-                before_incident = json.loads(json_before)["incidents"][self.session.incident_id]
-                self.assertEqual(self.incidents.load()["incidents"][self.session.incident_id], before_incident)
+                self.assertEqual(
+                    self.incidents.get_incident(self.session.incident_id)
+                    .model_dump(mode="json"),
+                    before_incident,
+                )
                 self.assertTrue(any(e["event_type"] == "worker_claim_lost"
                                     for e in self.store.events(self.session.session_id)))
             finally:
@@ -176,26 +182,35 @@ class PersistenceBoundaryTests(unittest.TestCase):
 
     def test_archived_identical_result_is_verified_before_ack(self):
         self.archive()
-        before = self.incidents.file_path.read_bytes()
+        before = self.incidents.load()
         with patch.object(self.incidents, "_load_archive", wraps=self.incidents._load_archive) as archive:
             self.manager.sync_incident(self.session.session_id)
         self.assertEqual(archive.call_count, 1)
         self.assertTrue(self.saved()[1]["projected"])
-        self.assertEqual(self.incidents.file_path.read_bytes(), before)
+        self.assertEqual(self.incidents.load(), before)
         self.assertEqual(len(self.incidents.get_incident(self.session.incident_id).investigations), 5)
 
     def test_corrupt_archive_cannot_be_acknowledged(self):
         reference = self.archive()
-        path = self.root / "history" / (reference.sha256 + ".json")
-        path.write_bytes(path.read_bytes() + b"corrupt")
+        with self.incidents.transaction() as db:
+            db.execute(
+                text(
+                    "UPDATE incident_history_archives "
+                    "SET body=CONCAT(body, 'corrupt') WHERE sha256=:sha"
+                ),
+                {"sha": reference.sha256},
+            )
         with self.assertRaisesRegex(ValueError, "checksum_mismatch"):
             self.manager.sync_incident(self.session.session_id)
         self.assertFalse(self.saved()[1]["projected"])
 
     def test_missing_archive_fails_closed(self):
         reference = self.archive()
-        path = self.root / "history" / (reference.sha256 + ".json")
-        path.rename(path.with_suffix(".unavailable"))
+        with self.incidents.transaction() as db:
+            db.execute(
+                text("DELETE FROM incident_history_archives WHERE sha256=:sha"),
+                {"sha": reference.sha256},
+            )
         with self.assertRaisesRegex(ValueError, "archive_unavailable"):
             self.manager.sync_incident(self.session.session_id)
         self.assertFalse(self.saved()[1]["projected"])
@@ -314,7 +329,7 @@ class PersistenceBoundaryTests(unittest.TestCase):
         checkpoint = self.saved()[1]
         with patch.object(self.store, "checkpoint", wraps=self.store.checkpoint) as writes, \
              patch.object(self.incidents, "apply_runtime_projection", wraps=self.incidents.apply_runtime_projection) as projects, \
-             patch.object(self.incidents, "save", wraps=self.incidents.save) as saves:
+             patch.object(self.incidents, "_save_incident_in_tx", wraps=self.incidents._save_incident_in_tx) as saves:
             worker._tool(session.session_id, claim, checkpoint, SimpleNamespace(**call()))
             self.manager.sync_incident(session.session_id)
         self.assertEqual((writes.call_count, projects.call_count, saves.call_count,
@@ -408,7 +423,7 @@ class PersistenceBoundaryTests(unittest.TestCase):
         observations_before = len(self.incidents.get_incident(session.incident_id).evidence)
         with patch.object(self.store, "checkpoint", wraps=self.store.checkpoint) as writes, \
              patch.object(self.incidents, "apply_runtime_projection", wraps=self.incidents.apply_runtime_projection) as projects, \
-             patch.object(self.incidents, "save", wraps=self.incidents.save) as saves:
+             patch.object(self.incidents, "_save_incident_in_tx", wraps=self.incidents._save_incident_in_tx) as saves:
             for _ in range(5):
                 self.now += timedelta(seconds=1)
                 checkpoint["phase"] = "model_started"
@@ -442,13 +457,13 @@ class PersistenceBoundaryTests(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(child.returncode, 23, child.stderr)
         self.assertFalse(self.saved()[1].get("projected"))
-        before = self.incidents.file_path.read_bytes()
+        before = self.incidents.load()
         restarted = create_runtime(self.root, clock=lambda: self.now)
         agent = FixtureAgent()
         self.assertIsNone(Worker(restarted, agent).run_once())
         agent.request_durable_response.assert_not_called()
         self.assertTrue(self.saved()[1]["projected"])
-        self.assertEqual(self.incidents.file_path.read_bytes(), before)
+        self.assertEqual(self.incidents.load(), before)
         self.assertEqual(len(self.incidents.get_incident(self.session.incident_id).investigations), 1)
 
     def test_two_actual_process_writers_preserve_monitor_and_worker_fields(self):

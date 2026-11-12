@@ -21,7 +21,7 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="本地持久化调查管理；修复审批继续使用 remediation_cli.py")
     parser.add_argument("--store", default=None, help="MySQL URL；默认读取 INCIDENT_AGENT_DATABASE_URL")
-    parser.add_argument("--incidents", default=str(Path(__file__).resolve().parent / "data" / "incidents.json"))
+    parser.add_argument("--incidents", default=None, help="MySQL URL；默认读取 INCIDENT_AGENT_DATABASE_URL")
     parser.add_argument("--remediations", default=str(Path(__file__).resolve().parent / "data" / "remediation.json"))
     commands = parser.add_subparsers(dest="operation", required=True)
     unblock = commands.add_parser("unblock-model", help="修正认证/余额问题后显式解除全局模型阻塞；不恢复已取消 Session")

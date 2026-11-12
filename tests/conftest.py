@@ -20,24 +20,37 @@ def protect_operator_stores(monkeypatch):
     """An omitted or real path must fail before opening operator data."""
     from incident_store import IncidentStore
     from investigation.store import RuntimeStore
+    from mysql_support import incident_database_url
     from remediation.store import RemediationStore
 
     protected = Path(__file__).resolve().parents[1] / "data"
 
-    def guard_path_constructor(store_class, default_path=None):
-        original = store_class.__init__
+    incident_original = IncidentStore.__init__
 
-        @wraps(original)
-        def isolated(self, *args, **kwargs):
-            path = args[0] if args else kwargs.get("path", kwargs.get("file_path", default_path))
-            if path is not None and Path(path).resolve().is_relative_to(protected):
+    @wraps(incident_original)
+    def isolated_incident(self, location=None, *args, **kwargs):
+        path = location
+        if path is not None and not str(path).startswith("mysql+"):
+            path = Path(path)
+            if path.resolve().is_relative_to(protected):
                 raise AssertionError("tests_must_use_temporary_store_paths")
-            return original(self, *args, **kwargs)
+            location = incident_database_url(path)
+        return incident_original(self, location, *args, **kwargs)
 
-        monkeypatch.setattr(store_class, "__init__", isolated)
+    monkeypatch.setattr(IncidentStore, "__init__", isolated_incident)
 
-    guard_path_constructor(IncidentStore)
-    guard_path_constructor(RemediationStore)
+    remediation_original = RemediationStore.__init__
+
+    @wraps(remediation_original)
+    def isolated_remediation(self, file_path=None, *args, **kwargs):
+        path = file_path if file_path is not None else kwargs.get("file_path")
+        if path is not None:
+            path = Path(path)
+            if path.resolve().is_relative_to(protected):
+                raise AssertionError("tests_must_use_temporary_store_paths")
+        return remediation_original(self, file_path, *args, **kwargs)
+
+    monkeypatch.setattr(RemediationStore, "__init__", isolated_remediation)
 
     original = RuntimeStore.__init__
 

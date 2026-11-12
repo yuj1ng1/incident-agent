@@ -61,7 +61,7 @@ Runtime 保存结果后，终端显示 `[Investigation Completed]` 和完整回�
 - `monitor/incident_monitor.py`：轮询告警，调度调查、重新调查和恢复判断，并隔离单轮异常。
 - `investigation/`：管理调查生命周期、权威预算、Checkpoint、缓存、HITL 和恢复对账。
 - `agent/agent.py`：构建 Prompt、发起单轮模型请求、解析 FunctionCall 和最终回答。
-- `incident_store.py`：保存 Incident 与最近调查，更早 Runtime 证据完整归档到 `data/history/`。
+- `incident_store.py`：在 MySQL 保存 Incident、活跃 fingerprint 映射和最近调查；更早 Runtime 证据按 SHA-256 归档，不再写 `data/history/`。
 - `clients/`、`tools/`：查询真实 Prometheus 指标、Loki 日志和服务健康状态。
 - `models/`：Alert、Evidence、Incident、InvestigationResult 和 InvestigationRecord。
 - `model_client/`：单次模型请求；重试及累计预算由 Runtime 控制。
@@ -90,7 +90,7 @@ if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
 python main.py
 ```
 
-Incident 数据文件在首次启动时自动创建。真实 `.env`、运行数据、日志、编辑器配置、Python 缓存和虚拟环境均排除在版本控制之外。
+Runtime 和 Incident 使用同一 MySQL schema，首次部署执行 `alembic upgrade head`，不再创建 Incident JSON 数据文件。真实 `.env`、日志、编辑器配置、Python 缓存和虚拟环境均排除在版本控制之外。
 
 ## 回归验证
 
@@ -110,11 +110,11 @@ python -B -m pytest tests -q --disable-warnings
 
 ## 已知限制
 
-IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。MySQL Runtime、Incident JSON 和 Remediation JSON 分别承担调查状态、告警历史和修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
+IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。MySQL 同时承担 Runtime 与 Incident/归档职责，Remediation JSON 继续承担修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
 
 默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。每次尝试最多 7 轮模型、13 次工具；同一 Incident 的自动 Session 共用原有 3 次尝试、21 次模型、39 次工具及时间/恢复限制。分类 FAILED 退避后有限重试，EXHAUSTED/CANCELLED 需人工重开。
 
-热文件默认保留最近 3 次 Runtime 调查，完整历史可查询。MySQL Runtime 需要按部署流程备份；Incident 归档及审计继续占用 `data/` 磁盘，备份需要完整 data 目录，不能只复制 incidents.json。
+热 Incident 默认保留最近 3 次 Runtime 调查，更早记录在 MySQL 归档表，可完整查询。MySQL 需要按部署流程备份；Remediation 数据文件仍在 `data/`，备份需同时覆盖数据库和该文件。
 
 生产及测试依赖分别固定于 `requirements.lock.txt`、`requirements-test.lock.txt`。
 

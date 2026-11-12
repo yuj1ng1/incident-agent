@@ -249,18 +249,19 @@ def session_summary(session):
 class RuntimeQueries:
     def __init__(
         self,
-        incident_path=ROOT / "data" / "incidents.json",
+        incident_url=None,
         runtime_url=None,
         *,
         include_runtime=True,
+        incident_path=None,
     ):
-        # Storing paths/URLs is inert. Each request opens existing stores read-only.
-        self.incident_path = Path(incident_path)
+        # Storing URLs is inert. Each request opens existing stores read-only.
+        self.incident_url = incident_url if incident_url is not None else incident_path
         self.runtime_url = runtime_url
         self.include_runtime = include_runtime
 
     def incidents(self, *, limit, offset, status, service=None):
-        store = IncidentStore(self.incident_path, read_only=True)
+        store = IncidentStore(self.incident_url, read_only=True)
         items = store.list_incidents(
             limit=limit + 1, offset=offset, status=status, service=service,
         )
@@ -268,7 +269,7 @@ class RuntimeQueries:
                             limit=limit, offset=offset, has_more=len(items) > limit)
 
     def incident_record(self, incident_id):
-        store = IncidentStore(self.incident_path, read_only=True)
+        store = IncidentStore(self.incident_url, read_only=True)
         incident = store.get_incident(incident_id, include_history=False)
         if incident is not None and incident.incident_id != incident_id:
             raise ValueError("incident_store_identity_mismatch")

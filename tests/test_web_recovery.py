@@ -7,11 +7,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 from incident_store import IncidentStore
+from db import tables
 from models.incident import Evidence, Incident
 from models.recovery import (
     RecoveryAttempt, RecoveryCheck, RecoveryCondition, RecoveryPolicy,
     RecoveryReceipt, RecoverySample, RecoveryVerification,
 )
+from mysql_support import incident_digest
 from web_api.app import create_app
 
 
@@ -126,12 +128,27 @@ def recovery_api(tmp_path):
     path = tmp_path / "incidents.json"
     app = create_app(incident_path=path, include_runtime=False)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from pydantic import ValidationError
+
         def write(record):
-            path.write_text(json.dumps({
-                "version": 2,
-                "incidents": {record["incident_id"]: record},
-                "active_by_fingerprint": {},
-            }), encoding="utf-8")
+            try:
+                IncidentStore(path).save({
+                    "version": 2,
+                    "incidents": {record["incident_id"]: record},
+                    "active_by_fingerprint": {},
+                })
+            except ValidationError:
+                store = IncidentStore(path)
+                with store.transaction() as db:
+                    db.execute(tables.incidents.insert().values(
+                        incident_id=record["incident_id"],
+                        fingerprint=record.get("fingerprint"),
+                        service=record["service"],
+                        status=record["status"],
+                        alert_state=record.get("alert_state", "firing"),
+                        data=json.dumps(record),
+                        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    ))
         yield path, client, write
 
 
@@ -205,14 +222,14 @@ def test_historical_clears_do_not_imply_business_verification(recovery_api, lega
         record.pop("recovery_verified_at")
     write(record)
     if v1:
-        path.write_text(json.dumps({record["fingerprint"]: record}), encoding="utf-8")
-    before = path.read_bytes()
+        IncidentStore(path).save({record["fingerprint"]: record})
+    before = incident_digest(IncidentStore(path))
     view = read_view(client)
     assert view["status"] == ("legacy_only" if legacy_timestamp else "not_recorded")
     assert view["verified_at"] is None
     assert view["attempts"] == [] and view["attempt_count"] == 0
     assert view["max_attempts"] is None and view["reason"] is None
-    assert path.read_bytes() == before
+    assert incident_digest(IncidentStore(path)) == before
 
 
 @pytest.mark.parametrize("with_task", [False, True])
@@ -341,8 +358,7 @@ def test_registered_identifiers_are_masked_without_exposing_secret_values(recove
 def test_detail_reads_cannot_claim_probe_retry_or_write(recovery_api, status):
     path, client, write = recovery_api
     write(recovery_record(status))
-    before = path.read_bytes()
-    files_before = set(path.parent.rglob("*"))
+    before = incident_digest(IncidentStore(path))
     blocked = AssertionError("GET invoked recovery work")
     with (
         patch.object(IncidentStore, "claim_recovery_verification", side_effect=blocked),
@@ -358,5 +374,4 @@ def test_detail_reads_cannot_claim_probe_retry_or_write(recovery_api, status):
         assert read_view(client)["status"] == status
         for method in ("post", "put", "patch", "delete"):
             assert getattr(client, method)("/api/incidents/inc-web-recovery").status_code == 405
-    assert path.read_bytes() == before
-    assert set(path.parent.rglob("*")) == files_before
+    assert incident_digest(IncidentStore(path)) == before

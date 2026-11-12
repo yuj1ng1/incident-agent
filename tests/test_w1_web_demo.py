@@ -7,6 +7,7 @@ import pytest
 
 import remediation.compensation as compensation
 import remediation.executor as execution
+from mysql_support import incident_database_url, runtime_database_url
 from scripts.w1_web_demo import create_demo
 
 
@@ -21,7 +22,11 @@ def test_synthetic_workflows_preserve_approval_permissions_unknown_outcomes_and_
                          (execution, "ACTION_REGISTRY"), (execution, "SERVICE_LOCK")):
         monkeypatch.setattr(module, name, getattr(module, name))
     root = tmp_path / "fixture"
-    app = create_demo(root)
+    app = create_demo(
+        root,
+        incident_url=incident_database_url(root / "incidents.json"),
+        runtime_url=runtime_database_url(root),
+    )
     tokens = json.loads((root / "operators.json").read_text())
     scenarios = json.loads((root / "scenarios.json").read_text())
     counter = 0
