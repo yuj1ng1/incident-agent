@@ -90,7 +90,9 @@ if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
 python main.py
 ```
 
-Runtime 和 Incident 使用同一 MySQL schema，首次部署执行 `alembic upgrade head`，不再创建 Incident JSON 数据文件。真实 `.env`、日志、编辑器配置、Python 缓存和虚拟环境均排除在版本控制之外。
+Runtime、Incident 与 Remediation 默认使用同一 MySQL schema，首次部署执行 `alembic upgrade head`。Remediation 提案、审批、执行、验证和审计通过单行文档事务保存；生产存储不再创建 Incident/Remediation JSON。真实 `.env`、日志、编辑器配置、Python 缓存和虚拟环境均排除在版本控制之外。
+
+Remediation 的事务、锁与迁移边界见 [Remediation MySQL 迁移](docs/REMEDIATION_MYSQL_MIGRATION_2026-11-14_10-43-33.md)。历史 SQLite、Incident JSON/归档和 Remediation JSON 的预览、显式导入、冲突处理及当前验收边界见 [历史数据导入与一致性校验](docs/LEGACY_DATA_IMPORT_2026-11-14_10-42-54.md)。导入默认只预览，必须显式 `--apply` 才写库；`remediation_cli.py --store` 和 `runtime_cli.py --remediations` 均接收 MySQL URL，默认读取 `INCIDENT_AGENT_DATABASE_URL`。
 
 ## 回归验证
 
@@ -102,7 +104,7 @@ $env:INCIDENT_AGENT_TEST_DATABASE_URL = 'mysql+pymysql://incident_agent_test:CHA
 python -B -m pytest tests -q --disable-warnings
 ```
 
-2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，Incident 与日志写入临时目录，Runtime 写入隔离 MySQL schema；生产装配测试提供占位密钥，不需要真实密钥。最新结果见 [Runtime 稳定性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)。
+2026-10-06 的原始回归记录为 35 项测试全部通过。当前回归使用 Fixture/Mock，Incident、Runtime 和 Remediation 写入隔离 MySQL schema，日志写入临时目录；生产装配测试提供占位密钥，不需要真实密钥。历史结果见 [Runtime 稳定性验收](docs/RUNTIME_STABILITY_VALIDATION_2026-10-10_17-40-32.md)，历史副本的双版本 MySQL 演练与严格校验结果见上述导入记录。
 
 2026-10-06 还验证了真实启动、两轮告警查询及一次使用合成告警的真实模型调查。详细验证记录及修复说明见 [回归测试报告](docs/REGRESSION_REPORT_2026-10-06_14-32-43.md)。真实服务当时没有 firing 告警，生命周期变化由可控响应覆盖。
 
@@ -110,11 +112,11 @@ python -B -m pytest tests -q --disable-warnings
 
 ## 已知限制
 
-IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。MySQL 同时承担 Runtime 与 Incident/归档职责，Remediation JSON 继续承担修复审批职责；跨存储通过幂等投影对账，不具有共同事务。
+IncidentStore 按 Incident ID 保留历史，fingerprint 指向当前活跃 Incident。MySQL 同时承担 Runtime、Incident/归档和 Remediation 权威存储；不同 Store 仍使用独立事务，通过幂等投影对账，不因共用 schema 而自动具有共同事务。
 
 默认每 30 秒轮询，重新调查冷却为 5 分钟，http_5xx_rate 绝对增加至少 0.2 时可提前重新调查。每次尝试最多 7 轮模型、13 次工具；同一 Incident 的自动 Session 共用原有 3 次尝试、21 次模型、39 次工具及时间/恢复限制。分类 FAILED 退避后有限重试，EXHAUSTED/CANCELLED 需人工重开。
 
-热 Incident 默认保留最近 3 次 Runtime 调查，更早记录在 MySQL 归档表，可完整查询。MySQL 需要按部署流程备份；Remediation 数据文件仍在 `data/`，备份需同时覆盖数据库和该文件。
+热 Incident 默认保留最近 3 次 Runtime 调查，更早记录在 MySQL 归档表，可完整查询。MySQL 需要按部署流程备份；旧 SQLite、Incident JSON/归档及 Remediation JSON 保留为历史导入源，不再承担生产写入。
 
 生产及测试依赖分别固定于 `requirements.lock.txt`、`requirements-test.lock.txt`。
 
