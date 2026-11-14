@@ -42,12 +42,15 @@ def create_app(
     incident_path: Path | None = None,
     runtime_url: str | None = None,
     include_runtime: bool = True,
-    remediation_path: Path = ROOT / "data" / "remediation.json",
+    remediation_url: str | None = None,
+    remediation_path: Path | None = None,
     authorization=None,
     executor_factory=ActionExecutor,
 ) -> FastAPI:
     if incident_url is None and incident_path is not None:
         incident_url = incident_path
+    if remediation_url is None and remediation_path is not None:
+        remediation_url = remediation_path
     auth = authorization or WebAuthorization()
     app = FastAPI(title="Incident Agent 本地工作台 API", version="0.2.0", debug=False)
     # Direct browser GETs from the local workbench; no proxy or credentials.
@@ -60,7 +63,7 @@ def create_app(
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     queries = RuntimeQueries(incident_url, runtime_url, include_runtime=include_runtime)
-    remediations = RemediationQueries(remediation_path)
+    remediations = RemediationQueries(remediation_url)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc):
@@ -73,9 +76,13 @@ def create_app(
     def remediation_failure(request: Request, exc):
         code = str(exc)
         status = 404 if code == "proposal_not_found" else 409
-        if code == "store_busy" and request.method == "GET":
-            status = 503
-        if isinstance(exc, StoreError) and code not in {"proposal_not_found", "store_busy"}:
+        if isinstance(exc, StoreError) and code in {
+            "remediation_store_unavailable", "remediation_database_url_required",
+        }:
+            status, code = 503, "store_unavailable"
+        elif isinstance(exc, StoreError) and code == "remediation_service_busy":
+            status = 409
+        elif isinstance(exc, StoreError) and code != "proposal_not_found":
             status, code = 500, "remediation_store_failed"
         if not re.fullmatch(r"[a-z_]+(?::[a-z_]+)?", code):
             code = "remediation_operation_rejected"
@@ -104,6 +111,7 @@ def create_app(
         try:
             queries.sessions(limit=1, offset=0, status=None, incident_id=None)
             queries.incidents(limit=1, offset=0, status=None)
+            remediations.snapshot()
         except (OSError, SQLAlchemyError, RuntimeErrorBase, RuntimeError) as exc:
             reason = str(exc) if isinstance(exc, (RuntimeErrorBase, RuntimeError)) else ""
             if reason not in {
@@ -137,9 +145,7 @@ def create_app(
         return result
 
     def writable_store(proposal_id):
-        if not Path(remediation_path).is_file():
-            raise HTTPException(503, "store_unavailable")
-        store = RemediationStore(remediation_path)
+        store = RemediationStore(remediation_url)
         proposal = store.get(proposal_id)
         incident = IncidentStore(incident_url, read_only=True).get_incident(
             proposal.incident_id, include_history=False,

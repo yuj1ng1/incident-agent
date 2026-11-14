@@ -23,7 +23,10 @@ def _remediation_failure(exc):
     from remediation.store import StoreError
     if isinstance(exc, StoreError):
         code = str(exc)
-        if code in {"store_busy", "remediation_store_write_failed", "remediation_store_corrupt_or_unreadable"}:
+        if code in {
+            "store_busy", "remediation_store_write_failed",
+            "remediation_store_unavailable", "remediation_store_corrupt_or_unreadable",
+        }:
             return code, code != "remediation_store_corrupt_or_unreadable"
         return "StoreError", False
     if isinstance(exc, PermissionError):

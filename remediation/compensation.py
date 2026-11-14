@@ -68,7 +68,7 @@ def compensation_requester(data, proposal):
     link = proposal.compensation
     if link is None:
         return None
-    requests = [event["details"].get("assessment") for event in data["audit"]
+    requests = [event.get("details", {}).get("assessment") for event in data["audit"]
                 if event["event"] == "compensation_evaluated"
                 and event["proposal_id"] == link.original_proposal_id]
     matches = [request for request in requests if request
@@ -234,8 +234,9 @@ def record_request(
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
         raise RemediationError("compensation_reason_required")
     for event in data["audit"]:
-        old = event["details"].get("assessment")
-        if event["details"].get("command_id") == command_id:
+        details = event.get("details", {})
+        old = details.get("assessment")
+        if details.get("command_id") == command_id:
             raise RemediationError("command_id_conflict")
         if event["event"] == "compensation_evaluated" and old and old["command_id"] == command_id:
             assessment = CompensationAssessment.model_validate(old)

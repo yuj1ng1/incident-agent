@@ -291,7 +291,8 @@ def test_unreadable_remediation_store_does_not_hide_saved_conclusion(runtime, tm
     path = tmp_path / "remediation.json"
     planner = RemediationPlanner(RemediationStore(path))
     manager.remediation_planner = planner
-    path.write_text("broken JSON", encoding="utf-8")
+    from mysql_support import replace_remediation_document
+    replace_remediation_document(planner.store, "broken JSON")
     with patch("remediation.planner.utc_now", manager.store.clock):
         completed = Worker(manager, remediation_agent(manager.store.clock)).run_once()
     workflow = manager.workflow(session.session_id)

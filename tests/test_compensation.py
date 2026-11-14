@@ -19,7 +19,10 @@ from remediation.approval import approval_digest
 from remediation.compensation import evaluate
 from remediation.executor import ActionExecutor
 from remediation.state import RemediationError
-from remediation.store import FileLock, RemediationStore, StoreError
+from remediation.store import RemediationStore, StoreError
+from mysql_support import (
+    remediation_digest, remediation_raw, replace_remediation_document,
+)
 from test_remediation import proposal
 
 
@@ -85,7 +88,7 @@ def test_preflight_records_machine_reason_without_arbitrary_error_text(comp):
     action = ActionExecutor(comp.store).execute(pending.proposal_id, "executor")
     assert action.execution_outcome == O.NOT_EXECUTED
     assert action.details["reason"] == "compensation_identity_probe_failed"
-    assert "private credential example" not in comp.store.file_path.read_text(encoding="utf-8")
+    assert "private credential example" not in remediation_raw(comp.store)
 
 
 def test_no_production_target_is_registered_or_invented(comp):
@@ -376,25 +379,26 @@ def test_legacy_records_keep_digest_and_unknown_verification_without_rewrite(com
         p.pop("compensation"); p.pop("incident_fingerprint")
     data["version"] = 1
     raw = json.dumps(data).encode()
-    comp.store.file_path.write_bytes(raw)
-    loaded = RemediationStore(comp.store.file_path, read_only=True).get(comp.original.proposal_id)
+    replace_remediation_document(comp.store, raw)
+    loaded = RemediationStore(comp.store.database_url, read_only=True).get(comp.original.proposal_id)
     assert approval_digest(loaded) == loaded.approval_digest
-    assert comp.store.file_path.read_bytes() == raw
+    assert remediation_raw(comp.store).encode() == raw
 
 
-def test_read_only_queries_share_existing_os_lock_without_writing_or_creating_one(comp):
-    lock_path = Path(str(comp.store.file_path) + ".lock")
-    before = lock_path.read_bytes()
-    with FileLock(lock_path, read_only=True):
-        with pytest.raises(StoreError, match="store_busy"):
-            comp.store.approve(comp.original.proposal_id, "approver")
-    assert lock_path.read_bytes() == before
-    readonly = RemediationStore(comp.store.file_path, read_only=True)
-    assert readonly.get(comp.original.proposal_id).proposal_id == comp.original.proposal_id
-    legacy_path = comp.root / "legacy-without-lock.json"
-    legacy_path.write_bytes(comp.store.file_path.read_bytes())
-    RemediationStore(legacy_path, read_only=True).load()
-    assert not Path(str(legacy_path) + ".lock").exists()
+def test_read_only_queries_read_committed_snapshot_without_writes(comp):
+    before = remediation_digest(comp.store)
+    readonly = RemediationStore(comp.store.database_url, read_only=True)
+    with comp.store.transaction() as data:
+        data["proposals"].clear()
+        # MVCC readers see the last committed document while a writer holds it.
+        assert readonly.get(comp.original.proposal_id).proposal_id == comp.original.proposal_id
+        data["proposals"] = comp.store.load()["proposals"]
+    after_commit = remediation_digest(comp.store)
+    assert after_commit != before
+    readonly.load()
+    assert remediation_digest(comp.store) == after_commit
+    with pytest.raises(StoreError, match="read_only"):
+        readonly.approve(comp.original.proposal_id, "approver")
 
 
 @pytest.mark.parametrize("phase", ["executing_committed", "action_returned", "action_committed"])
@@ -403,11 +407,11 @@ def test_real_compensation_child_crash_never_blindly_replays(comp, phase):
     approved = comp.store.approve(child(comp).proposal_id, "approver")
     result = subprocess.run(
         [sys.executable, "-B", str(Path(__file__).with_name("compensation_process_fixture.py")),
-         str(comp.root), approved.proposal_id, phase],
+         str(comp.root), approved.proposal_id, phase, comp.store.database_url],
         capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 73, result.stderr
-    restored = RemediationStore(comp.store.file_path)
+    restored = RemediationStore(comp.store.database_url)
     assert restored.get(approved.proposal_id).status == S.EXECUTING
     assert len([a for a in restored.load()["actions"] if a["proposal_id"] == approved.proposal_id]) == int(phase == "action_committed")
     with pytest.raises(RemediationError, match="not_approved:executing"):

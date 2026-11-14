@@ -21,7 +21,10 @@ from remediation.demo_action import DemoRuntime, disable_demo_regression
 from remediation.executor import ACTION_REGISTRY, ActionExecutor
 from remediation.planner import RemediationPlanner
 from remediation.state import RemediationError, transition
-from remediation.store import FileLock, RemediationStore, StoreError
+from remediation.store import RemediationStore, StoreError
+from mysql_support import (
+    remediation_digest, remediation_raw, replace_remediation_document,
+)
 from remediation.verification import DemoClient, DemoVerifier
 from remediation.windows_process import belongs_to_demo
 from remediation_cli import main as cli
@@ -182,44 +185,50 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(VerificationResult.model_validate(data["verifications"][0]), v)
 
     def test_corrupt_json_fails_closed_unchanged(self):
-        self.path.write_text("{broken", encoding="utf-8")
+        replace_remediation_document(self.store, "{broken")
         with self.assertRaisesRegex(StoreError, "corrupt"):
             self.store.approve(self.p.proposal_id, "human")
-        self.assertEqual(self.path.read_text(encoding="utf-8"), "{broken")
+        self.assertEqual(remediation_raw(self.store), "{broken")
 
     def test_wrong_schema_fails_closed(self):
-        self.path.write_text('{"version":1}', encoding="utf-8")
+        replace_remediation_document(self.store, '{"version":1}')
         with self.assertRaises(StoreError):
             self.store.load()
 
     def test_invalid_nested_proposal_fails_closed(self):
         data = self.store.load()
         data["proposals"][self.p.proposal_id]["status"] = "auto_approved"
-        self.path.write_text(json.dumps(data), encoding="utf-8")
+        replace_remediation_document(self.store, json.dumps(data))
         with self.assertRaises(StoreError):
             self.store.load()
 
-    def test_atomic_replace_called(self):
-        import os
-        with patch("remediation.store.os.replace", wraps=os.replace) as replace:
-            self.store.approve(self.p.proposal_id, "human")
-        source, target = replace.call_args.args
-        self.assertEqual(source.parent, target.parent)
-        self.assertEqual(target, self.path)
-        self.assertFalse(source.exists())
+    def test_approval_and_audit_commit_together(self):
+        self.store.approve(self.p.proposal_id, "human")
+        data = RemediationStore(self.store.database_url).load()
+        self.assertEqual(data["proposals"][self.p.proposal_id]["status"], "approved")
+        self.assertEqual(data["audit"][-1]["event"], "approved")
+        self.assertFalse(self.path.exists())
 
-    def test_failed_replace_preserves_previous_json(self):
-        before = self.path.read_bytes()
-        with patch("remediation.store.os.replace", side_effect=OSError("sensitive output")):
+    def test_failed_transaction_rolls_back_proposal_and_audit(self):
+        before = remediation_digest(self.store)
+        save = self.store._save
+
+        def fail_after_update(data):
+            save(data)
+            raise StoreError("write_failed")
+
+        with patch.object(self.store, "_save", side_effect=fail_after_update):
             with self.assertRaisesRegex(StoreError, "write_failed"):
                 self.store.approve(self.p.proposal_id, "human")
-        self.assertEqual(self.path.read_bytes(), before)
-        self.assertFalse(list(self.path.parent.glob("*.tmp")))
+        self.assertEqual(remediation_digest(self.store), before)
 
-    def test_os_lock_blocks_second_writer(self):
-        with FileLock(str(self.path) + ".lock"):
-            with self.assertRaisesRegex(StoreError, "busy"):
-                self.store.approve(self.p.proposal_id, "human")
+    def test_rolled_back_writer_releases_row_lock(self):
+        with self.assertRaisesRegex(ValueError, "abort"):
+            with self.store.transaction() as data:
+                data["proposals"].clear()
+                raise ValueError("abort")
+        self.store.approve(self.p.proposal_id, "human")
+        self.assertEqual(self.store.get(self.p.proposal_id).status, S.APPROVED)
 
     def test_duplicate_incident_version_deduped(self):
         duplicate = self.store.create(proposal())
@@ -300,7 +309,7 @@ class ExecutorTests(unittest.TestCase):
         self.verifier.verify.side_effect = RuntimeError("secret")
         self.executor.execute(self.p.proposal_id, "human")
         self.assertEqual(self.store.get(self.p.proposal_id).status, S.VERIFICATION_FAILED)
-        self.assertNotIn("secret", self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("secret", remediation_raw(self.store))
 
     def test_action_failure_no_verification(self):
         self.store.approve(self.p.proposal_id, "human")
@@ -357,30 +366,30 @@ class ExecutorTests(unittest.TestCase):
 
     def test_another_execution_holds_service_lock(self):
         self.store.approve(self.p.proposal_id, "human")
-        with FileLock(Path(self.temp.name) / "service.lock"):
+        with self.store.service_lock(Path(self.temp.name) / "service.lock"):
             with self.assertRaises(StoreError):
                 self.executor.execute(self.p.proposal_id, "human")
         self.runtime.stop.assert_not_called()
 
     def test_cli_list_and_show(self):
         with redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli(["--store", str(self.path), "list"]), 0)
+            self.assertEqual(cli(["--store", self.store.database_url, "list"]), 0)
         self.assertEqual(json.loads(output.getvalue())[0]["status"], "pending")
         with redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli(["--store", str(self.path), "show", self.p.proposal_id]), 0)
+            self.assertEqual(cli(["--store", self.store.database_url, "show", self.p.proposal_id]), 0)
         self.assertEqual(json.loads(output.getvalue())["proposal"]["proposal_id"], self.p.proposal_id)
 
     def test_cli_approve_has_no_action(self):
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(cli(["--store", str(self.path), "approve", self.p.proposal_id, "--by", "human"]), 0)
+            self.assertEqual(cli(["--store", self.store.database_url, "approve", self.p.proposal_id, "--by", "human"]), 0)
         self.assertEqual(self.store.get(self.p.proposal_id).status, S.APPROVED)
         self.runtime.stop.assert_not_called()
 
     def test_cli_reject_execute_denied(self):
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(cli(["--store", str(self.path), "reject", self.p.proposal_id,
+            self.assertEqual(cli(["--store", self.store.database_url, "reject", self.p.proposal_id,
                                   "--by", "human", "--reason", "no"]), 0)
-            self.assertEqual(cli(["--store", str(self.path), "execute", self.p.proposal_id]), 2)
+            self.assertEqual(cli(["--store", self.store.database_url, "execute", self.p.proposal_id]), 2)
         self.runtime.stop.assert_not_called()
 
 

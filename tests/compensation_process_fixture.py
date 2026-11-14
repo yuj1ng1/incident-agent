@@ -11,7 +11,7 @@ from remediation.store import RemediationStore
 
 if __name__ == "__main__":
     root = Path(sys.argv[1])
-    store = RemediationStore(root / "remediation.json")
+    store = RemediationStore(sys.argv[4])
     proposal = store.get(sys.argv[2])
     contract = fixture_contract(proposal.compensation.source_identity, effect_path=root / "effects")
     # A restarted test process must register the identical contract, including digest.

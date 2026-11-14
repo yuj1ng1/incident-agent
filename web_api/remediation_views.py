@@ -214,11 +214,11 @@ def detail_view(
         audit=[AuditView(
             event_id=safe_text(e["event_id"], 120), occurred_at=e["occurred_at"],
             event=safe_text(e["event"], 200), actor=safe_text(e["actor"], 200),
-            reason=safe_text(e["details"].get("reason")),
-            proposal_digest=e["details"].get("proposal_digest")
-            if re.fullmatch(r"[0-9a-f]{64}", str(e["details"].get("proposal_digest"))) else None,
-            command_id=safe_text(e["details"].get("command_id"), 200),
-            authorization_result=e["details"].get("authorization_result")
-            if e["details"].get("authorization_result") in {"approved", "rejected"} else None,
+            reason=safe_text(e.get("details", {}).get("reason")),
+            proposal_digest=e.get("details", {}).get("proposal_digest")
+            if re.fullmatch(r"[0-9a-f]{64}", str(e.get("details", {}).get("proposal_digest"))) else None,
+            command_id=safe_text(e.get("details", {}).get("command_id"), 200),
+            authorization_result=e.get("details", {}).get("authorization_result")
+            if e.get("details", {}).get("authorization_result") in {"approved", "rejected"} else None,
         ) for e in events[-100:]],
     )

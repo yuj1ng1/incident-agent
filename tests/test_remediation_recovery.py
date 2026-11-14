@@ -21,7 +21,10 @@ from remediation.approval import approval_digest
 from remediation.demo_action import DemoRuntime
 from remediation.executor import ActionExecutor
 from remediation.state import RemediationError, transition
-from remediation.store import FileLock, MAX_MANUAL_RETRIES, RemediationStore, StoreError
+from remediation.store import MAX_MANUAL_RETRIES, RemediationStore, StoreError
+from mysql_support import (
+    remediation_digest, remediation_raw, replace_remediation_document,
+)
 from remediation.verification import DemoClient, DemoVerifier
 from remediation_cli import main as cli
 from test_remediation import SHA, START, fake_runtime, proposal, version
@@ -121,7 +124,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_active_executor_lock_prevents_manual_closure(self):
         self.claim()
-        with FileLock(self.root / "service.lock"):
+        with self.store.service_lock(self.root / "service.lock"):
             with self.assertRaisesRegex(StoreError, "busy"):
                 self.executor.close_execution(self.p.proposal_id, "operator", "unknown", "close-1")
         self.client.get.assert_not_called()
@@ -246,10 +249,10 @@ class RecoveryTests(unittest.TestCase):
             record.pop("retry_of")
             record.pop("closure")
         before = json.dumps(data).encode()
-        self.store.file_path.write_bytes(before)  # Legacy fixture only, never operator recovery.
-        loaded = RemediationStore(self.store.file_path).get(approved.proposal_id)
+        replace_remediation_document(self.store, before)
+        loaded = RemediationStore(self.store.database_url).get(approved.proposal_id)
         self.assertEqual(loaded.approval_digest, approval_digest(loaded))
-        self.assertEqual(self.store.file_path.read_bytes(), before)
+        self.assertEqual(remediation_raw(self.store).encode(), before)
         self.executor.execute(loaded.proposal_id, "executor")
         self.assertEqual(self.store.load()["version"], 2)
         self.assertEqual(self.store.get(loaded.proposal_id).status, S.SUCCEEDED)
@@ -257,12 +260,12 @@ class RecoveryTests(unittest.TestCase):
     def test_list_and_close_cli_show_executing_and_unknown_closed_records(self):
         self.claim()
         with redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli(["--store", str(self.store.file_path), "list"]), 0)
+            self.assertEqual(cli(["--store", str(self.store.database_url), "list"]), 0)
         self.assertEqual(json.loads(output.getvalue())[0]["status"], "executing")
         with patch("remediation.executor.DemoVerifier", return_value=self.verifier):
             for repeat in range(2):
                 with redirect_stdout(io.StringIO()) as output:
-                    self.assertEqual(cli(["--store", str(self.store.file_path), "close-execution", self.p.proposal_id,
+                    self.assertEqual(cli(["--store", str(self.store.database_url), "close-execution", self.p.proposal_id,
                                           "--by", "operator", "--reason", "unknown", "--command-id", "close-1"]), 0)
                 self.assertEqual(json.loads(output.getvalue())["already_closed"], bool(repeat))
         self.assertEqual(self.client.get.call_count, 3)
@@ -279,7 +282,7 @@ class RecoveryTests(unittest.TestCase):
             return snapshot
 
         with patch.object(RemediationStore, "load", start_after_read), redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli(["--store", str(self.store.file_path), "show", self.p.proposal_id]), 0)
+            self.assertEqual(cli(["--store", str(self.store.database_url), "show", self.p.proposal_id]), 0)
         self.assertEqual(reached, [True])
         snapshot = json.loads(output.getvalue())
         self.assertEqual(snapshot["proposal"]["status"], "pending")
@@ -295,7 +298,7 @@ class ProcessRecoveryTests(unittest.TestCase):
             store = RemediationStore(Path(directory) / "remediation.json")
             p = store.create(proposal())
             command = subprocess.run(
-                [sys.executable, "-B", "remediation_cli.py", "--store", str(store.file_path),
+                [sys.executable, "-B", "remediation_cli.py", "--store", str(store.database_url),
                  "reject", p.proposal_id, "--by", "测试操作者", "--reason", "需补充可信证据"],
                 cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15,
                 env=dict(os.environ, PYTHONIOENCODING="cp1252"),
@@ -312,7 +315,8 @@ class ProcessRecoveryTests(unittest.TestCase):
         for phase in ("executing_committed", "action_returned", "action_committed"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="remediation-child-") as directory:
                 root = Path(directory)
-                child = subprocess.run([sys.executable, "-B", str(self.fixture), directory, phase],
+                store = RemediationStore(root / "remediation.json")
+                child = subprocess.run([sys.executable, "-B", str(self.fixture), directory, phase, store.database_url],
                                        capture_output=True, text=True, timeout=20)
                 self.assertEqual(child.returncode, 73, child.stderr)
                 self.assertEqual((root / "callback-reached").read_text(), phase)
@@ -356,22 +360,19 @@ class ProcessRecoveryTests(unittest.TestCase):
             child.terminate()  # Only the exact subprocess created by this test.
         child.communicate(timeout=5)
 
-    def test_real_cross_process_reader_blocks_writer_then_releases_handle(self):
+    def test_real_cross_process_reader_has_stable_snapshot_without_blocking_writer(self):
         with tempfile.TemporaryDirectory(prefix="remediation-lock-") as directory:
             root = Path(directory)
             store = RemediationStore(root / "remediation.json")
             p = store.create(proposal())
-            child = subprocess.Popen([sys.executable, "-B", str(self.fixture), directory, "hold-read"],
+            child = subprocess.Popen([sys.executable, "-B", str(self.fixture), directory, "hold-read", store.database_url],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 self.wait_ready(root / "reader-ready", child)
-                with self.assertRaisesRegex(StoreError, "busy"):
-                    store.approve(p.proposal_id, "operator")
+                store.approve(p.proposal_id, "operator")
                 stdout, stderr = child.communicate(input="release\n", timeout=10)
                 self.assertEqual(child.returncode, 0, stderr)
                 self.assertIn("reader-completed", stdout)
-                self.assertEqual(store.get(p.proposal_id).status, S.PENDING)
-                store.approve(p.proposal_id, "operator")
                 self.assertEqual(store.get(p.proposal_id).status, S.APPROVED)
             finally:
                 self.finish_child(child)
@@ -381,7 +382,7 @@ class ProcessRecoveryTests(unittest.TestCase):
             root = Path(directory)
             store = RemediationStore(root / "remediation.json")
             p = store.create(proposal())
-            children = [subprocess.Popen([sys.executable, "-B", str(self.fixture), directory, "approve", str(i), p.proposal_id],
+            children = [subprocess.Popen([sys.executable, "-B", str(self.fixture), directory, "approve", str(i), p.proposal_id, store.database_url],
                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                         for i in range(2)]
             try:

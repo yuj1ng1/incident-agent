@@ -1,11 +1,17 @@
-"""Atomic JSON transactions contain state, results, and audit. No raw logs/secrets."""
+"""MySQL transactions contain proposals, decisions, results, and audit together."""
 from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
+import hashlib
 import json
-import os
-from pathlib import Path
-import tempfile
 
 from pydantic import ValidationError
+from sqlalchemy import select, update
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError, SQLAlchemyError
+
+from db import tables
+from db.config import database_url as configured_database_url, get_engine
 
 from models.remediation import (
     ActionResult, ExecutionOutcome, RemediationAuditEvent, RemediationProposal,
@@ -15,9 +21,6 @@ from remediation.approval import (
     actor_name, approval_digest, approve_proposal, reject_proposal,
 )
 from remediation.state import RemediationError
-from storage_lock import FileLock as SharedFileLock, FileLockError
-
-DEFAULT_STORE = Path(__file__).resolve().parents[1] / "data" / "remediation.json"
 MAX_MANUAL_RETRIES = 2
 
 
@@ -25,84 +28,170 @@ class StoreError(RemediationError):
     pass
 
 
-class FileLock(SharedFileLock):
-    def __enter__(self):
-        try:
-            return super().__enter__()
-        except FileLockError:
-            raise StoreError("store_busy") from None
+def empty_document():
+    return {
+        "version": 2,
+        "proposals": {},
+        "actions": [],
+        "verifications": [],
+        "audit": [],
+    }
+
+
+def validate_document(data):
+    """Validate v1/v2 without rewriting legacy fields or object order."""
+    try:
+        if not isinstance(data, dict) or set(data) != set(empty_document()):
+            raise ValueError()
+        if type(data["version"]) is not int or data["version"] not in {1, 2}:
+            raise ValueError()
+        if not isinstance(data["proposals"], dict):
+            raise ValueError()
+        for key, value in data["proposals"].items():
+            if RemediationProposal.model_validate(value).proposal_id != key:
+                raise ValueError()
+        for key, cls in (
+            ("actions", ActionResult),
+            ("verifications", VerificationResult),
+            ("audit", RemediationAuditEvent),
+        ):
+            if not isinstance(data[key], list):
+                raise ValueError()
+            for value in data[key]:
+                cls.model_validate(value)
+        json.dumps(data, ensure_ascii=False, allow_nan=False)
+    except (ValueError, TypeError, ValidationError):
+        raise StoreError("remediation_store_corrupt_or_unreadable") from None
+    return data
 
 
 class RemediationStore:
-    def __init__(self, file_path=DEFAULT_STORE, *, read_only=False):
-        self.file_path = Path(file_path)
+    def __init__(self, database_url=None, *, read_only=False):
+        try:
+            self.database_url = database_url or configured_database_url()
+            url = make_url(self.database_url)
+            if url.drivername != "mysql+pymysql" or not url.database:
+                raise ValueError()
+            self.engine = get_engine(self.database_url)
+        except (ArgumentError, ValueError, RuntimeError):
+            raise StoreError("remediation_database_url_required") from None
         self.read_only = read_only
+        # Store objects are shared by ASGI threads. Never put a connection in an
+        # ordinary instance attribute: another thread could commit its document.
+        self._transaction = ContextVar("remediation_transaction", default=None)
 
     def load(self):
-        if self.read_only:
-            if not self.file_path.is_file():
-                raise FileNotFoundError("remediation_store_missing")
-            lock_path = Path(str(self.file_path) + ".lock")
-            if lock_path.is_file():
-                # Coordinate with writers without creating a lock or opening it for writes.
-                with FileLock(lock_path, read_only=True):
-                    return self._load_unlocked()
-            return self._load_unlocked()
-        # Windows readers must release their handles before a writer replaces JSON.
-        with FileLock(str(self.file_path) + ".lock"):
-            return self._load_unlocked()
-
-    def _load_unlocked(self):
-        if not self.file_path.exists():
-            if self.read_only:
-                raise FileNotFoundError("remediation_store_missing")
-            return {"version": 2, "proposals": {}, "actions": [], "verifications": [], "audit": []}
         try:
-            data = json.loads(self.file_path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or set(data) != {"version", "proposals", "actions", "verifications", "audit"}:
-                raise ValueError()
-            if data["version"] not in {1, 2} or not isinstance(data["proposals"], dict):
-                raise ValueError()
-            for key, value in data["proposals"].items():
-                if RemediationProposal.model_validate(value).proposal_id != key:
-                    raise ValueError()
-            for key, cls in (("actions", ActionResult), ("verifications", VerificationResult),
-                             ("audit", RemediationAuditEvent)):
-                if not isinstance(data[key], list):
-                    raise ValueError()
-                for value in data[key]:
-                    cls.model_validate(value)
-            return data
-        except (OSError, ValueError, TypeError, ValidationError):
+            with self.engine.connect() as connection:
+                row = connection.execute(
+                    select(tables.remediation_state).where(
+                        tables.remediation_state.c.id == 1,
+                    )
+                ).mappings().first()
+            return self._decode(row)
+        except SQLAlchemyError:
+            raise StoreError("remediation_store_unavailable") from None
+
+    @staticmethod
+    def _decode(row):
+        if row is None:
+            raise StoreError("remediation_store_unavailable")
+        try:
+            data = json.loads(row["data"])
+        except (ValueError, TypeError):
             raise StoreError("remediation_store_corrupt_or_unreadable") from None
+        return validate_document(data)
 
     def _save(self, data):
-        temp_path = None
+        active = self._transaction.get()
+        if active is None:
+            raise StoreError("remediation_transaction_required")
+        connection, revision = active
+        # Lazy v1 -> v2 migration remains part of the committing transaction.
+        data["version"] = 2
+        validate_document(data)
         try:
-            # Lazy, atomic v1 -> v2 migration; reads never rewrite old records.
-            data["version"] = 2
-            self.file_path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.file_path.parent,
-                                             prefix=self.file_path.name + ".", suffix=".tmp", delete=False) as out:
-                temp_path = Path(out.name)
-                json.dump(data, out, ensure_ascii=False, indent=2, allow_nan=False)
-                out.flush()
-                os.fsync(out.fileno())
-            os.replace(temp_path, self.file_path)
-        except (OSError, ValueError):
+            result = connection.execute(
+                update(tables.remediation_state)
+                .where(
+                    tables.remediation_state.c.id == 1,
+                    tables.remediation_state.c.revision == revision,
+                )
+                .values(
+                    revision=revision + 1,
+                    data=json.dumps(data, ensure_ascii=False, allow_nan=False),
+                    updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+            if result.rowcount != 1:
+                raise StoreError("remediation_revision_conflict")
+        except SQLAlchemyError:
             raise StoreError("remediation_store_write_failed") from None
-        finally:
-            if temp_path and temp_path.exists():
-                temp_path.unlink()
 
     @contextmanager
     def transaction(self):
         if self.read_only:
             raise StoreError("remediation_store_read_only")
-        with FileLock(str(self.file_path) + ".lock"):
-            data = self._load_unlocked()
-            yield data
-            self._save(data)
+        if self._transaction.get() is not None:
+            raise StoreError("remediation_nested_transaction")
+        try:
+            with self.engine.begin() as connection:
+                row = connection.execute(
+                    select(tables.remediation_state)
+                    .where(tables.remediation_state.c.id == 1)
+                    .with_for_update()
+                ).mappings().first()
+                data = self._decode(row)
+                token = self._transaction.set((connection, row["revision"]))
+                try:
+                    yield data
+                    self._save(data)
+                finally:
+                    self._transaction.reset(token)
+        except SQLAlchemyError:
+            # Never replay a yielded mutation or an uncertain COMMIT.
+            raise StoreError("remediation_store_unavailable") from None
+
+    @contextmanager
+    def service_lock(self, name, *, timeout=0):
+        """Serialize physical actions across processes and schemas on this server."""
+        if self.read_only:
+            raise StoreError("remediation_store_read_only")
+        if type(timeout) is not int or timeout < 0:
+            raise StoreError("remediation_lock_timeout_invalid")
+        key = "ia_remediation_" + hashlib.sha256(str(name).encode()).hexdigest()[:48]
+        try:
+            with self.engine.connect() as connection:
+                try:
+                    acquired = connection.exec_driver_sql(
+                        "SELECT GET_LOCK(%s, %s)", (key, timeout),
+                    ).scalar()
+                except SQLAlchemyError:
+                    # The server may have acquired the session lock before its
+                    # reply was lost. Never return that session to the pool.
+                    connection.invalidate()
+                    raise
+                if acquired == 0:
+                    raise StoreError("remediation_service_busy")
+                if acquired != 1:
+                    connection.invalidate()
+                    raise StoreError("remediation_store_unavailable")
+                try:
+                    yield
+                finally:
+                    try:
+                        released = connection.exec_driver_sql(
+                            "SELECT RELEASE_LOCK(%s)", (key,),
+                        ).scalar()
+                        if released != 1:
+                            connection.invalidate()
+                            raise StoreError("remediation_service_lock_lost")
+                    except SQLAlchemyError:
+                        # A pooled session must never retain an advisory lock.
+                        connection.invalidate()
+                        raise
+        except SQLAlchemyError:
+            raise StoreError("remediation_store_unavailable") from None
 
     @staticmethod
     def event(data, proposal, event, actor, **details):
@@ -230,7 +319,7 @@ class RemediationStore:
         if digest != approval_digest(proposal):
             raise RemediationError("proposal_digest_mismatch")
         for event in data["audit"]:
-            details = event["details"]
+            details = event.get("details", {})
             if (details.get("assessment") or {}).get("command_id") == command_id:
                 raise RemediationError("command_id_conflict")
             if details.get("command_id") == command_id:

@@ -87,6 +87,11 @@ def incident_database_url(path):
     return _store_database_url("incident-", path)
 
 
+def remediation_database_url(path):
+    """Separate authoritative document per logical RemediationStore in tests."""
+    return _store_database_url("remediation-", path)
+
+
 def existing_store_database_url(kind, key):
     """URL for a schema the parent test already created, without DDL."""
     base = test_database_url()
@@ -146,6 +151,44 @@ def incident_digest(store):
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def remediation_digest(store):
+    """Include revision and exact document bytes to detect any hidden write."""
+    from sqlalchemy import select
+    from db.tables import remediation_state
+
+    with store.engine.connect() as connection:
+        rows = connection.execute(select(remediation_state)).mappings().all()
+    return hashlib.sha256(json.dumps(
+        [dict(row) for row in rows], ensure_ascii=False, default=str,
+    ).encode("utf-8")).hexdigest()
+
+
+def remediation_raw(store):
+    from sqlalchemy import select
+    from db.tables import remediation_state
+
+    with store.engine.connect() as connection:
+        return connection.execute(
+            select(remediation_state.c.data).where(remediation_state.c.id == 1)
+        ).scalar_one()
+
+
+def replace_remediation_document(store, raw):
+    """Inject legacy/corrupt bytes through SQL in an isolated test schema only."""
+    from sqlalchemy import update
+    from db.tables import remediation_state
+
+    if not make_url(store.database_url).database.startswith(SCHEMA_PREFIX):
+        raise AssertionError("tests_must_use_isolated_mysql_schema")
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(remediation_state).where(remediation_state.c.id == 1)
+            .values(data=raw)
+        )
 
 
 def drop_test_databases():

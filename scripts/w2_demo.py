@@ -22,7 +22,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def create_demo(root, port, *, manual_approval=False):
+def create_demo(
+    root,
+    port,
+    *,
+    manual_approval=False,
+    incident_url=None,
+    remediation_url=None,
+):
     from incident_store import IncidentStore
     from models.incident import Incident
     from models.remediation import RemediationProposal, Risk
@@ -38,9 +45,18 @@ def create_demo(root, port, *, manual_approval=False):
 
     root = Path(root).resolve()
     if any((root / name).exists() for name in (
-        "remediation.json", "owned-processes.json", "baseline-A.json",
+        "owned-processes.json", "baseline-A.json",
     )):
         raise ValueError("new_experiment_directory_required_use_review_for_saved_evidence")
+    demo_url = os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL")
+    incident_url = incident_url or demo_url
+    remediation_url = remediation_url or demo_url
+    if not incident_url or not remediation_url:
+        raise ValueError("isolated_demo_database_urls_required")
+    incidents = IncidentStore(incident_url)
+    store = RemediationStore(remediation_url)
+    # Check availability before starting any physical demo process.
+    store.load()
     build = json.loads((root / "artifacts" / "build.json").read_text(encoding="utf-8"))
     if any(release["manifest"]["source_commit"] != EXPECTED_SOURCE_COMMIT
            for release in build.values()):
@@ -64,12 +80,10 @@ def create_demo(root, port, *, manual_approval=False):
         execution.SERVICE_LOCK = root / "isolated-execution.lock"
         compensation.COMPENSATION_REGISTRY = MappingProxyType({(SERVICE, DEPLOY): contract})
 
-        incidents = IncidentStore()
         incidents.save_incident("w2-isolated-inventory", Incident(
             incident_id="inc-w2-isolated-inventory", service=SERVICE,
             severity="warning", status="investigating", alerts=[],
         ))
-        store = RemediationStore(root / "remediation.json")
         proposal = store.create(RemediationProposal(
             proposal_id="rem-w2-deploy-b", incident_id="inc-w2-isolated-inventory",
             incident_fingerprint="w2-isolated-inventory", service=SERVICE,
@@ -98,7 +112,7 @@ def create_demo(root, port, *, manual_approval=False):
         }, indent=2), encoding="utf-8")
         app = create_app(
             incident_url=incidents.database_url, include_runtime=False,
-            remediation_path=store.file_path, authorization=auth,
+            remediation_url=store.database_url, authorization=auth,
             executor_factory=functools.partial(
                 execution.ActionExecutor, runtime=runtime, verifier=verifier,
                 automatic_compensation_request=not manual_approval,
@@ -135,6 +149,10 @@ def main(argv=None):
     parser.add_argument("--manual-approval", action="store_true",
                         help="W3：自动布置隔离 B，等待浏览器申请、审批与独立执行；证据限 300 秒。")
     args = parser.parse_args(argv)
+    from sqlalchemy.engine import make_url
+    demo_url = os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL")
+    if not demo_url or not (make_url(demo_url).database or "").startswith("ia_test_"):
+        parser.error("isolated_demo_database_url_required")
     root = (args.root or Path(tempfile.mkdtemp(prefix="incident-w2-")) / "experiment").resolve()
     if (not root.is_relative_to(Path(tempfile.gettempdir()).resolve())
             or root == Path(tempfile.gettempdir()).resolve()
@@ -146,8 +164,10 @@ def main(argv=None):
         from web_api.app import create_app
         from web_api.auth import WebAuthorization
         app = create_app(
-            incident_url=None, include_runtime=False,
-            remediation_path=root / "remediation.json", authorization=WebAuthorization("[]"),
+            incident_url=os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL"),
+            include_runtime=False,
+            remediation_url=os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL"),
+            authorization=WebAuthorization("[]"),
         )
     else:
         if root.exists():

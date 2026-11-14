@@ -155,10 +155,14 @@ def main():
             return
         client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com", max_retries=0, timeout=60)
         def runtime(case, prompt=agent_prompt):
-            directory = output_dir / case
-            store = IncidentStore(directory / "incidents.json")
-            manager = InvestigationManager(RuntimeStore(), store,
-                                           RemediationPlanner(RemediationStore(directory / "remediation.json")))
+            from sqlalchemy.engine import make_url
+            url = os.getenv(f"INCIDENT_AGENT_VALIDATION_DATABASE_URL_{case}")
+            if not url or not (make_url(url).database or "").startswith("ia_test_"):
+                raise ValueError("isolated_validation_database_url_required")
+            store = IncidentStore(url)
+            manager = InvestigationManager(
+                RuntimeStore(url), store, RemediationPlanner(RemediationStore(url)),
+            )
             agent = Agent(client, prompt)
             monitor = IncidentMonitor(prometheus, store, 30, manager)
             monitor.process_alerts_once()

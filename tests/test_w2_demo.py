@@ -68,7 +68,12 @@ def case(tmp_path, bundles, monkeypatch):
         (execution, "validate_parameters"), (compensation, "COMPENSATION_REGISTRY"),
     ):
         monkeypatch.setattr(module, name, getattr(module, name))
-    app, runtime, store = create_demo(tmp_path, free_port())
+    from mysql_support import incident_database_url, remediation_database_url
+    app, runtime, store = create_demo(
+        tmp_path, free_port(),
+        incident_url=incident_database_url(tmp_path / "incidents"),
+        remediation_url=remediation_database_url(tmp_path / "remediation"),
+    )
     tokens = json.loads((tmp_path / "operators.json").read_text(encoding="utf-8"))
     with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 32100)) as client:
         def post(
@@ -268,9 +273,12 @@ def test_real_executor_crash_never_blindly_replays(
 ):
     copy_bundles(bundles, tmp_path)
     port = free_port()
+    from mysql_support import incident_database_url, remediation_database_url
+    incident_url = incident_database_url(tmp_path / "incidents")
+    remediation_url = remediation_database_url(tmp_path / "remediation.json")
     result = subprocess.run([
         sys.executable, "-B", str(ROOT / "tests/w2_crash_worker.py"),
-        str(tmp_path), str(port), phase,
+        str(tmp_path), str(port), phase, incident_url, remediation_url,
     ], capture_output=True, text=True, timeout=35)
     try:
         assert result.returncode == 73, result.stderr

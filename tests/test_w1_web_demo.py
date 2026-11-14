@@ -7,7 +7,11 @@ import pytest
 
 import remediation.compensation as compensation
 import remediation.executor as execution
-from mysql_support import incident_database_url, runtime_database_url
+from mysql_support import (
+    incident_database_url, runtime_database_url, remediation_database_url,
+    remediation_digest,
+)
+from remediation.store import RemediationStore
 from scripts.w1_web_demo import create_demo
 
 
@@ -26,6 +30,7 @@ def test_synthetic_workflows_preserve_approval_permissions_unknown_outcomes_and_
         root,
         incident_url=incident_database_url(root / "incidents.json"),
         runtime_url=runtime_database_url(root),
+        remediation_url=remediation_database_url(root / "remediation"),
     )
     tokens = json.loads((root / "operators.json").read_text())
     scenarios = json.loads((root / "scenarios.json").read_text())
@@ -51,9 +56,10 @@ def test_synthetic_workflows_preserve_approval_permissions_unknown_outcomes_and_
         assert blocked.status_code == 200 and blocked.json()['compensation']['status'] == 'blocked'
         assert blocked.json()['requests'][-1]['requested_by'] == 'synthetic-requester'
         child = scenarios['B_compensation']
-        before = (root / 'remediation.json').read_bytes()
+        store = RemediationStore(remediation_database_url(root / "remediation"))
+        before = remediation_digest(store)
         assert post(child, 'approve', 'requester').status_code == 403
-        assert (root / 'remediation.json').read_bytes() == before
+        assert remediation_digest(store) == before
         assert client.post(f'/api/remediations/{child}/approve', json={}).status_code == 401
         assert post(child, 'execute', 'executor').status_code == 409
         assert post(child, 'approve', 'approver').status_code == 200

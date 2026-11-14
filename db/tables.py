@@ -5,6 +5,7 @@ queries and for isolated test schemas.
 """
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     Computed,
     ForeignKeyConstraint,
@@ -312,6 +313,20 @@ incident_history_archives = Table(
 )
 
 
+remediation_state = Table(
+    "remediation_state",
+    metadata,
+    Column("id", SmallInteger, primary_key=True, autoincrement=False),
+    Column("revision", BigInteger, nullable=False),
+    Column("data", DOCUMENT, nullable=False),
+    Column("updated_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("id", name="pk_remediation_state"),
+    CheckConstraint("id = 1", name="ck_remediation_state_singleton"),
+    CheckConstraint("revision >= 0", name="ck_remediation_state_revision"),
+    **TABLE_OPTIONS,
+)
+
+
 def create_runtime_schema(engine):
     """Create the same tables for isolated tests; production uses Alembic."""
     metadata.create_all(engine)
@@ -319,5 +334,19 @@ def create_runtime_schema(engine):
         connection.execute(
             mysql_insert(runtime_coordination)
             .values(name="worker_claim")
+            .prefix_with("IGNORE")
+        )
+        from datetime import datetime, timezone
+        import json
+        from remediation.store import empty_document
+
+        connection.execute(
+            mysql_insert(remediation_state)
+            .values(
+                id=1,
+                revision=0,
+                data=json.dumps(empty_document(), ensure_ascii=False),
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
             .prefix_with("IGNORE")
         )

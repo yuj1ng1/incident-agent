@@ -1,6 +1,5 @@
 """The only production entry to actions: persisted approval -> claim -> act -> verify."""
 from types import MappingProxyType
-from pathlib import Path
 import logging
 import re
 
@@ -14,11 +13,10 @@ from remediation.compensation import (
 )
 from remediation.demo_action import disable_demo_regression, validate_parameters
 from remediation.state import RemediationError, transition
-from remediation.store import FileLock
 from remediation.verification import DemoVerifier
 
 ACTION_REGISTRY = MappingProxyType({"disable_demo_regression": disable_demo_regression})
-SERVICE_LOCK = Path(__file__).resolve().parents[1] / "data" / "order-service-remediation.lock"
+SERVICE_LOCK = "incident-agent:order-service:remediation"
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +51,7 @@ class ActionExecutor:
     ):
         actor = actor_name(actor)
         # Serializes actions for the service even if proposals/stores differ.
-        with FileLock(SERVICE_LOCK):
+        with self.store.service_lock(SERVICE_LOCK):
             with self.store.transaction() as data:
                 proposal = self.store.from_data(data, proposal_id)
                 check_compensation_actor(data, proposal, actor, "execute")
@@ -285,7 +283,7 @@ class ActionExecutor:
     ):
         """Fresh read-only checks describe current health, never historical action success."""
         actor = actor_name(actor)
-        with FileLock(SERVICE_LOCK):
+        with self.store.service_lock(SERVICE_LOCK):
             proposal = self._review_target(
                 proposal_id, actor, allow_unregistered_compensation=True,
             )
@@ -314,7 +312,7 @@ class ActionExecutor:
         command_id = actor_name(command_id)
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
             raise RemediationError("closure_reason_required_max_1000")
-        with FileLock(SERVICE_LOCK):
+        with self.store.service_lock(SERVICE_LOCK):
             proposal = self._review_target(
                 proposal_id, actor, allow_unregistered_compensation=True,
             )
@@ -363,7 +361,7 @@ class ActionExecutor:
         from remediation.planner import parse_time
         from remediation.verification import DemoClient
         actor = actor_name(actor)
-        with FileLock(SERVICE_LOCK):
+        with self.store.service_lock(SERVICE_LOCK):
             proposal = self._review_target(proposal_id, actor)
             if proposal.compensation is not None:
                 raise RemediationError("compensation_retry_forbidden")

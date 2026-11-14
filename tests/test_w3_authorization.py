@@ -1,4 +1,5 @@
 """W3 authorization is server-owned; these are test principals, never people."""
+from mysql_support import remediation_digest
 from dataclasses import replace
 from datetime import timedelta
 import hashlib
@@ -39,7 +40,7 @@ def all_permissions_client(comp, actor, token):
         "permissions": ["request", "approve", "execute"],
     }]))
     return TestClient(create_app(
-        incident_path=comp.root / "incidents.json", remediation_path=comp.store.file_path,
+        incident_path=comp.root / "incidents.json", remediation_url=comp.store.database_url,
         authorization=auth,
     ), base_url="http://127.0.0.1", client=("127.0.0.1", 32000))
 
@@ -104,13 +105,13 @@ def test_requester_cannot_supply_approval_identity_or_untrusted_parameters(web):
 def test_missing_wrong_or_insufficient_credentials_have_no_effect(web, operation, role, expected):
     comp, client, _ = web
     pending = manual_request(web)
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     auth_headers = ({} if role is None else {"Authorization": "Bearer " + "x" * 40}
                     if role == "wrong" else headers(role))
     response = client.post(f"/api/remediations/{pending.proposal_id}/{operation}",
                            headers=auth_headers, json=command(comp, pending.proposal_id))
     assert response.status_code == expected
-    assert comp.store.file_path.read_bytes() == before
+    assert remediation_digest(comp.store) == before
 
 
 def test_approval_is_once_bound_and_auditable_in_public_view(web):
@@ -204,7 +205,7 @@ def test_operator_revocation_and_rotation_take_effect_only_on_new_authorization_
                             "token_sha256": hashlib.sha256(token.encode()).hexdigest()}])
 
     monkeypatch.setenv("INCIDENT_AGENT_WEB_OPERATORS", configuration(old_token))
-    paths = {"incident_path": comp.root / "incidents.json", "remediation_path": comp.store.file_path}
+    paths = {"incident_path": comp.root / "incidents.json", "remediation_url": comp.store.database_url}
     old_app = create_app(authorization=WebAuthorization(), **paths)
     monkeypatch.setenv("INCIDENT_AGENT_WEB_OPERATORS", configuration(new_token))
     new_app = create_app(authorization=WebAuthorization(), **paths)
@@ -243,7 +244,7 @@ def test_public_demo_projection_drops_paths_environment_and_interpreter_but_keep
         })
         proposal["reason"] = r"artifact C:\Users\private\inventory-A.zip"
     stored = comp.store.get(comp.original.proposal_id)
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     response = client.get(f"/api/remediations/{comp.original.proposal_id}")
     assert response.status_code == 200
     for sensitive in ("artifact_source", "startup_configuration", "interpreter", "PASSWORD",
@@ -253,4 +254,4 @@ def test_public_demo_projection_drops_paths_environment_and_interpreter_but_keep
     assert response.json()["demo_recovery"]["artifact_sha256"] == "a" * 64
     assert response.json()["proposal_digest"] == approval_digest(stored)
     assert marker in stored.parameters["startup_configuration"]
-    assert comp.store.file_path.read_bytes() == before
+    assert remediation_digest(comp.store) == before

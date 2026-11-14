@@ -82,7 +82,17 @@ def run(root, port, phase="full"):
         assert result["status"] == "approved" and not result["actions"]
     elif phase == "tamper":
         # Only this explicitly supplied disposable experiment's A file is changed.
-        stored = json.loads((root / "remediation.json").read_text(encoding="utf-8"))
+        import os
+        import sys
+        from sqlalchemy.engine import make_url
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from remediation.store import RemediationStore
+
+        url = os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL", "")
+        if not url or not (make_url(url).database or "").startswith("ia_test_"):
+            raise ValueError("isolated_demo_schema_required")
+        stored = RemediationStore(url, read_only=True).load()
         artifact = Path(stored["proposals"][child_id]["parameters"]["artifact_source"]).resolve()
         assert artifact.parent == (root / "artifacts").resolve()
         with artifact.open("ab") as output:

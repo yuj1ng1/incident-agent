@@ -45,7 +45,7 @@ def invoke(execution):
     store, proposal, runtime, verifier, executor = execution
     output = io.StringIO()
     with patch("remediation.executor.ActionExecutor", return_value=executor), redirect_stdout(output):
-        code = cli(["--store", str(store.file_path), "execute", proposal.proposal_id])
+        code = cli(["--store", str(store.database_url), "execute", proposal.proposal_id])
     return code, json.loads(output.getvalue())
 
 

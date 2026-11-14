@@ -15,20 +15,26 @@ from remediation.store import RemediationStore
 if __name__ == "__main__":
     root = Path(sys.argv[1])
     phase = sys.argv[2]
-    store = RemediationStore(root / "remediation.json")
+    if phase == "hold-service-lock":
+        with RemediationStore().service_lock(sys.argv[3]):
+            (root / "service-lock-ready").touch()
+            sys.stdin.readline()
+        raise SystemExit(0)
+    store = RemediationStore(sys.argv[-1])
     if phase == "hold-read":
-        original = Path.read_text
+        from sqlalchemy import select
+        from db import tables
 
-        def hold(path, *args, **kwargs):
-            if path != store.file_path:
-                return original(path, *args, **kwargs)
-            with path.open(encoding="utf-8") as handle:
+        with store.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ",
+        ) as connection:
+            with connection.begin():
+                first = connection.execute(select(tables.remediation_state.c.data)).scalar_one()
                 (root / "reader-ready").touch()
                 sys.stdin.readline()
-                return handle.read()
-
-        with patch.object(Path, "read_text", hold):
-            store.load()
+                second = connection.execute(select(tables.remediation_state.c.data)).scalar_one()
+                if first != second:
+                    raise RuntimeError("snapshot_changed_during_read")
         print("reader-completed", flush=True)
         raise SystemExit(0)
     if phase == "approve":

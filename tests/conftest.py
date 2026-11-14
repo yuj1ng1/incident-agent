@@ -20,7 +20,7 @@ def protect_operator_stores(monkeypatch):
     """An omitted or real path must fail before opening operator data."""
     from incident_store import IncidentStore
     from investigation.store import RuntimeStore
-    from mysql_support import incident_database_url
+    from mysql_support import incident_database_url, remediation_database_url
     from remediation.store import RemediationStore
 
     protected = Path(__file__).resolve().parents[1] / "data"
@@ -42,13 +42,18 @@ def protect_operator_stores(monkeypatch):
     remediation_original = RemediationStore.__init__
 
     @wraps(remediation_original)
-    def isolated_remediation(self, file_path=None, *args, **kwargs):
-        path = file_path if file_path is not None else kwargs.get("file_path")
-        if path is not None:
+    def isolated_remediation(self, location=None, *args, **kwargs):
+        if "database_url" in kwargs:
+            if location is not None:
+                raise TypeError("database_url_specified_twice")
+            location = kwargs.pop("database_url")
+        path = location
+        if path is not None and not str(path).startswith("mysql+"):
             path = Path(path)
             if path.resolve().is_relative_to(protected):
                 raise AssertionError("tests_must_use_temporary_store_paths")
-        return remediation_original(self, file_path, *args, **kwargs)
+            location = remediation_database_url(path)
+        return remediation_original(self, location, *args, **kwargs)
 
     monkeypatch.setattr(RemediationStore, "__init__", isolated_remediation)
 

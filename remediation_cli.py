@@ -9,12 +9,15 @@ def main(argv=None):
     load_dotenv()
     from remediation.executor import ActionExecutor
     from remediation.state import RemediationError
-    from remediation.store import DEFAULT_STORE, RemediationStore
+    from remediation.store import RemediationStore
     from models.remediation import ExecutionOutcome, RemediationStatus
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Human-approved local Demo remediation")
-    parser.add_argument("--store", default=str(DEFAULT_STORE), help="Local operator-selected JSON store")
+    parser.add_argument(
+        "--store", default=None,
+        help="MySQL URL；默认读取 INCIDENT_AGENT_DATABASE_URL",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     listing = commands.add_parser("list", help="默认列出全部非终态和需要人工处理的记录")
     filters = listing.add_mutually_exclusive_group()
@@ -30,8 +33,8 @@ def main(argv=None):
         if name == "close-execution":
             command.add_argument("--command-id", required=True, help="相同 ID、操作者和理由可安全重试收口")
     args = parser.parse_args(argv)
-    store = RemediationStore(args.store)
     try:
+        store = RemediationStore(args.store)
         if args.command == "list":
             proposals = store.list(args.status) if args.all or args.status else store.attention()
             output = [item.model_dump(mode="json") for item in proposals]

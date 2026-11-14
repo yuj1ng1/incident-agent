@@ -25,7 +25,7 @@ from investigation.store import RuntimeStore
 from investigation.worker import Worker
 from models.incident import Evidence
 from models.investigation import InvestigationRecord
-from mysql_support import incident_digest, runtime_database_url
+from mysql_support import incident_digest, runtime_database_url, remediation_database_url
 from reinvestigation import should_reinvestigate
 from runtime_support import FixtureAgent, call, create_runtime, create_session, response
 
@@ -385,7 +385,7 @@ class HistoryRetentionTests(unittest.TestCase):
         self.store.save_incident(incident.fingerprint, incident)
         child = subprocess.run([
             sys.executable, "-B", str(ROOT / "runtime_cli.py"), "--store", runtime_database_url(self.root),
-            "--incidents", self.store.database_url, "--remediations", str(self.root / "remediation.json"),
+            "--incidents", self.store.database_url, "--remediations", remediation_database_url(self.root / "remediation.json"),
             "show-incident", incident.incident_id,
         ], cwd=self.root, capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(child.returncode, 0, child.stderr)

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from clients.prometheus_client import PrometheusClient
-from mysql_support import incident_database_url, runtime_database_url
+from mysql_support import incident_database_url, runtime_database_url, remediation_database_url
 from runtime_cli import main
 
 
@@ -24,7 +24,7 @@ if __name__ == "__main__":
         raise SystemExit(main([
             "--store", runtime_database_url(directory),
             "--incidents", incident_database_url(directory / "incidents.json"),
-            "--remediations", str(directory / "remediation.json"),
+            "--remediations", remediation_database_url(directory / "remediation.json"),
             "reopen", session_id, "--actor", "process-operator", "--reason", "configuration corrected",
             "--command-id", "same-reopen-command",
         ]))

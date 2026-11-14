@@ -14,7 +14,9 @@ from scripts.w2_demo import create_demo
 
 def main():
     root, port, phase = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-    app, runtime, store = create_demo(root, port)
+    app, runtime, store = create_demo(
+        root, port, incident_url=sys.argv[4], remediation_url=sys.argv[5],
+    )
     executor = ActionExecutor(store, runtime=runtime, verifier=IsolatedDemoVerifier(runtime))
     store.approve("rem-w2-deploy-b", "w2-deploy-approver")
     executor.execute("rem-w2-deploy-b", "w2-executor")

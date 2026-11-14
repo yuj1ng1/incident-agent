@@ -1,4 +1,5 @@
 """In-process ASGI writes with backend identities and isolated persisted records."""
+from mysql_support import remediation_digest
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -36,7 +37,7 @@ def web(comp):
     ]))
     app = create_app(
         incident_path=incident_path, include_runtime=False,
-        remediation_path=comp.store.file_path, authorization=auth,
+        remediation_url=comp.store.database_url, authorization=auth,
     )
     with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 32100)) as client:
         yield comp, client, incidents
@@ -46,40 +47,36 @@ def headers(actor):
     return {"Authorization": "Bearer " + TOKENS[actor]}
 
 
-def test_transient_snapshot_contention_retries_reads_without_changing_data(web, monkeypatch):
+def test_database_failure_is_reported_without_retrying_or_changing_data(web, monkeypatch):
     comp, client, _ = web
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     load = RemediationStore.load
     attempts = []
 
     def briefly_busy(store):
         attempts.append(store.read_only)
         if len(attempts) <= 2:
-            raise StoreError("store_busy")
+            raise StoreError("remediation_store_unavailable")
         return load(store)
 
     monkeypatch.setattr(RemediationStore, "load", briefly_busy)
-    delays = []
-    monkeypatch.setattr("web_api.queries.time.sleep", delays.append)
-    assert client.get("/api/remediations").status_code == 200
-    assert attempts == [True, True, True]
-    assert delays == [0.025, 0.05]
-    assert comp.store.file_path.read_bytes() == before
+    assert client.get("/api/remediations").status_code == 503
+    assert attempts == [True]
+    assert remediation_digest(comp.store) == before
 
 
 def test_persistent_snapshot_contention_is_bounded_and_reports_service_unavailable(web, monkeypatch):
     _, client, _ = web
-    load = Mock(side_effect=StoreError("store_busy"))
+    load = Mock(side_effect=StoreError("remediation_store_unavailable"))
     monkeypatch.setattr(RemediationStore, "load", load)
-    monkeypatch.setattr("web_api.queries.time.sleep", Mock())
     response = client.get("/api/remediations")
-    assert response.status_code == 503 and response.json() == {"detail": "store_busy"}
-    assert load.call_count == 4
+    assert response.status_code == 503 and response.json() == {"detail": "store_unavailable"}
+    assert load.call_count == 1
     load.reset_mock()
     response = client.post("/api/remediations/fixture/approve", headers=headers("approver"), json={
         "command_id": "locked-write", "proposal_digest": "a" * 64,
     })
-    assert response.status_code == 409 and load.call_count == 1
+    assert response.status_code == 503 and load.call_count == 1
 
 
 def test_corrupt_snapshot_is_not_retried_or_reported_as_a_state_conflict(web, monkeypatch):
@@ -93,11 +90,11 @@ def test_corrupt_snapshot_is_not_retried_or_reported_as_a_state_conflict(web, mo
 
 def test_concurrent_readonly_browser_snapshots_share_existing_lock_without_writes(web):
     comp, client, _ = web
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     with ThreadPoolExecutor(4) as pool:
         statuses = list(pool.map(lambda _: client.get("/api/remediations").status_code, range(12)))
     assert statuses == [200] * 12
-    assert comp.store.file_path.read_bytes() == before
+    assert remediation_digest(comp.store) == before
 
 
 def command(comp, identifier, cmd="command", **extra):
@@ -108,7 +105,7 @@ def test_reads_are_allowlisted_linked_and_do_not_probe_or_change_records(web):
     comp, client, _ = web
     run_original(comp)
     pending = child(comp)
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     comp.monkeypatch.setattr("remediation.executor.ActionExecutor.execute", Mock(side_effect=AssertionError("read executed")))
     original = client.get(f"/api/remediations/{comp.original.proposal_id}").json()
     detail = client.get(f"/api/remediations/{pending.proposal_id}").json()
@@ -117,16 +114,16 @@ def test_reads_are_allowlisted_linked_and_do_not_probe_or_change_records(web):
     assert original["verifications"][0]["outcome"] == "failed"
     assert len(client.get("/api/remediations?limit=1").json()["items"]) == 1
     assert client.get("/api/remediations?status=invalid").status_code == 422
-    assert comp.store.file_path.read_bytes() == before
+    assert remediation_digest(comp.store) == before
 
 
 @pytest.mark.parametrize("operation", ["compensation-requests", "approve", "reject", "execute", "inspect-execution", "close-execution"])
 def test_unauthenticated_writes_never_modify_store(web, operation):
     comp, client, _ = web
-    before = comp.store.file_path.read_bytes()
+    before = remediation_digest(comp.store)
     result = client.post(f"/api/remediations/{comp.original.proposal_id}/{operation}", json={})
     assert result.status_code == 401
-    assert comp.store.file_path.read_bytes() == before
+    assert remediation_digest(comp.store) == before
 
 
 @pytest.mark.parametrize("operation", ["approve", "execute", "reject", "close-execution"])
@@ -138,8 +135,10 @@ def test_requester_cannot_approve_or_execute_even_with_body_role(web, operation)
 
 
 def test_default_and_invalid_auth_configuration_disable_writes_and_create_no_store(tmp_path):
+    from mysql_support import empty_database_url
+    url = empty_database_url(tmp_path / "unmigrated")
     for configuration in ("", "[]", "broken", '{"token":"do-not-expose"}'):
-        app = create_app(remediation_path=tmp_path / "absent.json", authorization=WebAuthorization(configuration))
+        app = create_app(remediation_url=url, authorization=WebAuthorization(configuration))
         with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 32100)) as client:
             assert client.get("/healthz").json()["read_only"]
             assert client.post("/api/remediations/missing/approve", json={}, headers=headers("approver")).status_code == 503
@@ -265,10 +264,11 @@ def test_sensitive_raw_results_urls_headers_and_parameters_are_not_exposed(web):
 
 
 def test_missing_store_get_has_no_files_or_locks_and_read_only_rejects_writes(tmp_path):
-    path = tmp_path / "nested" / "absent.json"
-    with TestClient(create_app(remediation_path=path, authorization=WebAuthorization("")), base_url="http://127.0.0.1") as client:
+    from mysql_support import empty_database_url
+    url = empty_database_url(tmp_path / "nested" / "unmigrated")
+    with TestClient(create_app(remediation_url=url, authorization=WebAuthorization("")), base_url="http://127.0.0.1") as client:
         assert client.get("/api/remediations").status_code == 503
     assert list(tmp_path.iterdir()) == []
     with pytest.raises(Exception, match="read_only"):
-        with RemediationStore(path, read_only=True).transaction():
+        with RemediationStore(url, read_only=True).transaction():
             pass

@@ -19,7 +19,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def create_demo(root, incident_url=None, runtime_url=None):
+def create_demo(
+    root,
+    incident_url=None,
+    runtime_url=None,
+    remediation_url=None,
+):
     from incident_store import IncidentStore
     from investigation.models import Checkpoint, InvestigationSession, SessionStatus
     from investigation.store import RuntimeStore
@@ -42,12 +47,18 @@ def create_demo(root, incident_url=None, runtime_url=None):
     root = Path(root).resolve()
     if not root.is_relative_to(Path(tempfile.gettempdir()).resolve()):
         raise ValueError("demo_requires_system_temporary_directory")
+    demo_url = os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL")
+    incident_url = incident_url or demo_url
+    runtime_url = runtime_url or demo_url
+    remediation_url = remediation_url or demo_url
+    if not all((incident_url, runtime_url, remediation_url)):
+        raise ValueError("isolated_demo_database_urls_required")
     root.mkdir(parents=True, exist_ok=False)
     faults_path = root / 'http-faults.json'
     faults_path.write_text('{}', encoding='utf-8')
     incidents = IncidentStore(incident_url)
     runtime = RuntimeStore(runtime_url)
-    store = RemediationStore(root / "remediation.json")
+    store = RemediationStore(remediation_url)
     # This process cannot dispatch any ordinary production repair action.
     execution.ACTION_REGISTRY = MappingProxyType({})
     execution.SERVICE_LOCK = root / "synthetic-service.lock"
@@ -243,7 +254,7 @@ def create_demo(root, incident_url=None, runtime_url=None):
     (root / "scenarios.json").write_text(json.dumps(identifiers, indent=2), encoding="utf-8")
     app = create_app(
         incident_url=incidents.database_url, runtime_url=runtime.database_url,
-        remediation_path=store.file_path, authorization=auth,
+        remediation_url=store.database_url, authorization=auth,
     )
 
     @app.middleware('http')
@@ -268,12 +279,28 @@ def main(argv=None):
     sys.dont_write_bytecode = True
 
     def isolation_guard(event, arguments):
+        if event == "socket.connect" and arguments[1] in database_addresses:
+            return
         if event in {"socket.connect", "subprocess.Popen", "os.system"}:
             raise RuntimeError("synthetic_demo_forbids_outbound_connections_and_processes")
 
     # Windows builds its internal asyncio socket pair with a loopback connect.
     # Create that pair before denying every subsequent outbound connection.
     demo_loop = asyncio.new_event_loop()
+    from sqlalchemy.engine import make_url
+    import socket
+
+    demo_url = os.environ.get("INCIDENT_AGENT_DEMO_DATABASE_URL")
+    if not demo_url:
+        parser.error("isolated_demo_database_url_required")
+    url = make_url(demo_url)
+    if url.drivername != "mysql+pymysql" or not (url.database or "").startswith("ia_test_"):
+        parser.error("isolated_demo_schema_required")
+    database_addresses = {
+        info[4] for info in socket.getaddrinfo(
+            url.host, url.port or 3306, type=socket.SOCK_STREAM,
+        )
+    }
     sys.addaudithook(isolation_guard)
     temporary = Path(tempfile.mkdtemp(prefix="incident-w1-demo-"))
     os.environ['INCIDENT_AGENT_LOG_PATH'] = str(temporary / 'agent.log')
