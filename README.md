@@ -2,6 +2,21 @@
 
 基于 Prometheus 告警、Loki 日志和服务健康检查的 SRE 故障排查 Agent。
 
+## Compose 演示
+
+```powershell
+docker compose up --build -d --wait --wait-timeout 180
+python scripts/stage1_demo_acceptance.py
+```
+
+打开 [调查工作台](http://127.0.0.1:8088)。默认使用无密钥模型回放，连接实际的订单服务、
+PostgreSQL、Prometheus、Loki、Alloy 和 MySQL。支持服务筛选、告警时间窗曲线与日志，
+验收脚本检查故障、业务恢复以及 MySQL 重启后的事件和调查回读。
+
+固定版本、配置、Windows 审批入口和停止方式见 [第一阶段部署与复跑](docs/STAGE1_DEPLOYMENT_GUIDE_2026-11-15_12-54-50.md)。
+完整回归、真实告警与恢复、迁移兼容和已知限制见 [第一阶段验收记录](docs/STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md)。
+下一轮真实模型验证使用 [真实启动与限额付费验证提示词](docs/STAGE1_LIVE_STARTUP_CODEX_PROMPT_2026-11-15_15-05-20.md)。
+
 当前版本：调查由持久化 Runtime 执行，支持人类介入、有限再调查及历史证据归档。
 
 调查统一由 `IncidentMonitor → InvestigationManager → Scheduler/Worker → Agent → ToolManager` 执行。
@@ -23,7 +38,7 @@ Set-Location 'D:\Incident Agent'
 `python -m pip install -r requirements.lock.txt` 安装生产固定依赖；测试环境使用
 `python -m pip install -r requirements-test.lock.txt`，其中包含生产依赖及 pytest。
 锁文件不导出 Conda 中的无关包。一般生产依赖声明仍在 `requirements.txt`。
-`.github/workflows/runtime-tests.yml` 在 Windows/Python 3.12 运行隔离回归，测试不需要真实密钥。
+`.github/workflows/runtime-tests.yml` 定义 Linux 全量回归、Windows 专项和前端检查，测试不需要真实密钥。
 
 CI 依赖、预算边界、Remediation 人工收口与全局模型阻塞的验证结果及操作命令，见
 [CI 与 Remediation 安全恢复验证记录](docs/CI_REMEDIATION_SAFETY_VALIDATION_2026-10-10_14-14-13.md)。

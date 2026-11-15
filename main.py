@@ -2,8 +2,8 @@
 
 
 def main():
+    from contextlib import nullcontext
     import os
-    from pathlib import Path
 
     from dotenv import load_dotenv
 
@@ -26,12 +26,25 @@ def main():
     from investigation.scheduler import Scheduler
     from recovery.worker import RecoveryWorker
 
-    with OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com",
-        timeout=60,
-        max_retries=0,
-    ) as client:
+    mode = os.getenv("INCIDENT_AGENT_MODEL_MODE", "deepseek")
+    if mode == "demo_replay":
+        from model_client.demo_replay import DemoReplay
+
+        model_client = nullcontext(DemoReplay())
+    elif mode == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise SystemExit("deepseek_api_key_required")
+        model_client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            timeout=60,
+            max_retries=0,
+        )
+    else:
+        raise SystemExit("invalid_incident_agent_model_mode")
+
+    with model_client as client:
         agent = Agent(client=client, agent_prompt=agent_prompt)
         prometheus_client = PrometheusClient(base_url=PROMETHEUS_URL)
         incident_store = IncidentStore()

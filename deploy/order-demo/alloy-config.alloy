@@ -1,0 +1,27 @@
+loki.source.file "demo_logs" {
+  targets = [
+    {
+      __path__ = "/var/log/demo/app.log",
+      service  = "order-service",
+      job      = "demo-python",
+    },
+    {
+      __path__ = "/var/log/demo/inventory.log",
+      service  = "inventory-service",
+      job      = "inventory-service",
+    },
+  ]
+
+  forward_to = [loki.write.local.receiver]
+
+  file_match {
+    enabled     = true
+    sync_period = "5s"
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://host.docker.internal:3100/loki/api/v1/push"
+  }
+}

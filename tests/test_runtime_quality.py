@@ -101,14 +101,17 @@ class RuntimeQualityTests(unittest.TestCase):
         self.assertIn("invalid_or_unallowed_tool_call", context)
 
     def test_repeated_arguments_keep_each_calls_original_observation_and_freshness(self):
-        # The fixture tools stamp Prometheus times with the real clock; keep the
-        # simulated clock slightly ahead so those observations are not "future".
-        self.now = datetime.now(timezone.utc) + timedelta(seconds=5)
+        # Observation and Runtime clocks must advance together, independently
+        # of how long database setup takes on the test host.
+        self.now = datetime.now(timezone.utc)
         for age in (0, 16):
             with self.subTest(age=age), tempfile.TemporaryDirectory() as directory:
                 manager = create_runtime(directory, clock=lambda: self.now)
                 create_session(manager)
-                agent = FixtureAgent([response(answer="", calls=[call(call_id="older"), call(call_id="newer")]), response()])
+                agent = FixtureAgent(
+                    [response(answer="", calls=[call(call_id="older"), call(call_id="newer")]), response()],
+                    clock=lambda: self.now,
+                )
                 def age_first(phase, session_id):
                     if phase == "tool_checkpoint_committed" and len(agent.executions) == 2:
                         self.now += timedelta(seconds=age)

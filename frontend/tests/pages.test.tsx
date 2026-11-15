@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { detail, incident, json, page, session } from './fixtures';
-import type { HumanRequestStatus } from '../src/api/types';
+import type { HumanRequestStatus, IncidentSignals } from '../src/api/types';
 
 function open(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
@@ -75,6 +75,40 @@ it('keeps missing observations distinct from zero and links retained investigati
   expect(within(row).getByText('0')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看 Session' })).toHaveAttribute('href', '/sessions/ses-fixture');
   expect(screen.getByText(/回答已被 API 截断/)).toBeInTheDocument();
+});
+
+it('renders samples, gaps and query failures independently in the alert window', async () => {
+  const start = '2026-11-11T02:00:00Z';
+  const signals: IncidentSignals = {
+    window: { start, end: '2026-11-11T02:02:00Z', step_seconds: 15 },
+    metrics: [
+      { metric: 'http_5xx_rate', status: 'ok', reason: null, samples: [{ evaluated_at: start, value: 0 }] },
+      { metric: 'http_latency_p95_seconds', status: 'no_data', reason: 'no_samples_in_metric_range', samples: [] },
+      { metric: 'process_cpu_cores', status: 'error', reason: 'metrics_range_unreachable_or_invalid', samples: [] },
+    ],
+    logs: { status: 'ok', reason: null, truncated: false, entries: [{ timestamp: start, line: '<img> 订单业务错误' }] },
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => json(url.endsWith('/signals') ? signals : incident)));
+  open('/incidents/inc-fixture');
+  expect(await screen.findByRole('img', { name: /HTTP 5xx 比例曲线.*末次采样 0/ })).toBeInTheDocument();
+  expect(screen.getByText('这个时间窗没有指标样本')).toBeInTheDocument();
+  expect(screen.getByText('指标查询失败')).toBeInTheDocument();
+  expect(screen.getByText('<img> 订单业务错误')).toBeInTheDocument();
+});
+
+it('uses an exact service filter across pages and keeps it when the status changes', async () => {
+  const fetch = vi.fn(async (url: string) => {
+    const params = new URL(url).searchParams;
+    return json(page([incident], true, Number(params.get('offset')), 20));
+  });
+  vi.stubGlobal('fetch', fetch);
+  open('/incidents?offset=20');
+  await screen.findByText('fixture-service');
+  fireEvent.change(screen.getByRole('searchbox', { name: '服务' }), { target: { value: 'order-service' } });
+  fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+  await waitFor(() => expect(fetch.mock.calls.at(-1)![0]).toContain('offset=0&service=order-service'));
+  fireEvent.change(screen.getByRole('combobox', { name: '状态' }), { target: { value: 'resolved' } });
+  await waitFor(() => expect(fetch.mock.calls.at(-1)![0]).toContain('status=resolved&service=order-service'));
 });
 
 it('renders answers as text, shares Incident budget, and does not infer proposal approval', async () => {

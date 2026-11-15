@@ -51,6 +51,34 @@ export interface Page<T> {
 export type IncidentPage = Page<IncidentSummary>;
 export type SessionPage = Page<SessionSummary>;
 
+export type SignalStatus = 'ok' | 'no_data' | 'error';
+export type SignalMetric = 'http_5xx_rate' | 'http_latency_p95_seconds'
+  | 'process_cpu_cores' | 'process_resident_memory_bytes';
+
+export interface SignalWindow {
+  start: string;
+  end: string;
+  step_seconds: number;
+}
+
+export interface MetricSignal {
+  metric: SignalMetric;
+  status: SignalStatus;
+  reason: string | null;
+  samples: { evaluated_at: string; value: number }[];
+}
+
+export interface IncidentSignals {
+  window: SignalWindow | null;
+  metrics: MetricSignal[];
+  logs: {
+    status: SignalStatus;
+    reason: string | null;
+    entries: { timestamp: string; line: string }[];
+    truncated: boolean;
+  };
+}
+
 export type RemediationStatus = 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'verification_failed' | 'closed';
 export interface OperatorView { actor: string; permissions: ('request' | 'approve' | 'execute')[] }
 export interface CompensationTargetView {

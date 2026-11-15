@@ -1,4 +1,8 @@
 """The single source of service definitions. Secrets are environment references."""
+import os
+
+ORDER_URL = os.getenv("INCIDENT_AGENT_ORDER_URL", "http://localhost:8001")
+ORDER_RECOVERY_URL = os.getenv("INCIDENT_AGENT_ORDER_RECOVERY_URL", "http://127.0.0.1:8001")
 
 SERVICES = [
     {
@@ -6,7 +10,7 @@ SERVICES = [
         "type": "http_service",
         "health": {
             "provider": "http",
-            "base_url": "http://localhost:8001",
+            "base_url": ORDER_URL,
         },
         "logs": {
             "provider": "loki",
@@ -18,7 +22,7 @@ SERVICES = [
         },
         "runtime": {
             "provider": "http_version",
-            "base_url": "http://localhost:8001",
+            "base_url": ORDER_URL,
             "allowed_flags": ("simulate_code_regression", "simulate_slow_request"),
         },
         "source": {
@@ -33,7 +37,7 @@ SERVICES = [
         "recovery": {
             "provider": "http_business",
             "target_id": "order_read_query",
-            "base_url": "http://127.0.0.1:8001",
+            "base_url": ORDER_RECOVERY_URL,
             "endpoint": "/order",
             "side_effect_free": True,
             "json_equals": {"service": "order-service", "dependency": "order-db"},
@@ -46,7 +50,7 @@ SERVICES = [
         "type": "postgresql",
         "health": {
             "provider": "postgresql",
-            "host": "127.0.0.1",
+            "host": os.getenv("INCIDENT_AGENT_ORDER_DB_HOST", "127.0.0.1"),
             "port": 5432,
             "database": "orders",
             "user": "demo",

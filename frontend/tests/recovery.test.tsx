@@ -33,7 +33,9 @@ function recovery(status: RecoveryStatus): RecoveryVerificationView {
 }
 
 function open(record: IncidentDetail) {
-  const fetch = vi.fn().mockImplementation(async () => json(record));
+  const fetch = vi.fn().mockImplementation(async (url: string, _options?: RequestInit) => json(
+    url.endsWith('/signals') ? { window: null, metrics: [], logs: { status: 'no_data', entries: [] } } : record,
+  ));
   vi.stubGlobal('fetch', fetch);
   const rendered = render(<MemoryRouter initialEntries={['/incidents/inc-fixture']}><App /></MemoryRouter>);
   return { ...rendered, fetch };
@@ -104,11 +106,12 @@ it('renders HTTP and matched/unmatched business conditions as bounded read-only 
   expect(within(region).getByText('2026/10/12 14:37:10')).toBeVisible();
   fireEvent.click(within(region).getByText('验证尝试记录（1）'));
   expect(within(region).getByText('第 1 次')).toBeVisible();
-  expect(fetch).toHaveBeenCalledTimes(1);
+  const recoveryReads = () => fetch.mock.calls.filter(([url]) => !url.endsWith('/signals'));
+  expect(recoveryReads()).toHaveLength(1);
   expect(screen.queryByRole('button', { name: /执行|开始验证|立即重试|修复|批准/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '刷新数据' }));
   await screen.findByRole('region', { name: '业务恢复验证' });
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(recoveryReads()).toHaveLength(2);
   for (const [, options] of fetch.mock.calls) expect(options).toMatchObject({ method: 'GET', credentials: 'omit' });
 });
 

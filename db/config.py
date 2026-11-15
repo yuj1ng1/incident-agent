@@ -1,5 +1,6 @@
 """Database URL resolution and process-wide SQLAlchemy engine pool."""
 import os
+import socket
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, make_url
@@ -23,6 +24,23 @@ def database_url():
     if url.drivername != REQUIRED_DRIVER or not url.database:
         raise RuntimeError("mysql_pymysql_database_url_required")
     return value
+
+
+def database_socket_addresses(url):
+    """Resolve the configured MySQL endpoint before offline I/O guards run."""
+    target = make_url(url)
+    host = target.host or "127.0.0.1"
+    port = target.port or 3306
+    addresses = {(host, port)}
+    addresses.update(
+        (address[0], address[1])
+        for _, _, _, _, address in socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    )
+    return frozenset(addresses)
 
 
 def get_engine(url=None):

@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 from datetime import timedelta
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -471,6 +472,7 @@ class HandlerTests(unittest.TestCase):
         self.runtime.stop.assert_not_called()
 
 
+@unittest.skipUnless(os.name == "nt", "Windows process identity and launch contract")
 class ProcessTests(unittest.TestCase):
     def setUp(self):
         self.identity = {"pid": 12, "creation": 100, "cwd": str(ROOT),

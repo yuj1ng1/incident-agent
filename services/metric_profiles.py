@@ -14,6 +14,8 @@ HTTP_METRICS = (
     "http_request_rate",
     "http_5xx_rate",
     "http_latency_p95_seconds",
+    "process_cpu_cores",
+    "process_resident_memory_bytes",
     "service_scrape_up",
 )
 POSTGRES_METRICS = (
@@ -59,6 +61,8 @@ def build_promql(service, settings, metric):
                 f" and (sum(increase({histogram_count}[1m])) >= 20)"
                 f" and (min(up{{{selected}}}) == 1)"
             ),
+            "process_cpu_cores": f"sum(rate(process_cpu_seconds_total{{{selected}}}[1m]))",
+            "process_resident_memory_bytes": f"sum(process_resident_memory_bytes{{{selected}}})",
             "service_scrape_up": f"up{{{selected}}}",
         }[metric]
     job_filter = selector({"job": settings.job})

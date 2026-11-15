@@ -49,6 +49,7 @@ it('checks actual TypeScript response types against live-checked OpenAPI, includ
   const typePath = fileURLToPath(new URL('../src/api/types.ts', import.meta.url)).replaceAll('\\', '/');
   const assertions = [
     ['IncidentPage', '/api/incidents'], ['IncidentDetail', '/api/incidents/{incident_id}'],
+    ['IncidentSignals', '/api/incidents/{incident_id}/signals'],
     ['SessionPage', '/api/sessions'], ['SessionDetail', '/api/sessions/{session_id}'],
     ['RemediationPage', '/api/remediations'], ['RemediationDetail', '/api/remediations/{proposal_id}'],
     ['OperatorView', '/api/operator'],
@@ -56,7 +57,7 @@ it('checks actual TypeScript response types against live-checked OpenAPI, includ
   // Flatten intersections in retained investigation records without widening
   // literal unions or dropping optional/nullable fields.
   const source = [
-    'import type { IncidentPage, IncidentDetail, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus, RemediationPage, RemediationDetail, OperatorView } from ' + JSON.stringify(typePath) + ';',
+    'import type { IncidentPage, IncidentDetail, IncidentSignals, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus, RemediationPage, RemediationDetail, OperatorView } from ' + JSON.stringify(typePath) + ';',
     'type Normalize<T> = T extends readonly unknown[] ? { [K in keyof T]: Normalize<T[K]> } : T extends object ? { [K in keyof T]: Normalize<T[K]> } : T;',
     'type Equal<A, B> = (<T>() => T extends Normalize<A> ? 1 : 2) extends (<T>() => T extends Normalize<B> ? 1 : 2) ? true : false;',
     'type Assert<T extends true> = T;',

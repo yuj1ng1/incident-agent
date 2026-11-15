@@ -3,6 +3,7 @@ export class ApiError extends Error {
 }
 
 export function apiBaseUrl(value = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8010'): string {
+  if (value === '/') return '';
   let url: URL;
   try { url = new URL(value); } catch { throw new ApiError('API 地址格式无效。'); }
   if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname)

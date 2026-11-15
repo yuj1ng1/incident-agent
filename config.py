@@ -1,10 +1,12 @@
+import os
+
 MODEL_NAME="deepseek-flash"
 
 MAX_AGENT_LOOPS=7
 MAX_TOOL_CALLS=13
 
-PROMETHEUS_URL="http://localhost:9090"
-LOKI_URL="http://localhost:3100"
+PROMETHEUS_URL = os.getenv("INCIDENT_AGENT_PROMETHEUS_URL", "http://localhost:9090")
+LOKI_URL = os.getenv("INCIDENT_AGENT_LOKI_URL", "http://localhost:3100")
 REINVESTIGATE_COOLDOWN_MINUTES=5
 
 HTTP_5XX_RATE_INCREASE_THRESHOLD=0.2

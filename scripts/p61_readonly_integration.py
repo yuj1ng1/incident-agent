@@ -210,13 +210,15 @@ def run_case(
     database = make_url(os.environ["INCIDENT_AGENT_DATABASE_URL"])
     database_host = database.host or "127.0.0.1"
     database_port = database.port or 3306
+    from db.config import database_socket_addresses
+
+    database_addresses = database_socket_addresses(database)
 
     def database_address(address):
         return (
             isinstance(address, tuple)
             and len(address) >= 2
-            and address[0] in {database_host, "localhost", "127.0.0.1", "::1"}
-            and address[1] == database_port
+            and address[:2] in database_addresses
         )
 
     def allowed_socket(original):

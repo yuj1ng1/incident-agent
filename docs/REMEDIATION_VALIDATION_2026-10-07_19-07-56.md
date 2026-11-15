@@ -1,7 +1,7 @@
 # Remediation 实现与真实验证
 
 日期：2026-10-07（Asia/Shanghai）；以下运行时间均为 UTC。架构、字段、状态机、
-CLI 与限制详见 [REMEDIATION_GUIDE.md](REMEDIATION_GUIDE.md)。
+CLI 与限制详见 [REMEDIATION_GUIDE_2026-10-07_19-04-33.md](REMEDIATION_GUIDE_2026-10-07_19-04-33.md)。
 
 ## 仓库与提交范围
 

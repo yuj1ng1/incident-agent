@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { IncidentDetail } from '../api/types';
+import { IncidentSignalsPanel } from '../components/IncidentSignalsPanel';
 import { InvestigationText } from '../components/InvestigationText';
 import { RecoveryVerificationCard } from '../components/RecoveryVerificationCard';
 import { DataState, EmptyState, Fields, PageHeader, Panel, StatusBadge, TechnicalValue, TimeValue } from '../components/ui';
@@ -24,6 +25,7 @@ export function IncidentDetailPage() {
             <td><StatusBadge value={alert.state} /></td><td className="numeric">{alert.value ?? '无数据'}</td><td className="numeric">{alert.threshold ?? '无数据'}</td><td className="time-cell"><TimeValue value={alert.observed_at} /></td>
           </tr>)}</tbody></table></div> : <EmptyState title="暂无告警观测" />}
         </Panel>
+        <IncidentSignalsPanel incidentId={incidentId} />
         <Panel title="最近调查" subtitle="最近 3 条保留记录；完整归档历史可通过 Runtime CLI 查询">
           {incident.recent_investigations.length ? <div className="investigation-list">{[...incident.recent_investigations].reverse().map((record, index) => <article key={record.session_id || index} className="investigation-record">
             <div className="record-heading"><StatusBadge value={record.status} /><time>{formatTime(record.investigated_at)}</time>{record.session_id && <Link className="text-link" to={recordPath('sessions', record.session_id)}>查看 Session<ArrowRight size={14} /></Link>}</div>

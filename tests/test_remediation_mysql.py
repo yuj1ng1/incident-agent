@@ -18,6 +18,20 @@ def lock_key(name):
     return "ia_remediation_" + hashlib.sha256(name.encode()).hexdigest()[:48]
 
 
+def assert_lock_released(observer, name):
+    # KILL and client disconnect return before server-side cleanup completes.
+    # Keep the release assertion, allowing only a bounded cleanup interval.
+    deadline = time.monotonic() + 5
+    while True:
+        free = observer.exec_driver_sql(
+            "SELECT IS_FREE_LOCK(%s)", (lock_key(name),),
+        ).scalar_one()
+        if free == 1:
+            return
+        assert time.monotonic() < deadline, "server did not release the lost session lock"
+        time.sleep(0.01)
+
+
 def test_execution_lock_serializes_processes_even_with_different_schemas(tmp_path):
     first = RemediationStore(remediation_database_url(tmp_path / "first"))
     second = RemediationStore(empty_database_url(tmp_path / "second"))
@@ -72,10 +86,7 @@ def test_disconnected_lock_session_fails_closed_and_is_not_reused(tmp_path):
                 assert type(owner) is int
                 # The test account kills only its own identified MySQL session.
                 observer.exec_driver_sql(f"KILL CONNECTION {owner}")
-        assert observer.exec_driver_sql(
-            "SELECT IS_FREE_LOCK(%s)",
-            (lock_key(name),),
-        ).scalar_one() == 1
+        assert_lock_released(observer, name)
     with store.engine.connect() as fresh:
         assert fresh.exec_driver_sql("SELECT CONNECTION_ID()").scalar_one() != owner
     with store.service_lock(name):
@@ -105,9 +116,6 @@ def test_lost_lock_reply_discards_the_actual_server_session(tmp_path, monkeypatc
                 assert statement == "RELEASE_LOCK"
     assert observed == [True]
     with store.engine.connect() as observer:
-        assert observer.exec_driver_sql(
-            "SELECT IS_FREE_LOCK(%s)",
-            (lock_key(name),),
-        ).scalar_one() == 1
+        assert_lock_released(observer, name)
     with store.service_lock(name):
         pass

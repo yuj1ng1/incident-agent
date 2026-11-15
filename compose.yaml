@@ -1,0 +1,202 @@
+name: incident-agent-demo
+
+x-agent: &agent
+  image: ${COMPOSE_PROJECT_NAME:-incident-agent-demo}-runtime:local
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+    target: agent
+
+x-agent-env: &agent-env
+  INCIDENT_AGENT_DATABASE_URL: mysql+pymysql://incident_demo:local-demo-only@mysql:3306/incident_agent?charset=utf8mb4
+  INCIDENT_AGENT_PROMETHEUS_URL: http://prometheus:9090
+  INCIDENT_AGENT_LOKI_URL: http://loki:3100
+  INCIDENT_AGENT_ORDER_URL: http://order-service:8001
+  INCIDENT_AGENT_ORDER_RECOVERY_URL: http://${INCIDENT_DEMO_ORDER_IP:-172.30.161.10}:8001
+  INCIDENT_AGENT_ORDER_DB_HOST: order-db
+  ORDER_DB_PASSWORD: demo
+
+services:
+  mysql:
+    image: mysql:8.4.13
+    environment:
+      MYSQL_ROOT_PASSWORD: local-root-demo-only
+      MYSQL_DATABASE: incident_agent
+      MYSQL_USER: incident_demo
+      MYSQL_PASSWORD: local-demo-only
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql --protocol=tcp -h 127.0.0.1 -u "$$MYSQL_USER" "$$MYSQL_DATABASE" -Nse "SELECT 1"']
+      interval: 3s
+      timeout: 3s
+      retries: 25
+      start_period: 15s
+
+  migrate:
+    <<: *agent
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: *agent-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  order-db:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: order-db
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - orders-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "demo", "-d", "orders"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_URI: order-db:5432/orders?sslmode=disable&connect_timeout=2&application_name=postgres_exporter
+      DATA_SOURCE_USER: postgres_monitor
+      DATA_SOURCE_PASS: local-exporter-demo-only
+      PG_EXPORTER_COLLECTION_TIMEOUT: 3s
+    depends_on:
+      order-db:
+        condition: service_healthy
+
+  order-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: order-service
+    labels:
+      io.incident-agent.demo: stage1
+    environment:
+      ORDER_DB_HOST: order-db
+      ORDER_DB_PASSWORD: demo
+      SIMULATE_CODE_REGRESSION: ${INCIDENT_DEMO_REGRESSION:-false}
+    depends_on:
+      order-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${INCIDENT_DEMO_ORDER_PORT:-18001}:8001"
+    networks:
+      default:
+        ipv4_address: ${INCIDENT_DEMO_ORDER_IP:-172.30.161.10}
+    volumes:
+      - order-logs:/srv/order/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  prometheus:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: prometheus
+    volumes:
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  loki:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: loki
+    command: ["-config.file=/etc/loki/demo.yaml", "-log.level=info", "-reporting.enabled=false"]
+    volumes:
+      - loki-data:/tmp/loki
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  alloy:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: alloy
+    command: ["run", "--storage.path=/var/lib/alloy", "/etc/alloy/config.alloy"]
+    volumes:
+      - order-logs:/var/log/demo:ro
+      - alloy-data:/var/lib/alloy
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:12345/-/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  monitor:
+    <<: *agent
+    command: ["python", "main.py"]
+    environment:
+      <<: *agent-env
+      INCIDENT_AGENT_MODEL_MODE: ${INCIDENT_DEMO_MODEL_MODE:-demo_replay}
+      DEEPSEEK_API_KEY: ${INCIDENT_DEMO_DEEPSEEK_API_KEY:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      order-service:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      alloy:
+        condition: service_healthy
+
+  api:
+    <<: *agent
+    command: ["python", "-m", "uvicorn", "web_api.app:app", "--host", "0.0.0.0", "--port", "8010", "--no-proxy-headers"]
+    environment: *agent-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8010/readyz', timeout=3)"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: frontend
+    ports:
+      - "127.0.0.1:${INCIDENT_DEMO_WEB_PORT:-8088}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/readyz"]
+      interval: 3s
+      timeout: 4s
+      retries: 15
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${INCIDENT_DEMO_SUBNET:-172.30.161.0/24}
+
+volumes:
+  mysql-data:
+  orders-data:
+  order-logs:
+  prometheus-data:
+  loki-data:
+  alloy-data:
