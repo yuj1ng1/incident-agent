@@ -15,8 +15,9 @@ from db.config import database_url
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+if config.config_file_name is not None and config.cmd_opts is not None:
+    # CLI owns logging; programmatic callers keep their loggers and handlers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Autogeneration is added when the first store owns SQLAlchemy table metadata.
 target_metadata = None

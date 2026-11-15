@@ -1,6 +1,8 @@
 """Actual MySQL migration/import/verification tests, never an operator schema."""
 import hashlib
+import logging
 from pathlib import Path
+import unittest
 
 from alembic import command
 from alembic.config import Config
@@ -31,6 +33,54 @@ def migrated(tmp_path, monkeypatch):
     monkeypatch.setenv("INCIDENT_AGENT_DATABASE_URL", url)
     command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
     return url
+
+
+def test_programmatic_migration_preserves_application_logs(tmp_path, monkeypatch):
+    loggers = [
+        logging.getLogger(name)
+        for name in (
+            "agent",
+            "remediation.executor",
+            "remediation.demo_action",
+            "web_api.app",
+        )
+    ]
+    url = empty_database_url(tmp_path / "logging")
+    monkeypatch.setenv("INCIDENT_AGENT_DATABASE_URL", url)
+    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
+
+    for logger in loggers:
+        with unittest.TestCase().assertLogs(logger, level="ERROR") as captured:
+            logger.error("application_log_after_migration")
+        assert captured.records[0].message == "application_log_after_migration"
+
+
+def test_programmatic_migration_keeps_application_file_handler_open(
+    tmp_path,
+    monkeypatch,
+):
+    url = empty_database_url(tmp_path / "logging-handles")
+    monkeypatch.setenv("INCIDENT_AGENT_DATABASE_URL", url)
+    path = tmp_path / "application.log"
+    handler = logging.FileHandler(path, encoding="utf-8")
+    stream = handler.stream
+    logger = logging.getLogger("migration_application_file")
+    monkeypatch.setattr(logger, "handlers", [handler])
+    monkeypatch.setattr(logger, "level", logging.ERROR)
+    monkeypatch.setattr(logger, "propagate", False)
+    try:
+        logger.error("before_migration")
+        command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
+        logger.error("after_migration")
+        assert not stream.closed
+        assert handler.stream is stream
+    finally:
+        handler.close()
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "before_migration",
+        "after_migration",
+    ]
+    path.unlink()
 
 
 @pytest.mark.parametrize("start", ("base", "0004_incident_store"))

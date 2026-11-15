@@ -94,6 +94,8 @@ Runtime、Incident 与 Remediation 默认使用同一 MySQL schema，首次部�
 
 Remediation 的事务、锁与迁移边界见 [Remediation MySQL 迁移](docs/REMEDIATION_MYSQL_MIGRATION_2026-11-14_10-43-33.md)。历史 SQLite、Incident JSON/归档和 Remediation JSON 的预览、显式导入、冲突处理及当前验收边界见 [历史数据导入与一致性校验](docs/LEGACY_DATA_IMPORT_2026-11-14_10-42-54.md)。导入默认只预览，必须显式 `--apply` 才写库；`remediation_cli.py --store` 和 `runtime_cli.py --remediations` 均接收 MySQL URL，默认读取 `INCIDENT_AGENT_DATABASE_URL`。
 
+双版本完整回归、独立 MySQL 8.4 安装校验、历史副本真实导入及保留的 38 项审计警告，见 [双版本 MySQL 真实验收](docs/MYSQL_DUAL_VERSION_ACCEPTANCE_2026-11-15_12-20-55.md)。
+
 ## 回归验证
 
 Runtime 测试使用隔离 MySQL 库：测试会按临时目录创建 `ia_test_*` schema，并在会话结束时删除。

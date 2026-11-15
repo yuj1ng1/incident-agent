@@ -8,7 +8,7 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 120
     services:
       mysql:
         image: mysql:8.4.13
@@ -45,7 +45,7 @@ jobs:
 
   windows-remediation:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,10 +62,122 @@ jobs:
           .\.ci-venv\Scripts\python -m pip install -r requirements-test.lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.ci-venv\Scripts\python -m pip check
+      - name: Prepare independent MySQL 8.4 on loopback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Get-NetTCPConnection -State Listen -LocalPort 3308 -ErrorAction SilentlyContinue) {
+            throw '3308 is already occupied; refusing to change another instance'
+          }
+          $archive = Join-Path $env:RUNNER_TEMP 'mysql-8.4.13-winx64.zip'
+          Invoke-WebRequest 'https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.13-winx64.zip' -OutFile $archive
+          # Pinned digest captured after official GPG verification, documented in docs/.
+          $expected = 'e9cd98b1d23f122987b1afca26ad942efec5891481103d48ae3cde237fa3ea54'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'MySQL ZIP checksum mismatch'
+          }
+          $installation = Join-Path $env:RUNNER_TEMP 'incident-agent-mysql84'
+          if (Test-Path -LiteralPath $installation) { throw 'Installation directory already exists' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $installation
+          $base = Join-Path $installation 'mysql-8.4.13-winx64'
+          $private = Join-Path $base 'private'
+          New-Item -ItemType Directory -Path $private | Out-Null
+          $acl = Get-Acl -LiteralPath $private
+          $acl.SetAccessRuleProtection($true, $false)
+          foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+            $identity = [Security.Principal.SecurityIdentifier]::new($sid)
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+              $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+            ))
+          }
+          Set-Acl -LiteralPath $private -AclObject $acl
+          $password = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+          $rootPassword = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+          Write-Output "::add-mask::$password"
+          Write-Output "::add-mask::$rootPassword"
+          $baseUnix = $base.Replace('\', '/')
+          $config = Join-Path $base 'my.ini'
+          @"
+          [mysqld]
+          basedir=$baseUnix
+          datadir=$baseUnix/data
+          port=3308
+          bind-address=127.0.0.1
+          mysqlx=OFF
+          skip-name-resolve
+          log-error=$baseUnix/private/mysqld.err
+          pid-file=$baseUnix/mysqld.pid
+          "@ | Set-Content -LiteralPath $config -Encoding utf8NoBOM
+          $bootstrap = Join-Path $private 'bootstrap.sql'
+          @"
+          ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '$rootPassword';
+          CREATE USER 'root'@'127.0.0.1' IDENTIFIED WITH caching_sha2_password BY '$rootPassword';
+          GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+          CREATE DATABASE bootstrap CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
+          CREATE USER 'ci_test'@'127.0.0.1' IDENTIFIED WITH caching_sha2_password BY '$password';
+          GRANT ALL PRIVILEGES ON bootstrap.* TO 'ci_test'@'127.0.0.1';
+          GRANT ALL PRIVILEGES ON ``ia\_test\_%``.* TO 'ci_test'@'127.0.0.1';
+          "@ | Set-Content -LiteralPath $bootstrap -Encoding utf8NoBOM
+          $admin = Join-Path $private 'admin.cnf'
+          @"
+          [client]
+          user=root
+          password=$rootPassword
+          host=127.0.0.1
+          port=3308
+          protocol=tcp
+          "@ | Set-Content -LiteralPath $admin -Encoding utf8NoBOM
+          $server = Join-Path $base 'bin/mysqld.exe'
+          & $server "--defaults-file=$config" --initialize-insecure
+          if ($LASTEXITCODE -ne 0) { throw 'MySQL initialization failed' }
+          $arguments = @("--defaults-file=`"$config`"", "--init-file=`"$bootstrap`"")
+          $process = Start-Process -FilePath $server -ArgumentList $arguments -WindowStyle Hidden -PassThru
+          "INCIDENT_AGENT_CI_MYSQL_BASE=$base" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "INCIDENT_AGENT_CI_MYSQL_ADMIN=$admin" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $env:INCIDENT_AGENT_TEST_DATABASE_URL = "mysql+pymysql://ci_test:${password}@127.0.0.1:3308/bootstrap?charset=utf8mb4"
+          $probe = @'
+          import os
+          from sqlalchemy import create_engine
+          try:
+              engine = create_engine(os.environ['INCIDENT_AGENT_TEST_DATABASE_URL'], connect_args={'connect_timeout': 2})
+              with engine.connect() as connection:
+                  row = connection.exec_driver_sql('SELECT VERSION(),@@port,@@datadir').one()
+                  assert row[0].startswith('8.4.') and row[1] == 3308
+              engine.dispose()
+          except Exception:
+              raise SystemExit(1)
+          '@
+          $ready = $false
+          for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            $probe | & .\.ci-venv\Scripts\python -B - 2>$null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            if ($process.HasExited) { throw 'MySQL exited during startup' }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw 'MySQL readiness deadline exceeded' }
+          Remove-Item -LiteralPath $bootstrap
+          "INCIDENT_AGENT_TEST_DATABASE_URL=$env:INCIDENT_AGENT_TEST_DATABASE_URL" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Test Windows remediation boundaries
         env:
           INCIDENT_AGENT_CLEAN_ENV: '1'
-        run: .\.ci-venv\Scripts\python -B -m pytest tests/test_w2_demo.py tests/test_w3_authorization.py tests/test_w3_source_pin.py -q --disable-warnings
+        run: >-
+          .\.ci-venv\Scripts\python -B -m pytest
+          tests/test_remediation.py tests/test_remediation_recovery.py
+          tests/test_remediation_cli_semantics.py tests/test_remediation_mysql.py
+          tests/test_compensation.py tests/test_web_remediation.py
+          tests/test_legacy_import_mysql.py tests/offline/
+          tests/test_w2_demo.py tests/test_w3_authorization.py
+          tests/test_w3_source_pin.py tests/test_process_fixture_startup.py
+          -q --disable-warnings
+      - name: Shut down only the job-owned MySQL instance
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:INCIDENT_AGENT_CI_MYSQL_ADMIN -and (Test-Path -LiteralPath $env:INCIDENT_AGENT_CI_MYSQL_ADMIN)) {
+            $client = Join-Path $env:INCIDENT_AGENT_CI_MYSQL_BASE 'bin/mysqladmin.exe'
+            & $client "--defaults-extra-file=$env:INCIDENT_AGENT_CI_MYSQL_ADMIN" shutdown
+            if ($LASTEXITCODE -ne 0) { throw 'Job-owned MySQL shutdown failed' }
+          }
 
   frontend:
     runs-on: windows-latest

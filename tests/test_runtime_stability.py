@@ -560,6 +560,8 @@ class RuntimeWorkTests(unittest.TestCase):
             session = manager.enqueue(incident)
             Worker(manager, FixtureAgent([ValueError("invalid")])).run_once()
             (root / "live-alert-fixture.json").write_text(json.dumps(raw), encoding="utf-8")
+            # The parent must own every schema created by its child CLIs.
+            remediation_database_url(root / "remediation.json")
             children = [subprocess.Popen([sys.executable, "-B", str(ROOT / "tests" / "reopen_process_fixture.py"),
                                           str(root), session.session_id, owner], cwd=root, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8") for owner in ("one", "two")]
