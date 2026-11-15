@@ -15,7 +15,6 @@ PostgreSQL、Prometheus、Loki、Alloy 和 MySQL。支持服务筛选、告警�
 
 固定版本、配置、Windows 审批入口和停止方式见 [第一阶段部署与复跑](docs/STAGE1_DEPLOYMENT_GUIDE_2026-11-15_12-54-50.md)。
 完整回归、真实告警与恢复、迁移兼容和已知限制见 [第一阶段验收记录](docs/STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md)。
-下一轮真实模型验证使用 [真实启动与限额付费验证提示词](docs/STAGE1_LIVE_STARTUP_CODEX_PROMPT_2026-11-15_15-05-20.md)。
 
 当前版本：调查由持久化 Runtime 执行，支持人类介入、有限再调查及历史证据归档。
 
