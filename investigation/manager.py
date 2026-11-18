@@ -114,6 +114,14 @@ class InvestigationManager:
             session.budget_group_id = session.session_id
         self.store.insert(session, db)
         transition(session, S.QUEUED)
+        checkpoint = self.store.load_checkpoint(session, db)
+        checkpoint["execution_limits"] = self.limits.model_dump(mode="json")
+        self.store.checkpoint(
+            session,
+            checkpoint,
+            db,
+            self.limits.checkpoints_to_keep,
+        )
         self.store.save(session, db)
         self.store.event(db, session.session_id, "queued", command.actor if command else "monitor",
                          previous_session_id=previous.session_id if previous else None,
@@ -706,7 +714,10 @@ class InvestigationManager:
             "result_trust": project_result_trust(
                 checkpoint.get("result"),
             ).model_dump(mode="json"),
-            "limits": self.limits.model_dump(mode="json"),
+            "limits": checkpoint.get("execution_limits"),
+            "limits_source": (
+                "session_checkpoint" if checkpoint.get("execution_limits") else "unrecorded"
+            ),
             "incident_budget_usage": usage,
             "reinvestigation_refusal": refusal,
             "proposal_evidence_gap": checkpoint.get("proposal_evidence_gap"),

@@ -54,7 +54,10 @@ class FixtureAgent(Agent):
         *,
         clock=None,
     ):
-        super().__init__(Mock(), "只读证据调查，不执行修复。")
+        super().__init__(
+            Mock(), "只读证据调查，不执行修复。",
+            input_token_counter=lambda body: 0,  # In-memory provider, no tokens.
+        )
         self.request_durable_response = Mock(side_effect=responses or [response()])
         self.executions = []
         self.tool_result = tool_result

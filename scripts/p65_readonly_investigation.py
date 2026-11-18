@@ -34,7 +34,7 @@ CODE_FILES = (
     "tools/tool_registry.py", "investigation/worker.py", "investigation/store.py",
     "investigation/manager.py", "investigation/models.py",
     "investigation/checkpoint.py", "investigation/evidence_policy.py",
-    "investigation/result_trust.py", "config.py",
+    "investigation/result_trust.py", "config.py", "model_client/token_counter.py",
 )
 
 
@@ -518,6 +518,14 @@ def run_prepared(
                     raise ValueError("p65_incident_budget_binding_mismatch")
                 return saved, manager.store.load_checkpoint(saved)
 
+            if live:
+                from model_client.token_counter import (
+                    build_deepseek_input_token_counter,
+                )
+
+                token_counter = build_deepseek_input_token_counter()
+            else:
+                token_counter = lambda body: 0
             adapter = BoundedResponses(
                 root, body, snapshot, sdk=sdk, credential=key,
                 mock_responses=mock_responses if mock_responses is not None else mock_plan(),
@@ -525,8 +533,14 @@ def run_prepared(
                 expected_first_sha256=plan["first_request_sha256"],
                 frozen_tools=frozen_tools,
                 max_tools=plan["max_tool_executions"],
+                input_token_counter=token_counter,
             )
-            agent = Agent(adapter, TASK)
+            agent = Agent(
+                adapter,
+                TASK,
+                input_token_counter=token_counter,
+            )
+            agent.model_client.max_output_tokens = body["max_output_tokens"]
 
             def boundary(phase, identity):
                 saved, checkpoint = snapshot()

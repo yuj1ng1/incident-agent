@@ -1,0 +1,77 @@
+{
+  "session": {
+    "session_id": "ses-681e26aa31ac40e4b50ef49122123b77",
+    "incident_id": "inc-1a76d418",
+    "service": "order-service",
+    "status": "EXHAUSTED",
+    "created_at": "2026-11-15T07:55:06.386052Z",
+    "updated_at": "2026-11-15T07:55:11.664606Z",
+    "completed_at": "2026-11-15T07:55:11.575177Z",
+    "state_version": 11,
+    "attempt_count": 1,
+    "current_attempt_rounds": 1,
+    "current_attempt_tool_calls": 1,
+    "total_model_requests": 1,
+    "total_tool_executions": 1,
+    "resume_count": 0,
+    "last_error_category": "APIConnectionError",
+    "next_retry_at": null
+  },
+  "limits": {
+    "max_attempts": 3,
+    "max_model_requests": 21,
+    "max_tool_executions": 39,
+    "max_resumes": 8,
+    "max_duration_seconds": 3600,
+    "lease_seconds": 120,
+    "model_timeout_seconds": 60,
+    "retry_base_seconds": 5,
+    "max_human_requests": 3,
+    "human_timeout_seconds": 1800,
+    "starvation_seconds": 120,
+    "checkpoints_to_keep": 4
+  },
+  "incident_budget_usage": {
+    "attempts": 1,
+    "model_requests": 1,
+    "tool_executions": 1,
+    "resumes": 0,
+    "human_requests": 0,
+    "started_at": "2026-11-15T07:55:06.386052Z"
+  },
+  "investigation_result": {
+    "success": false,
+    "status": "model_incomplete",
+    "answer": "调查停止：APIConnectionError",
+    "answer_truncated": false,
+    "model_rounds": 1,
+    "tool_calls": 1,
+    "result_trust": {
+      "mechanical_status": "passed",
+      "mechanical_scope": "result_schema_only",
+      "semantic_status": "pending_review",
+      "trusted": false,
+      "human_approval": "not_recorded",
+      "answer_sha256": "e7e7091aaa603d125193bd229b5068a8d4ad7c7651ebb24644004f3a830302d0",
+      "review_origin": "none",
+      "rejection_reasons": []
+    }
+  },
+  "projection": {
+    "projected": true,
+    "blocked": false,
+    "error_category": null,
+    "retry_at": null
+  },
+  "proposal_generation": {
+    "status": "not_pending",
+    "pending": false,
+    "attempts": 0,
+    "blocked": false,
+    "blocked_reason": null,
+    "error_category": null,
+    "retry_at": null,
+    "evidence_gap": null
+  },
+  "human_requests": []
+}

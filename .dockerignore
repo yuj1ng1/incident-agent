@@ -17,6 +17,7 @@
 !investigation/**/*.py
 !migrations/**/*.py
 !model_client/**/*.py
+!model_client/tokenizers/**
 !models/**/*.py
 !monitor/**/*.py
 !prompts/**/*.py

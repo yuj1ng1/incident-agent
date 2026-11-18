@@ -30,6 +30,7 @@ export const incident: IncidentDetail = {
 };
 export const detail: SessionDetail = {
   session,
+  limits_source: 'session_checkpoint',
   limits: { max_attempts: 3, max_model_requests: 11, max_tool_executions: 39, max_resumes: 8,
     max_duration_seconds: 3600, max_human_requests: 0, lease_seconds: 120, model_timeout_seconds: 60,
     retry_base_seconds: 5, human_timeout_seconds: 1800, starvation_seconds: 120, checkpoints_to_keep: 4 },

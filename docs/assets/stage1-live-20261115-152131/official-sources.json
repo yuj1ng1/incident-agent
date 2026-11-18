@@ -1,0 +1,42 @@
+{
+  "pricing": {
+    "url": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "status": 200,
+    "sha256": "5126b5f69e78f6dacb0a8bfc91e0cf0b705416b0b918b12e1f45f66b122e7741",
+    "bytes": 29133,
+    "retrieved_at": "2026-11-15T07:24:00.455843+00:00"
+  },
+  "responses": {
+    "url": "https://api-docs.deepseek.com/api/create-response/",
+    "status": 200,
+    "sha256": "9922b794675267bd38f430aa27ed471501fdd9a2c5aad6e58e968512362a4f06",
+    "bytes": 115380,
+    "retrieved_at": "2026-11-15T07:24:11.931245+00:00"
+  },
+  "token_usage": {
+    "url": "https://api-docs.deepseek.com/quick_start/token_usage/",
+    "status": 200,
+    "sha256": "f1579ae754961692f25162e2c39ca5987f1130ba11e20d488a2afb0335573bbd",
+    "bytes": 25134,
+    "retrieved_at": "2026-11-15T07:24:22.039640+00:00"
+  },
+  "tokenizer_links": [],
+  "responses_guide": {
+    "url": "https://api-docs.deepseek.com/guides/responses_api/",
+    "status": 200,
+    "sha256": "0e99fdbaddfbe25e038175bf000e0440233f614a2d78ce352ae115dc9f9ca5c9",
+    "bytes": 71951,
+    "retrieved_at": "2026-11-15T07:24:31.964646+00:00"
+  },
+  "tokenizer": {
+    "url": "https://cdn.deepseek.com/api-docs/deepseek_v4_tokenizer.zip",
+    "sha256": "e7310d1dafe0a86d8a5629fe78a7c763760f651db9b8682718a1781dcd6fe495",
+    "bytes": 1911504,
+    "entries": [
+      "deepseek_v4_tokenizer/",
+      "deepseek_v4_tokenizer/deepseek_tokenizer.py",
+      "deepseek_v4_tokenizer/tokenizer_config.json",
+      "deepseek_v4_tokenizer/tokenizer.json"
+    ]
+  }
+}

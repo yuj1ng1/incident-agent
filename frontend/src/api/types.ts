@@ -204,12 +204,13 @@ export interface SessionSummary {
 
 export interface SessionDetail {
   session: SessionSummary;
+  limits_source: 'session_checkpoint' | 'unrecorded';
   limits: {
     max_attempts: number; max_model_requests: number; max_tool_executions: number;
     max_resumes: number; max_duration_seconds: number; max_human_requests: number;
     lease_seconds: number; model_timeout_seconds: number; retry_base_seconds: number;
     human_timeout_seconds: number; starvation_seconds: number; checkpoints_to_keep: number;
-  };
+  } | null;
   incident_budget_usage: {
     attempts: number; model_requests: number; tool_executions: number;
     resumes: number; human_requests: number; started_at: string;

@@ -6,15 +6,16 @@ import { DataState, EmptyState, Fields, PageHeader, Panel, StatusBadge, Technica
 import { useApi } from '../hooks/useApi';
 import { formatTime, recordPath } from '../lib/format';
 
-function BudgetBar({ label, used, limit }: { label: string; used: number; limit: number }) {
-  const percent = limit > 0 ? Math.min(100, used / limit * 100) : 0;
+function BudgetBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  const knownPositive = limit !== null && limit > 0;
+  const percent = knownPositive ? Math.min(100, used / limit * 100) : 0;
   return <div className="budget-item">
-    <div><span>{label}</span><strong>{used}<span> / {limit}</span></strong></div>
-    <div className="budget-track" role={limit > 0 ? 'progressbar' : undefined}
-      aria-label={label} aria-valuemin={limit > 0 ? 0 : undefined}
-      aria-valuemax={limit > 0 ? limit : undefined} aria-valuenow={limit > 0 ? Math.min(used, limit) : undefined}
-      aria-valuetext={used + ' / ' + limit}>
-      <span className={used >= limit && limit > 0 ? 'at-limit' : ''} style={{ width: percent + '%' }} />
+    <div><span>{label}</span><strong>{used}<span> / {limit ?? '未记录'}</span></strong></div>
+    <div className="budget-track" role={knownPositive ? 'progressbar' : undefined}
+      aria-label={label} aria-valuemin={knownPositive ? 0 : undefined}
+      aria-valuemax={knownPositive ? limit : undefined} aria-valuenow={knownPositive ? Math.min(used, limit) : undefined}
+      aria-valuetext={used + ' / ' + (limit ?? '未记录')}>
+      <span className={knownPositive && used >= limit ? 'at-limit' : ''} style={{ width: percent + '%' }} />
     </div>
     {limit === 0 && <small>此额度未开放</small>}
   </div>;
@@ -40,13 +41,14 @@ export function SessionDetailPage() {
           <div className="detail-main">
             <Panel title="Incident 累计预算" subtitle="同一授权组共享额度，包含相关 Session 的已用次数">
               <div className="budget-grid">
-                <BudgetBar label="尝试次数" used={detail.incident_budget_usage.attempts} limit={detail.limits.max_attempts} />
-                <BudgetBar label="模型请求" used={detail.incident_budget_usage.model_requests} limit={detail.limits.max_model_requests} />
-                <BudgetBar label="工具执行" used={detail.incident_budget_usage.tool_executions} limit={detail.limits.max_tool_executions} />
-                <BudgetBar label="恢复次数" used={detail.incident_budget_usage.resumes} limit={detail.limits.max_resumes} />
-                <BudgetBar label="人类提问" used={detail.incident_budget_usage.human_requests} limit={detail.limits.max_human_requests} />
+                <BudgetBar label="尝试次数" used={detail.incident_budget_usage.attempts} limit={detail.limits?.max_attempts ?? null} />
+                <BudgetBar label="模型请求" used={detail.incident_budget_usage.model_requests} limit={detail.limits?.max_model_requests ?? null} />
+                <BudgetBar label="工具执行" used={detail.incident_budget_usage.tool_executions} limit={detail.limits?.max_tool_executions ?? null} />
+                <BudgetBar label="恢复次数" used={detail.incident_budget_usage.resumes} limit={detail.limits?.max_resumes ?? null} />
+                <BudgetBar label="人类提问" used={detail.incident_budget_usage.human_requests} limit={detail.limits?.max_human_requests ?? null} />
               </div>
-              <p className="panel-footnote">授权开始：{formatTime(detail.incident_budget_usage.started_at)} · 时长上限：{detail.limits.max_duration_seconds} 秒</p>
+              <p className="panel-footnote">授权开始：{formatTime(detail.incident_budget_usage.started_at)} · 时长上限：{detail.limits ? `${detail.limits.max_duration_seconds} 秒` : '未记录'}</p>
+              <p className="panel-footnote">{detail.limits ? '上限来自此调查持久化的执行配置。' : '历史调查未保存执行上限，无法确认当时约束。'}</p>
             </Panel>
             <Panel title="Agent 最终回答" subtitle="调查结论与服务恢复验证分别记录"
               action={detail.investigation_result && <StatusBadge value={detail.investigation_result.status} />}>

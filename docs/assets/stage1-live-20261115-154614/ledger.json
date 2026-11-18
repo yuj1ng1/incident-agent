@@ -1,0 +1,34 @@
+{
+  "experiment": {
+    "id": "incident-stage1-live-20261115-154614",
+    "parameters_sha256": "2d28e8f6c13418b5832c60af9a396edcdd5908ae8128b6e482dd77b46b421483",
+    "state": "CLOSED",
+    "started": 1794729305.954225,
+    "requests": 1,
+    "tools": 1,
+    "reason": "DecodingError"
+  },
+  "requests": [
+    {
+      "sequence": 1,
+      "started_at": "2026-11-15T07:55:08.568319+00:00",
+      "request_sha256": "4b8c9f87c9aaa12d05dee71365f11e030c678627df93f5eed0db32aed2492429",
+      "state": "FAILED_OR_UNCERTAIN",
+      "status_code": 200,
+      "response_sha256": "ee6cc4fb44f1f45ea24486f15b70a126d7f029a5410ef121a8ae7f79d5825fe8",
+      "usage": "{\"input_tokens\": 10117, \"input_tokens_details\": {\"cached_tokens\": 0}, \"output_tokens\": 535, \"output_tokens_details\": {\"reasoning_tokens\": 279}, \"total_tokens\": 10652}",
+      "error_category": "DecodingError"
+    }
+  ],
+  "tools": [
+    {
+      "sequence": 1,
+      "started_at": "2026-11-15T07:55:07.058132+00:00",
+      "call_id": "runtime-probe-010e2a4258874307b0a1134581cbcb07",
+      "name": "get_running_version",
+      "arguments": "{\"service\": \"order-service\"}",
+      "state": "RETURNED",
+      "result_sha256": "0dfd7026deb5d7f3c1be266799cd7d37b3503e24e33f15bfd9fb2417814c67a8"
+    }
+  ]
+}

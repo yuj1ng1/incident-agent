@@ -2331,7 +2331,22 @@
           ]
         },
         "limits": {
-          "$ref": "#/components/schemas/RuntimeLimits"
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/RuntimeLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits_source": {
+          "enum": [
+            "session_checkpoint",
+            "unrecorded"
+          ],
+          "title": "Limits Source",
+          "type": "string"
         },
         "projection": {
           "$ref": "#/components/schemas/Projection"
@@ -2346,6 +2361,7 @@
       "required": [
         "session",
         "limits",
+        "limits_source",
         "incident_budget_usage",
         "investigation_result",
         "projection",

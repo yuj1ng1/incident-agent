@@ -1,0 +1,90 @@
+{
+  "incident_id": "inc-1a76d418",
+  "service": "order-service",
+  "severity": "critical",
+  "status": "resolved",
+  "alert_state": "cleared",
+  "last_investigated_at": null,
+  "cleared_at": "2026-11-15T07:57:59.328032Z",
+  "recovery_verified_at": "2026-11-15T07:57:59.843837Z",
+  "consecutive_investigation_failures": 1,
+  "investigation_suspended_reason": "exhausted_requires_human_reauthorization",
+  "recovery_verification": {
+    "status": "verified",
+    "target_id": "order_read_query",
+    "attempt_count": 1,
+    "max_attempts": 3,
+    "last_attempt_at": "2026-11-15T07:57:59.354602Z",
+    "next_retry_at": null,
+    "reason": "conditions_met",
+    "last_http_status": 200,
+    "verified_at": "2026-11-15T07:57:59.843837Z",
+    "attempts": [
+      {
+        "number": 1,
+        "started_at": "2026-11-15T07:57:59.354602Z",
+        "completed_at": "2026-11-15T07:57:59.849363Z",
+        "outcome": "success",
+        "reason": "conditions_met",
+        "http_status": 200,
+        "checks": [
+          {
+            "kind": "http_status",
+            "field": "",
+            "matched": true
+          },
+          {
+            "kind": "json_equals",
+            "field": "dependency",
+            "matched": true
+          },
+          {
+            "kind": "json_equals",
+            "field": "service",
+            "matched": true
+          },
+          {
+            "kind": "nonempty_object",
+            "field": "order",
+            "matched": true
+          }
+        ]
+      }
+    ]
+  },
+  "recent_alerts": [
+    {
+      "alertname": "HighHttp5xxRate",
+      "state": "firing",
+      "metric": "http_5xx_rate",
+      "value": 1.0,
+      "threshold": 0.2,
+      "observed_at": "2026-11-15T07:55:06.320307Z"
+    }
+  ],
+  "recent_investigations": [
+    {
+      "success": null,
+      "status": "model_incomplete",
+      "answer": "调查停止：APIConnectionError",
+      "answer_truncated": false,
+      "model_rounds": 1,
+      "tool_calls": 1,
+      "result_trust": {
+        "mechanical_status": "passed",
+        "mechanical_scope": "result_schema_only",
+        "semantic_status": "pending_review",
+        "trusted": false,
+        "human_approval": "not_recorded",
+        "answer_sha256": "e7e7091aaa603d125193bd229b5068a8d4ad7c7651ebb24644004f3a830302d0",
+        "review_origin": "none",
+        "rejection_reasons": []
+      },
+      "session_id": "ses-681e26aa31ac40e4b50ef49122123b77",
+      "investigated_at": "2026-11-15T07:55:11.575177Z"
+    }
+  ],
+  "evidence_count": 1,
+  "archived_session_count": 0,
+  "history_included": false
+}

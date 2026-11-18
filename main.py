@@ -31,7 +31,11 @@ def main():
         from model_client.demo_replay import DemoReplay
 
         model_client = nullcontext(DemoReplay())
+        input_token_counter = lambda body: 0
     elif mode == "deepseek":
+        from model_client.token_counter import build_deepseek_input_token_counter
+
+        input_token_counter = build_deepseek_input_token_counter()
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
             raise SystemExit("deepseek_api_key_required")
@@ -45,7 +49,11 @@ def main():
         raise SystemExit("invalid_incident_agent_model_mode")
 
     with model_client as client:
-        agent = Agent(client=client, agent_prompt=agent_prompt)
+        agent = Agent(
+            client=client,
+            agent_prompt=agent_prompt,
+            input_token_counter=input_token_counter,
+        )
         prometheus_client = PrometheusClient(base_url=PROMETHEUS_URL)
         incident_store = IncidentStore()
         runtime_manager = InvestigationManager(

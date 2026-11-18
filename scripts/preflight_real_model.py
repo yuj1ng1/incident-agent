@@ -662,10 +662,19 @@ class BoundedProvider:
         sdk,
         root,
         live,
+        *,
+        input_token_counter=None,
+        max_input_tokens=65536,
     ):
         self.sdk = sdk
         self.root = Path(root)
         self.live = live
+        self.input_token_counter = input_token_counter
+        if self.live and self.input_token_counter is None:
+            from model_client.token_counter import build_deepseek_input_token_counter
+
+            self.input_token_counter = build_deepseek_input_token_counter()
+        self.max_input_tokens = max_input_tokens
         self.responses = self
         self.requests = 0
         self.real_requests = 0
@@ -691,8 +700,11 @@ class BoundedProvider:
             raise TimeoutError("preflight_deadline")
         if self.options is None or body.get("model") != MODEL or body.get("tools") != []:
             raise ValueError("preflight_request_not_allowed")
-        if set(body) != {"model", "input", "instructions", "tools"}:
+        fields = {"model", "input", "instructions", "tools"}
+        if set(body) not in (fields, fields | {"max_output_tokens"}):
             raise ValueError("preflight_request_fields_not_allowed")
+        if body.get("max_output_tokens", MAX_OUTPUT_TOKENS) != MAX_OUTPUT_TOKENS:
+            raise ValueError("preflight_output_limit_changed")
         body = deepcopy(body)
         if self.load_snapshot is not None:
             # The bootstrap version record and model reservation have already
@@ -738,6 +750,14 @@ class BoundedProvider:
         )
         if len(json.dumps(body, ensure_ascii=False).encode("utf-8")) > MAX_REQUEST_BYTES:
             raise ValueError("preflight_input_size_limit")
+        if self.live or self.input_token_counter is not None:
+            from model_client.model_client import enforce_input_token_limit
+
+            enforce_input_token_limit(
+                body,
+                input_token_counter=self.input_token_counter,
+                max_input_tokens=self.max_input_tokens,
+            )
         write_json(self.root, "request.json", body)
         self.requests += 1
         write_json(self.root, "request-attempt.json", {
@@ -867,9 +887,20 @@ def run_case(
         model_timeout_seconds=MODEL_TIMEOUT_SECONDS,
         max_duration_seconds=WALL_TIMEOUT_SECONDS,
     )
+    if live:
+        from model_client.token_counter import build_deepseek_input_token_counter
+
+        token_counter = build_deepseek_input_token_counter()
+    else:
+        token_counter = lambda body: 0
     case = build_case()
     write_json(root, "case.json", case)
-    provider = BoundedProvider(sdk, root, live)
+    provider = BoundedProvider(
+        sdk,
+        root,
+        live,
+        input_token_counter=token_counter,
+    )
     manager = create_runtime(root, limits=limits)
     session = create_session(manager)
 
@@ -897,7 +928,12 @@ def run_case(
         manager.store.checkpoint(saved, checkpoint, db, limits.checkpoints_to_keep)
         manager.store.save(saved, db)
         manager.store.event(db, saved.session_id, "preflight_historical_fixture_imported")
-    agent = Agent(client=provider, agent_prompt=agent_prompt + TASK)
+    agent = Agent(
+        client=provider,
+        agent_prompt=agent_prompt + TASK,
+        input_token_counter=token_counter,
+    )
+    agent.model_client.max_output_tokens = MAX_OUTPUT_TOKENS
     agent.tool_manager.run_tool = isolated_tool
     agent.tool_manager.get_tool_schemas = lambda: []
     worker = Worker(manager, agent, provider_verified=False)

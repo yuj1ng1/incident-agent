@@ -1,0 +1,18 @@
+{
+  "scope": "offline synthetic HTTP UI fixture only; actual API path tested separately in pytest",
+  "narrow": {
+    "budgets": [
+      "尝试次数2 / 未记录",
+      "模型请求7 / 未记录",
+      "工具执行13 / 未记录",
+      "恢复次数1 / 未记录",
+      "人类提问0 / 未记录"
+    ],
+    "pageWidth": 375,
+    "viewport": 390
+  },
+  "errors": [],
+  "knownBudgetVerified": "7 / 11 from fixture, no default substitution",
+  "unknownBudgetVerified": "7 / 未记录, no progressbar",
+  "viewportReset": true
+}

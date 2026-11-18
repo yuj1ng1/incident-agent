@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-16T05:56:01.006423+00:00",
+  "project": "incident-stage1-live-20261115-154614",
+  "owned_containers_removed": 10,
+  "owned_networks_removed": 1,
+  "owned_volumes_removed": 6,
+  "remaining_project_containers": 0,
+  "remaining_project_networks": 0,
+  "remaining_project_volumes": 0,
+  "external_container_states_unchanged": true,
+  "external_container_count": 6,
+  "existing_external_volumes_preserved": true,
+  "existing_external_networks_preserved": true,
+  "temporary_real_credentials_created": false,
+  "real_credentials_copied": false,
+  "model_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+  "model_ledger_unchanged": true,
+  "retained_build_images": [
+    "incident-stage1-live-20261115-154614-order-service:latest 8d4a21bf6c14",
+    "incident-stage1-live-20261115-154614-frontend:latest 57be0fe3f7e3",
+    "incident-stage1-live-20261115-154614-runtime:local ecfef4545c4e",
+    "incident-stage1-live-20261115-154614-prometheus:latest dc388fdc2486",
+    "incident-stage1-live-20261115-154614-order-db:latest 4820092725e4",
+    "incident-stage1-live-20261115-154614-alloy:latest 69f9bfe72f6b",
+    "incident-stage1-live-20261115-154614-loki:latest 758fb4be4d42"
+  ]
+}

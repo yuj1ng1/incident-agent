@@ -9,7 +9,13 @@ from config import (
 )
 import json
 class Agent:
-    def __init__(self,client,agent_prompt):
+    def __init__(
+        self,
+        client,
+        agent_prompt,
+        *,
+        input_token_counter=None,
+    ):
         self.agent_prompt=agent_prompt
         self.tool_manager=ToolManager()
         self.max_loop_round=MAX_AGENT_LOOPS
@@ -17,6 +23,7 @@ class Agent:
         self.model_client=ModelClient(
             client=client,
             model_name=MODEL_NAME,
+            input_token_counter=input_token_counter,
             )
 
     def request_durable_response(self, history, rounds, tool_calls, extra_tools, timeout,

@@ -133,6 +133,17 @@ it('displays absent final answers without substituting a conclusion', async () =
   expect(await screen.findByText('尚无最终回答')).toBeInTheDocument();
 });
 
+it('shows unknown historical execution limits without production denominators', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({
+    ...detail, limits: null, limits_source: 'unrecorded',
+  })));
+  open('/sessions/ses-fixture');
+  expect(await screen.findByText('历史调查未保存执行上限，无法确认当时约束。')).toBeVisible();
+  expect(screen.getByText('模型请求').closest('.budget-item')!.textContent).toContain('7 / 未记录');
+  expect(screen.queryByRole('progressbar', { name: '模型请求' })).toBeNull();
+  expect(screen.queryByText('此额度未开放')).toBeNull();
+});
+
 it('handles unknown records and direct links with safe errors', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ detail: 'session_not_found' }, 404)));
   open('/sessions/ses-missing');

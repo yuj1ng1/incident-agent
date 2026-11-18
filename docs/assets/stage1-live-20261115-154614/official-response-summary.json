@@ -1,0 +1,64 @@
+{
+  "response_id": "3b491c9f-f3e9-41be-b585-7f0c2be25443",
+  "model": "deepseek-flash",
+  "status": "completed",
+  "error": null,
+  "response_sha256": "ee6cc4fb44f1f45ea24486f15b70a126d7f029a5410ef121a8ae7f79d5825fe8",
+  "usage": {
+    "input_tokens": 10117,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 535,
+    "output_tokens_details": {
+      "reasoning_tokens": 279
+    },
+    "total_tokens": 10652
+  },
+  "function_calls": [
+    {
+      "type": "function_call",
+      "id": "1945be8f-b8f2-4b02-becf-796f92017d72",
+      "status": "completed",
+      "arguments": "{\"service\": \"order-service\", \"metric\": \"http_5xx_rate\"}",
+      "call_id": "call_00_CrFbzfjbr9cHGQ8sDaHN5410",
+      "name": "query_metrics"
+    },
+    {
+      "type": "function_call",
+      "id": "f2d18e96-cdb9-436f-9427-5132426ef3e2",
+      "status": "completed",
+      "arguments": "{\"service\": \"order-service\", \"metric\": \"http_request_rate\"}",
+      "call_id": "call_01_1lgljksptI8ejChUZ6ZF9246",
+      "name": "query_metrics"
+    },
+    {
+      "type": "function_call",
+      "id": "cda175ed-1296-4be5-ae75-4cf4d01cdce9",
+      "status": "completed",
+      "arguments": "{\"service\": \"order-service\", \"start\": \"2026-11-15T07:53:00Z\", \"end\": \"2026-11-15T07:56:00Z\"}",
+      "call_id": "call_02_B6zwJdC6aZ4bAEsQMzf17419",
+      "name": "query_logs"
+    },
+    {
+      "type": "function_call",
+      "id": "932cc82f-8348-4bab-afe8-347081bb9eca",
+      "status": "completed",
+      "arguments": "{\"service\": \"order-service\"}",
+      "call_id": "call_03_Q75ZSmuyOkDbgITKVXa09390",
+      "name": "check_service_health"
+    },
+    {
+      "type": "function_call",
+      "id": "cb9e8fb4-5e50-4b54-9b60-1eed96179938",
+      "status": "completed",
+      "arguments": "{\"service\": \"order-service\"}",
+      "call_id": "call_04_sSQP06sYqled75yMV9pd8829",
+      "name": "get_service_dependencies"
+    }
+  ],
+  "function_calls_executed": 0,
+  "final_model_answer_present": false,
+  "sdk_delivery": "failed with APIConnectionError caused by DecodingError; original response body preserved",
+  "actual_wire_content_encoding": "not recorded"
+}

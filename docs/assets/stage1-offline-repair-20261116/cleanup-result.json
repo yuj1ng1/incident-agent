@@ -1,0 +1,16 @@
+{
+  "owned_mysql": {
+    "container_id": "84f8f3bf30f67478f48dfba4fa2984cd45c87ccea311117f35bad71327e1db6c",
+    "image": "mysql:8.4.13",
+    "mount_types": []
+  },
+  "removed_owned_container": true,
+  "remaining_owned_containers": [],
+  "other_running_names": [
+    "networklab-exp4-mysql",
+    "postgres-exporter",
+    "order-db"
+  ],
+  "ui_preview_process_stopped": true,
+  "real_model_requests_this_task": 0
+}

@@ -1,0 +1,154 @@
+{
+  "experiment_id": "incident-stage1-live-20261115-154614",
+  "target_sha": "8e2bc425d304181e9cb95609db58b53e50820a8b",
+  "actual_sha": "8e2bc425d304181e9cb95609db58b53e50820a8b",
+  "entry": "harness/live_worker.py -> IncidentMonitor.process_alerts_once -> InvestigationManager -> Worker.run_once -> Agent -> ModelClient -> audited official transport",
+  "host_controller": "harness/run_live_experiment.py",
+  "incident_id": "inc-1a76d418",
+  "session_id": "ses-681e26aa31ac40e4b50ef49122123b77",
+  "incident_status": "resolved",
+  "session_status": "EXHAUSTED",
+  "attempts": 1,
+  "actual_model_requests": 1,
+  "actual_tool_executions_including_probe": 1,
+  "executed_tool_names": [
+    "get_running_version"
+  ],
+  "unexecuted_model_selected_calls": 5,
+  "retries": 0,
+  "resumes": 0,
+  "usage": {
+    "input_tokens": 10117,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 535,
+    "output_tokens_details": {
+      "reasoning_tokens": 279
+    },
+    "total_tokens": 10652
+  },
+  "peak_all_miss_usage_estimate_usd": "0.0036771",
+  "actual_billed_usd": null,
+  "fee_cap_usd": null,
+  "reliable_pre_send_input_upper_bound": null,
+  "original_input_bound_requirement_verified": false,
+  "limits": {
+    "max_attempts": 1,
+    "max_model_requests": 7,
+    "max_tool_executions": 13,
+    "max_resumes": 0,
+    "max_duration_seconds": 900,
+    "lease_seconds": 120,
+    "model_timeout_seconds": 60,
+    "retry_base_seconds": 5,
+    "max_human_requests": 0,
+    "human_timeout_seconds": 1800,
+    "starvation_seconds": 120,
+    "checkpoints_to_keep": 4
+  },
+  "max_output_tokens": 8192,
+  "parameters_sha256": "2d28e8f6c13418b5832c60af9a396edcdd5908ae8128b6e482dd77b46b421483",
+  "model_ledger_state": "CLOSED",
+  "model_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+  "business_recovery_verified": true,
+  "business_restore_actor": "test controller finally; no Agent remediation",
+  "fault_duration_seconds": 59.49916052818298,
+  "order_requests": {
+    "baseline": 24,
+    "fault": 80,
+    "recovery_including_registered_verifier": 26,
+    "final": 6,
+    "total": 136
+  },
+  "signals": {
+    "window": {
+      "start": "2026-11-15T07:49:59Z",
+      "end": "2026-11-15T07:59:59Z",
+      "step_seconds": 15
+    },
+    "metrics": [
+      {
+        "metric": "http_5xx_rate",
+        "status": "ok",
+        "sample_count": 13,
+        "max": 1.0,
+        "reason": null
+      },
+      {
+        "metric": "http_latency_p95_seconds",
+        "status": "ok",
+        "sample_count": 13,
+        "max": 0.18249999999999986,
+        "reason": null
+      },
+      {
+        "metric": "process_cpu_cores",
+        "status": "ok",
+        "sample_count": 41,
+        "max": 0.03873008946105171,
+        "reason": null
+      },
+      {
+        "metric": "process_resident_memory_bytes",
+        "status": "ok",
+        "sample_count": 41,
+        "max": 50663424.0,
+        "reason": null
+      }
+    ],
+    "log_entries_returned": 50,
+    "logs_truncated": true
+  },
+  "database_restart": {
+    "mysql_restarted_at": "2026-11-15T08:02:47.997887561Z",
+    "read_only_snapshot_equal": true,
+    "incident_count": 1,
+    "session_count": 1,
+    "checkpoint_rows": 4,
+    "event_rows": 15,
+    "session_status": "EXHAUSTED",
+    "attempts": 1,
+    "model_requests": 1,
+    "tool_executions": 1,
+    "checkpoint_record_count": 1,
+    "business_recovery_status": "verified",
+    "model_gate_claim_rejected": true,
+    "model_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+    "api_stopped_before_restart": true,
+    "paid_executor_absent": true,
+    "paid_executor_resumed": false
+  },
+  "cleanup": {
+    "at": "2026-11-16T05:56:01.006423+00:00",
+    "project": "incident-stage1-live-20261115-154614",
+    "owned_containers_removed": 10,
+    "owned_networks_removed": 1,
+    "owned_volumes_removed": 6,
+    "remaining_project_containers": 0,
+    "remaining_project_networks": 0,
+    "remaining_project_volumes": 0,
+    "external_container_states_unchanged": true,
+    "external_container_count": 6,
+    "existing_external_volumes_preserved": true,
+    "existing_external_networks_preserved": true,
+    "temporary_real_credentials_created": false,
+    "real_credentials_copied": false,
+    "model_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+    "model_ledger_unchanged": true,
+    "retained_build_images": [
+      "incident-stage1-live-20261115-154614-order-service:latest 8d4a21bf6c14",
+      "incident-stage1-live-20261115-154614-frontend:latest 57be0fe3f7e3",
+      "incident-stage1-live-20261115-154614-runtime:local ecfef4545c4e",
+      "incident-stage1-live-20261115-154614-prometheus:latest dc388fdc2486",
+      "incident-stage1-live-20261115-154614-order-db:latest 4820092725e4",
+      "incident-stage1-live-20261115-154614-alloy:latest 69f9bfe72f6b",
+      "incident-stage1-live-20261115-154614-loki:latest 758fb4be4d42"
+    ]
+  },
+  "engine_resumption_external_start_time_changes": 3,
+  "user_final_decision": "keep stopped; deliver report",
+  "production_code_changed": false,
+  "new_dependencies": false,
+  "new_production_interfaces": false
+}

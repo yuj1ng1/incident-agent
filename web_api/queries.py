@@ -315,6 +315,7 @@ class RuntimeQueries:
         return SessionDetail(
             session=session_summary(InvestigationSession.model_validate(workflow["session"])),
             limits=workflow["limits"], incident_budget_usage=workflow["incident_budget_usage"],
+            limits_source=workflow["limits_source"],
             investigation_result=answer_view(workflow["investigation_result"]) if workflow["investigation_result"] else None,
             projection=Projection(
                 projected=workflow["projected"], blocked=workflow["projection_blocked"],

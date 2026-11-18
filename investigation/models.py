@@ -140,6 +140,7 @@ class ToolObservation(Record):
 
 class Checkpoint(Record):
     schema_version: Literal[1] = 1
+    execution_limits: RuntimeLimits | None = None
     phase: Literal["ready", "model_started", "tool_started", "response_saved", "tool_saved", "waiting_human"]
     records: list[ToolObservation] = Field(default_factory=list)
     messages: list[dict] = Field(default_factory=list)

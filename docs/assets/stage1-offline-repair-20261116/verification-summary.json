@@ -1,0 +1,86 @@
+{
+  "scope": "offline only",
+  "syntax_files": 26,
+  "runs": [
+    {
+      "run": "core-1",
+      "tests": 19,
+      "failures": 1,
+      "errors": 1,
+      "skipped": 0,
+      "duration_seconds": 14.07
+    },
+    {
+      "run": "runtime-2",
+      "tests": 169,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 313.52
+    },
+    {
+      "run": "compat-1",
+      "tests": 95,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 98.85
+    },
+    {
+      "run": "boundary-1",
+      "tests": 28,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 73.54
+    },
+    {
+      "run": "boundary-2",
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 52.8
+    },
+    {
+      "run": "acceptance-3",
+      "tests": 59,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 92.73
+    },
+    {
+      "run": "callers-1",
+      "tests": 23,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 18.47
+    },
+    {
+      "run": "preflight-2",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 6.48
+    },
+    {
+      "run": "exit-1",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 25.55
+    },
+    {
+      "run": "exit-2",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 29.41
+    }
+  ]
+}

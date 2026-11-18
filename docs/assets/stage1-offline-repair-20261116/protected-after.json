@@ -1,0 +1,14 @@
+{
+  "protected_files": 9191,
+  "changed_or_missing": [],
+  "old_stop_model_exists": true,
+  "old_watchdog_disarm_exists": true,
+  "old_ledger_state_requests_tools": [
+    "CLOSED",
+    1,
+    1
+  ],
+  "old_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+  "head": "8e2bc425d304181e9cb95609db58b53e50820a8b",
+  "staged_files": []
+}

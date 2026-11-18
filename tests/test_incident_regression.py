@@ -134,7 +134,7 @@ class IncidentRegressionTests(unittest.TestCase):
         self.sdk = Mock()
         self.sdk.with_options.return_value = self.sdk
         self.sdk.responses.create.return_value = model_response()
-        self.agent = Agent(self.sdk, agent_prompt)
+        self.agent = Agent(self.sdk, agent_prompt, input_token_counter=lambda body: 0)
         self.prometheus = PrometheusClient("http://localhost:9090")
         self.prometheus.get_alerts = Mock()
         self.worker = Worker(self.manager, self.agent)

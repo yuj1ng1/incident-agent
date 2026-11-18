@@ -1,0 +1,21 @@
+{
+  "name": "get_running_version",
+  "arguments": {
+    "service": "order-service"
+  },
+  "call_id": "runtime-probe-010e2a4258874307b0a1134581cbcb07",
+  "session_id": "ses-681e26aa31ac40e4b50ef49122123b77",
+  "python_success": true,
+  "result": {
+    "status": "ok",
+    "service": "order-service",
+    "process_started_at": "2026-11-15T07:54:27.512507Z",
+    "runtime_flags": {
+      "simulate_code_regression": true,
+      "simulate_slow_request": false
+    },
+    "commit_sha": "0e2f6f3220b9fb9f0baf8730de5ffaaac00d8c38",
+    "short_sha": "0e2f6f3"
+  },
+  "at": "2026-11-15T07:55:07.100627+00:00"
+}

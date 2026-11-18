@@ -377,7 +377,8 @@ class HumanRequestView(PublicModel):
 
 class SessionDetail(PublicModel):
     session: SessionSummary
-    limits: RuntimeLimits
+    limits: RuntimeLimits | None
+    limits_source: Literal["session_checkpoint", "unrecorded"]
     incident_budget_usage: BudgetUsage
     investigation_result: InvestigationAnswer | None
     projection: Projection

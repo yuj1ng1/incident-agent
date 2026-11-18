@@ -1,0 +1,36 @@
+{
+  "endpoint": "https://api.deepseek.com/responses",
+  "method": "POST",
+  "request_sha256": "4b8c9f87c9aaa12d05dee71365f11e030c678627df93f5eed0db32aed2492429",
+  "model": "deepseek-flash",
+  "max_output_tokens": 8192,
+  "request_keys": [
+    "input",
+    "instructions",
+    "model",
+    "tools",
+    "max_output_tokens"
+  ],
+  "tool_types": [
+    "function"
+  ],
+  "registered_function_names": [
+    "query_logs",
+    "check_scrape_target",
+    "query_metrics",
+    "query_metric_range",
+    "query_metrics_aligned",
+    "check_service_health",
+    "get_service_dependencies",
+    "check_dependency_health",
+    "get_recent_code_changes",
+    "get_commit_diff",
+    "get_source_file",
+    "get_running_version",
+    "get_service_capabilities"
+  ],
+  "input_and_instructions": "omitted from public copy; preserved privately",
+  "reliable_pre_send_input_upper_bound": null,
+  "input_token_limit_enforced": false,
+  "monetary_pre_reservation_usd": null
+}

@@ -632,10 +632,14 @@ class RuntimeTests(unittest.TestCase):
         from model_client.model_client import ModelClient
         sdk = Mock()
         sdk.with_options.return_value.responses.create.return_value = response()
-        client = ModelClient(sdk, "fixture")
+        client = ModelClient(sdk, "fixture", input_token_counter=lambda body: 0)
         client.call_once([{"role": "user", "content": "context"}], "system", [], timeout=15)
         sdk.with_options.assert_called_once_with(max_retries=0, timeout=15)
         sdk.with_options.return_value.responses.create.assert_called_once()
+        self.assertEqual(
+            sdk.with_options.return_value.responses.create.call_args.kwargs["max_output_tokens"],
+            8192,
+        )
 
     def test_resuming_with_stale_metrics_requeries(self):
         first = FixtureAgent([response(answer="", calls=[call()])])

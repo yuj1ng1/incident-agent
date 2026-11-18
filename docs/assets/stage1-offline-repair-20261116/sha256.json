@@ -1,0 +1,17 @@
+{
+  "acceptance-3.log": "fcbdd8b11152c5baf3a114a2e6f408b80498de9d22cf22e5cc0273af9b72dc2d",
+  "budget-known-desktop.jpg": "b6214a05e5beb73609c256b208b34db6b05985a7a8529179e5b291ab5d4ae8b5",
+  "budget-unknown-390.jpg": "a1a41d3a312b6c8bd1f6bf4df8a578f90962b61aeffebe9b14f888c01443337a",
+  "budget-unknown-desktop.jpg": "8d736dab85b87cfdf00885c540473cbf35d97b1da188ceeee9adb343ec89eb29",
+  "callers-1.log": "1a5367fe01931ce5d13430ba1b696b104f1619602ca9ee708b04f602bef2d9e8",
+  "cleanup-result.json": "91e3684021f24d5a03540f09cecb8737c7eef5564894ccabaab62f52a17b9a98",
+  "compat-1.log": "3803e446b727ed2f9b09af9fe211e8f7931b6a083dcb6390b00b671759dcb6ce",
+  "exit-2.log": "0006b3ff9600624ecadf6f89fb35a6e3f844a0e71eafc4732cf36ca486950cf9",
+  "frontend-build-1.log": "bd656cb6f34b13da61ce3ff84bc43710b23c10a45c10d04946a3fea98c6c2a5a",
+  "frontend-tests-1.log": "56ba1419ca197fedf22841c22658ea3d14250d508beb0597e50a688f41bb5ec2",
+  "preflight-2.log": "afe5228f2dbcde30f5c9e27df0402efa29a51f956e20d0bd33695ca54a81e9c0",
+  "protected-after.json": "87b228f10befbfc51d4e57195a4959d1e9d08ea35439a305556e6e99e0513555",
+  "reproduction.json": "896fac8c21922fb62fb7704f7d1f05dc4931402e09e541bfd38b3e4b51f58cff",
+  "ui-result.json": "5111b008f0bdd5a6f6d810347824ccaf9bc876d031de3773fff966ebaccc51b4",
+  "verification-summary.json": "8417c3578f2e4c1afa1d0548da53766449abd93e6177d0d857c07fdc08b1297e"
+}

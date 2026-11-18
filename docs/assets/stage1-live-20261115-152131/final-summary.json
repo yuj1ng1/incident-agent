@@ -1,0 +1,165 @@
+{
+  "scope": "real startup; stopped before paid investigation",
+  "source_sha": "8e2bc425d304181e9cb95609db58b53e50820a8b",
+  "experiment_id": "incident-stage1-live-20261115-152131",
+  "parameters_sha256": "d9c1f203229403cbb05effe63b73c91794aeb41b7ceca6b85abc4e1da71226bf",
+  "model_requests_sent": 0,
+  "agent_tool_executions": 0,
+  "incidents": 0,
+  "sessions": 0,
+  "attempts": 0,
+  "usage": null,
+  "actual_bill": null,
+  "reserved_usd": "0",
+  "theoretical_max_cost_with_verified_caps_usd": "0.2064384",
+  "theoretical_per_request_usd": "0.0294912",
+  "pricing_input_peak_cache_miss_per_million_usd": "0.3",
+  "pricing_output_peak_per_million_usd": "1.2",
+  "baseline": {
+    "source_files_compared": 100,
+    "source_mismatches": [],
+    "healthy_business_requests": 48,
+    "migration_version": "0005_remediation_store",
+    "mysql_version": "8.4.13",
+    "sdk_versions": {
+      "openai": "3.14.0",
+      "httpx2": "2.13.0",
+      "alembic": "1.20.1",
+      "SQLAlchemy": "2.0.54",
+      "PyMySQL": "1.2.4",
+      "fastapi": "0.140.13",
+      "uvicorn": "0.54.0"
+    },
+    "alloy_loopback_readiness": "Alloy is ready.",
+    "cross_container_alloy_admin_probe": "connection refused; Alloy admin listener is loopback; corrected probe used own container loopback",
+    "prometheus_targets": [
+      {
+        "service": "order-service",
+        "job": "demo-python",
+        "health": "up"
+      },
+      {
+        "service": "order-db",
+        "job": "postgres",
+        "health": "up"
+      },
+      {
+        "service": null,
+        "job": "prometheus",
+        "health": "up"
+      }
+    ],
+    "pg_up": [
+      {
+        "metric": {
+          "__name__": "pg_up",
+          "exporter": "postgres-exporter",
+          "instance": "postgres-exporter:9187",
+          "job": "postgres",
+          "service": "order-db"
+        },
+        "value": [
+          1794727686.697,
+          "1"
+        ]
+      }
+    ],
+    "loki_log_entries": 30,
+    "alert_count": 0,
+    "incident_count": 0,
+    "session_count": 0,
+    "model_executor_count": 0,
+    "credentials_copied": false
+  },
+  "tokenizer_verification": {
+    "test_scope": "offline tokenizer verification; no model client, no Incident or Session",
+    "archive_sha256": "e7310d1dafe0a86d8a5629fe78a7c763760f651db9b8682718a1781dcd6fe495",
+    "chat_template_sha256": "3b8267e54b67df6500f231ffa969955cc9d26b3444a291ced4eb96ca7d3ca1ea",
+    "template_renderer": "Jinja2 direct, without running downloaded Python",
+    "template_undeclared_variables": [
+      "add_generation_prompt",
+      "bos_token",
+      "messages"
+    ],
+    "render_without_tools_equals_with_tools": true,
+    "tool_name_present": false,
+    "tool_description_present": false,
+    "tool_parameter_present": false,
+    "whole_responses_input_bound_verified": false,
+    "reason": "official example does not render supplied tool schemas; no verified current Responses serialization plus overhead bound"
+  },
+  "offline_transport_gate": {
+    "sdk_exception_category": "APIConnectionError",
+    "parameters_sha256": "d9c1f203229403cbb05effe63b73c91794aeb41b7ceca6b85abc4e1da71226bf",
+    "offline_transport_calls": 1,
+    "official_model_http_requests": 0,
+    "agent_tool_executions": 0,
+    "real_api_key_loaded": false,
+    "request_headers_saved": false,
+    "live_http_transport_constructed": false,
+    "original_body_missing_output_limit": true,
+    "guarded_body_output_limit": 8192,
+    "retries_observed": 0,
+    "ledger": {
+      "id": "incident-stage1-live-20261115-152131",
+      "parameters_sha256": "d9c1f203229403cbb05effe63b73c91794aeb41b7ceca6b85abc4e1da71226bf",
+      "state": "STOPPED",
+      "started": 1794727944.110916,
+      "requests": 0,
+      "tools": 0,
+      "reserved_nanousd": 0,
+      "stop_reason": "whole_responses_input_token_bound_unverified",
+      "request_reservations": []
+    },
+    "usage": null,
+    "actual_bill": null
+  },
+  "restart_and_business": {
+    "model_channel_closed_before_readback": true,
+    "api_stopped_before_mysql_restart": true,
+    "mysql_restarted_at": "2026-11-15T07:33:34.654904989Z",
+    "schema_and_empty_recordsets_equal": true,
+    "incidents": 0,
+    "sessions": 0,
+    "checkpoints": 0,
+    "events": 0,
+    "incident_session_persistence_verdict": "NOT_VERIFIED: experiment stopped before creating any Incident or Session",
+    "ledger_restart_claim_rejected": true,
+    "fault_flag_final": false,
+    "business_checks_final": 6,
+    "fault_injected": false,
+    "agent_autonomous_repair": false,
+    "independent_business_recovery_state": "NOT_APPLICABLE: no Incident/fault was created; valid /order checks are healthy baseline only"
+  },
+  "cleanup": {
+    "at": "2026-11-15T07:35:44.401635+00:00",
+    "project": "incident-stage1-live-20261115-152131",
+    "owned_containers_removed": 10,
+    "owned_networks_removed": 1,
+    "owned_volumes_removed": 6,
+    "remaining_project_containers": 0,
+    "remaining_project_networks": 0,
+    "remaining_project_volumes": 0,
+    "external_container_states_unchanged": true,
+    "external_container_count": 6,
+    "existing_external_volumes_preserved": true,
+    "existing_external_networks_preserved": true,
+    "temporary_real_credentials_created": false,
+    "real_credentials_copied": false,
+    "model_ledger_sha256": "ca02be2d9664767bfaed54ab4ea5d07523986863049631f5bbeada5e67d55499",
+    "model_ledger_unchanged": true,
+    "retained_build_images": [
+      "incident-stage1-live-20261115-152131-order-service:latest 8cf6923615e4",
+      "incident-stage1-live-20261115-152131-frontend:latest 46cbf4bc79a7",
+      "incident-stage1-live-20261115-152131-runtime:local 176e142b74a7",
+      "incident-stage1-live-20261115-152131-prometheus:latest 98e5850f3dd2",
+      "incident-stage1-live-20261115-152131-order-db:latest a48ddf098a6d",
+      "incident-stage1-live-20261115-152131-alloy:latest 6354c89a279c",
+      "incident-stage1-live-20261115-152131-loki:latest fa53ad93da42"
+    ]
+  },
+  "production_code_changed": false,
+  "original_worktree_and_index_preserved": true,
+  "committed": false,
+  "pushed": false
+}

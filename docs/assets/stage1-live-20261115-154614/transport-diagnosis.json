@@ -1,0 +1,29 @@
+{
+  "original_reconstruct_decoded_response": {
+    "parsed": false,
+    "exception_category": "APIConnectionError",
+    "cause_category": "DecodingError"
+  },
+  "fixed_return_same_response": {
+    "parsed": true,
+    "status": "completed",
+    "function_calls": 5,
+    "usage": {
+      "input_tokens": 10117,
+      "input_tokens_details": {
+        "cache_write_tokens": null,
+        "cached_tokens": 0
+      },
+      "output_tokens": 535,
+      "output_tokens_details": {
+        "reasoning_tokens": 279
+      },
+      "total_tokens": 10652
+    }
+  },
+  "test_scope": "offline protocol diagnosis only; no model HTTP, no Session, no tool execution",
+  "official_body_sha256": "ee6cc4fb44f1f45ea24486f15b70a126d7f029a5410ef121a8ae7f79d5825fe8",
+  "real_http_content_encoding": "not captured by original safe-header whitelist; compression cause supported by code path and offline reproduction",
+  "live_launcher_modified": false,
+  "fixed_launcher_created": true
+}

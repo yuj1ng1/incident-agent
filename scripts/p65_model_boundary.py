@@ -248,11 +248,19 @@ class BoundedResponses:
         expected_first_sha256=None,
         frozen_tools=None,
         max_tools=MAX_TOOLS,
+        input_token_counter=None,
+        max_input_tokens=65536,
     ):
         self.root = Path(root)
         self.first_request = deepcopy(first_request)
         self.snapshot = snapshot
         self.sdk = sdk
+        self.input_token_counter = input_token_counter
+        if self.sdk is not None and self.input_token_counter is None:
+            from model_client.token_counter import build_deepseek_input_token_counter
+
+            self.input_token_counter = build_deepseek_input_token_counter()
+        self.max_input_tokens = max_input_tokens
         self.mock_responses = iter(mock_responses or [])
         self.credential = credential
         self.responses = self
@@ -425,9 +433,12 @@ class BoundedResponses:
             raise ValueError("p65_model_budget_or_stopped")
         if sha(encoded(self.first_request)) != self.expected_first_sha256:
             raise ValueError("p65_first_request_binding_mismatch")
+        fields = {"model", "input", "instructions", "tools"}
         if (
-            set(kwargs) != {"model", "input", "instructions", "tools"}
+            set(kwargs) not in (fields, fields | {"max_output_tokens"})
             or kwargs["model"] != MODEL
+            or kwargs.get("max_output_tokens", self.first_request["max_output_tokens"])
+            != self.first_request["max_output_tokens"]
         ):
             raise ValueError("p65_agent_request_changed")
         session, checkpoint = self.snapshot()
@@ -462,6 +473,14 @@ class BoundedResponses:
         ):
             raise ValueError("p65_first_request_binding_mismatch")
         self.advertised_names = {s["name"] for s in body["tools"]}
+        if self.sdk is not None or self.input_token_counter is not None:
+            from model_client.model_client import enforce_input_token_limit
+
+            enforce_input_token_limit(
+                body,
+                input_token_counter=self.input_token_counter,
+                max_input_tokens=self.max_input_tokens,
+            )
         number = self.requests + 1
         write(self.root, f"request-{number:02d}.json", {
             "at": utc(), "body": body, "sha256": digest,

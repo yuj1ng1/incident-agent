@@ -1,0 +1,19 @@
+{
+  "mysql_restarted_at": "2026-11-15T08:02:47.997887561Z",
+  "read_only_snapshot_equal": true,
+  "incident_count": 1,
+  "session_count": 1,
+  "checkpoint_rows": 4,
+  "event_rows": 15,
+  "session_status": "EXHAUSTED",
+  "attempts": 1,
+  "model_requests": 1,
+  "tool_executions": 1,
+  "checkpoint_record_count": 1,
+  "business_recovery_status": "verified",
+  "model_gate_claim_rejected": true,
+  "model_ledger_sha256": "bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4",
+  "api_stopped_before_restart": true,
+  "paid_executor_absent": true,
+  "paid_executor_resumed": false
+}

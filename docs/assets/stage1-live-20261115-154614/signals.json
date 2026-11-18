@@ -1,0 +1,676 @@
+{
+  "window": {
+    "start": "2026-11-15T07:49:59Z",
+    "end": "2026-11-15T07:59:59Z",
+    "step_seconds": 15
+  },
+  "metrics": [
+    {
+      "metric": "http_5xx_rate",
+      "status": "ok",
+      "reason": null,
+      "samples": [
+        {
+          "evaluated_at": "2026-11-15T07:50:59Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:14Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:29Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:44Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:59Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:14Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:29Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:44Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:59Z",
+          "value": 1.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:59Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:14Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:29Z",
+          "value": 0.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:44Z",
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "metric": "http_latency_p95_seconds",
+      "status": "ok",
+      "reason": null,
+      "samples": [
+        {
+          "evaluated_at": "2026-11-15T07:50:59Z",
+          "value": 0.024869974066887887
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:14Z",
+          "value": 0.024869822807061
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:29Z",
+          "value": 0.024869753993376896
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:44Z",
+          "value": 0.02425
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:59Z",
+          "value": 0.04071664121240599
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:14Z",
+          "value": 0.05126106828193782
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:29Z",
+          "value": 0.06374999999999986
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:44Z",
+          "value": 0.09624999999999997
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:59Z",
+          "value": 0.18249999999999986
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:59Z",
+          "value": 0.042499999999999996
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:14Z",
+          "value": 0.04124999999999999
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:29Z",
+          "value": 0.041249999999999995
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:44Z",
+          "value": 0.041249999999999995
+        }
+      ]
+    },
+    {
+      "metric": "process_cpu_cores",
+      "status": "ok",
+      "reason": null,
+      "samples": [
+        {
+          "evaluated_at": "2026-11-15T07:49:59Z",
+          "value": 0.0009091570296021537
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:14Z",
+          "value": 0.0009091570296021497
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:29Z",
+          "value": 0.0010909884355225804
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:44Z",
+          "value": 0.004545785148010764
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:59Z",
+          "value": 0.006000436395374206
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:14Z",
+          "value": 0.006000436395374211
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:29Z",
+          "value": 0.005636876079643605
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:44Z",
+          "value": 0.001272842985725976
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:59Z",
+          "value": 0.0012727966980017103
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:14Z",
+          "value": 0.0012728198414430152
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:29Z",
+          "value": 0.0010909884355225807
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:44Z",
+          "value": 0.0009091570296021538
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:59Z",
+          "value": 0.0010909884355225804
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:14Z",
+          "value": 0.0010910082734794083
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:29Z",
+          "value": 0.0010909884355225926
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:44Z",
+          "value": 0.0012728429857259724
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:59Z",
+          "value": 0.0012727735554020196
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:14Z",
+          "value": 0.0010909685982871723
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:29Z",
+          "value": 0.018364971997963494
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:44Z",
+          "value": 0.023456251363735536
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:59Z",
+          "value": 0.030914149588114417
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:14Z",
+          "value": 0.03873008946105171
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:29Z",
+          "value": 0.03491099514518974
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:44Z",
+          "value": 0.029274324054039316
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:59Z",
+          "value": 0.02127427449269037
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:14Z",
+          "value": 0.0010581001620032372
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:29Z",
+          "value": 0.0010910082734794041
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:44Z",
+          "value": 0.0009091570296021537
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:59Z",
+          "value": 0.0010909884355225843
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:14Z",
+          "value": 0.0010909884355225843
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:29Z",
+          "value": 0.0009091404985726502
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:44Z",
+          "value": 0.0009091404985726502
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:59Z",
+          "value": 0.00690971906536958
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:14Z",
+          "value": 0.007637057914355854
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:29Z",
+          "value": 0.007637057914355854
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:44Z",
+          "value": 0.0061822678012946365
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:59Z",
+          "value": 0.0014546512473634417
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:14Z",
+          "value": 0.001272819841443011
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:29Z",
+          "value": 0.0012727966980017062
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:44Z",
+          "value": 0.0014546512473634459
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:59Z",
+          "value": 0.0014546776979725445
+        }
+      ]
+    },
+    {
+      "metric": "process_resident_memory_bytes",
+      "status": "ok",
+      "reason": null,
+      "samples": [
+        {
+          "evaluated_at": "2026-11-15T07:49:59Z",
+          "value": 47140864.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:14Z",
+          "value": 47140864.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:29Z",
+          "value": 47140864.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:44Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:50:59Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:14Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:29Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:44Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:51:59Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:14Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:29Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:44Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:52:59Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:14Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:29Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:44Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:53:59Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:14Z",
+          "value": 50528256.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:29Z",
+          "value": 50159616.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:44Z",
+          "value": 50290688.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:54:59Z",
+          "value": 50421760.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:14Z",
+          "value": 50421760.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:29Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:44Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:55:59Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:14Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:29Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:44Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:56:59Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:14Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:29Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:44Z",
+          "value": 47083520.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:57:59Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:14Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:29Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:44Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:58:59Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:14Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:29Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:44Z",
+          "value": 50663424.0
+        },
+        {
+          "evaluated_at": "2026-11-15T07:59:59Z",
+          "value": 50663424.0
+        }
+      ]
+    }
+  ],
+  "logs": {
+    "status": "ok",
+    "reason": null,
+    "entries": [
+      {
+        "timestamp": "2026-11-15T07:58:00.027082124Z",
+        "line": "2026-11-15 07:57:59 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:59.524909819Z",
+        "line": "2026-11-15 07:57:59 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:58.772693982Z",
+        "line": "2026-11-15 07:57:58 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:58.271341032Z",
+        "line": "2026-11-15 07:57:58 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:57.769715265Z",
+        "line": "2026-11-15 07:57:57 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:57.268477723Z",
+        "line": "2026-11-15 07:57:57 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:56.766929860Z",
+        "line": "2026-11-15 07:57:56 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:56.015622785Z",
+        "line": "2026-11-15 07:57:56 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:55.513700197Z",
+        "line": "2026-11-15 07:57:55 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:55.011116462Z",
+        "line": "2026-11-15 07:57:54 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:54.510198739Z",
+        "line": "2026-11-15 07:57:54 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:54.009243212Z",
+        "line": "2026-11-15 07:57:53 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:53.256526436Z",
+        "line": "2026-11-15 07:57:53 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:52.756511073Z",
+        "line": "2026-11-15 07:57:52 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:52.255437238Z",
+        "line": "2026-11-15 07:57:52 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:51.753560650Z",
+        "line": "2026-11-15 07:57:51 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:51.252011883Z",
+        "line": "2026-11-15 07:57:51 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:50.750716134Z",
+        "line": "2026-11-15 07:57:50 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:49.999094732Z",
+        "line": "2026-11-15 07:57:49 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:49.497438259Z",
+        "line": "2026-11-15 07:57:49 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:48.995600373Z",
+        "line": "2026-11-15 07:57:48 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:48.494211317Z",
+        "line": "2026-11-15 07:57:48 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:47.992524341Z",
+        "line": "2026-11-15 07:57:47 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:47.240679024Z",
+        "line": "2026-11-15 07:57:47 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:46.738655645Z",
+        "line": "2026-11-15 07:57:46 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:57:46.236835293Z",
+        "line": "2026-11-15 07:57:46 INFO service=order-service dependency=order-db path=/order status=200 request completed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:13.823950231Z",
+        "line": "2026-11-15 07:55:13 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:13.322948342Z",
+        "line": "2026-11-15 07:55:13 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:12.821688334Z",
+        "line": "2026-11-15 07:55:12 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:12.320126107Z",
+        "line": "2026-11-15 07:55:12 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:11.567319235Z",
+        "line": "2026-11-15 07:55:11 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:11.066306644Z",
+        "line": "2026-11-15 07:55:10 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:10.565187847Z",
+        "line": "2026-11-15 07:55:10 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:10.064572283Z",
+        "line": "2026-11-15 07:55:09 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:09.312372251Z",
+        "line": "2026-11-15 07:55:09 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:08.811451167Z",
+        "line": "2026-11-15 07:55:08 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:08.310722895Z",
+        "line": "2026-11-15 07:55:08 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:07.809666602Z",
+        "line": "2026-11-15 07:55:07 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:07.308382293Z",
+        "line": "2026-11-15 07:55:07 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:06.556304827Z",
+        "line": "2026-11-15 07:55:06 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:06.055112946Z",
+        "line": "2026-11-15 07:55:06 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:05.553275323Z",
+        "line": "2026-11-15 07:55:05 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:05.052027638Z",
+        "line": "2026-11-15 07:55:04 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:04.550662146Z",
+        "line": "2026-11-15 07:55:04 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:03.794394327Z",
+        "line": "2026-11-15 07:55:03 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:03.292585505Z",
+        "line": "2026-11-15 07:55:03 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:02.790713979Z",
+        "line": "2026-11-15 07:55:02 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:02.289732812Z",
+        "line": "2026-11-15 07:55:02 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:01.788007096Z",
+        "line": "2026-11-15 07:55:01 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      },
+      {
+        "timestamp": "2026-11-15T07:55:01.035253910Z",
+        "line": "2026-11-15 07:55:00 ERROR service=order-service path=/order status=500 error_type=application_error exception_type=RuntimeError error_message=\"simulated application code regression\" request failed"
+      }
+    ],
+    "truncated": true
+  }
+}

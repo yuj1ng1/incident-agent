@@ -1,0 +1,64 @@
+{
+  "recorded_at": "2026-11-16T05:55:54.446560+00:00",
+  "engine_unavailable_observed_at": "2026-11-16T05:53:23Z",
+  "engine_available_again_at": "2026-11-16T05:54:24.8933287Z",
+  "shutdown_cause": "unknown",
+  "original_cleanup_incomplete": true,
+  "owned_containers_stopped": 10,
+  "stored_fault_flag_false": true,
+  "paid_executor_absent": true,
+  "ledger_state": "CLOSED",
+  "model_requests": 1,
+  "existing_external_ids_preserved": true,
+  "external_state_changes_since_previous_day": {
+    "a7670f9c2fe0c6722780a9ba1dd0965d10f8092c3b83500cbfd2b42634e89942": {
+      "before": {
+        "name": "/networklab-exp4-mysql",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-15T04:35:33.069164296Z",
+        "exit_code": 0
+      },
+      "now": {
+        "name": "/networklab-exp4-mysql",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-16T05:54:15.5741251Z",
+        "exit_code": 0
+      }
+    },
+    "0a7f02c6bea2f69e2649d2b2664c9b71ee8773857315b44bb128b1376108ee94": {
+      "before": {
+        "name": "/postgres-exporter",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-15T04:35:33.034148619Z",
+        "exit_code": 0
+      },
+      "now": {
+        "name": "/postgres-exporter",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-16T05:54:15.5681958Z",
+        "exit_code": 0
+      }
+    },
+    "2a0c1a0756ff13c5256d7b0bb8d3f3a35e30f76916b5b935c7bea2f1f53063f0": {
+      "before": {
+        "name": "/order-db",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-15T04:35:33.056667104Z",
+        "exit_code": 0
+      },
+      "now": {
+        "name": "/order-db",
+        "status": "running",
+        "running": true,
+        "started_at": "2026-11-16T05:54:15.6087659Z",
+        "exit_code": 0
+      }
+    }
+  },
+  "action": "Docker Desktop started only to finish verified owned-resource cleanup; no trial restarted"
+}

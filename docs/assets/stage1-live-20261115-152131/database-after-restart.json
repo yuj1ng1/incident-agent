@@ -1,0 +1,64 @@
+{
+  "migration": "0005_remediation_store",
+  "mysql_version": "8.4.13",
+  "read_only_runtime_store": true,
+  "session_model_tool_attempts": [],
+  "tables": {
+    "alembic_version": {
+      "rows": 1,
+      "sha256": "9421f1d846c6e5a12f4758a54f528e19ded1fcfb9fa0f38054ffbf0229c61c22"
+    },
+    "human_messages": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "human_requests": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "incident_active": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "incident_history_archives": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "incidents": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "investigation_checkpoints": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "investigation_commands": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "investigation_events": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "investigation_sessions": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "remediation_state": {
+      "rows": 1,
+      "sha256": "3d7b7fd1045ae167d7dcc4abc231aa75ca84aa00b57a7f055ef140bfcefa654b"
+    },
+    "runtime_coordination": {
+      "rows": 1,
+      "sha256": "ea798a3404cd6a386625b86d11cc95bbc1835687e50d46a1c9c5304aa0db89e2"
+    },
+    "runtime_metadata": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "runtime_work": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  }
+}

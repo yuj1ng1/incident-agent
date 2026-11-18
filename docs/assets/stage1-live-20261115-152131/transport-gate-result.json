@@ -1,0 +1,26 @@
+{
+  "sdk_exception_category": "APIConnectionError",
+  "parameters_sha256": "d9c1f203229403cbb05effe63b73c91794aeb41b7ceca6b85abc4e1da71226bf",
+  "offline_transport_calls": 1,
+  "official_model_http_requests": 0,
+  "agent_tool_executions": 0,
+  "real_api_key_loaded": false,
+  "request_headers_saved": false,
+  "live_http_transport_constructed": false,
+  "original_body_missing_output_limit": true,
+  "guarded_body_output_limit": 8192,
+  "retries_observed": 0,
+  "ledger": {
+    "id": "incident-stage1-live-20261115-152131",
+    "parameters_sha256": "d9c1f203229403cbb05effe63b73c91794aeb41b7ceca6b85abc4e1da71226bf",
+    "state": "STOPPED",
+    "started": 1794727944.110916,
+    "requests": 0,
+    "tools": 0,
+    "reserved_nanousd": 0,
+    "stop_reason": "whole_responses_input_token_bound_unverified",
+    "request_reservations": []
+  },
+  "usage": null,
+  "actual_bill": null
+}

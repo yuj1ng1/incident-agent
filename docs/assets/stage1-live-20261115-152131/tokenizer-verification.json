@@ -1,0 +1,17 @@
+{
+  "test_scope": "offline tokenizer verification; no model client, no Incident or Session",
+  "archive_sha256": "e7310d1dafe0a86d8a5629fe78a7c763760f651db9b8682718a1781dcd6fe495",
+  "chat_template_sha256": "3b8267e54b67df6500f231ffa969955cc9d26b3444a291ced4eb96ca7d3ca1ea",
+  "template_renderer": "Jinja2 direct, without running downloaded Python",
+  "template_undeclared_variables": [
+    "add_generation_prompt",
+    "bos_token",
+    "messages"
+  ],
+  "render_without_tools_equals_with_tools": true,
+  "tool_name_present": false,
+  "tool_description_present": false,
+  "tool_parameter_present": false,
+  "whole_responses_input_bound_verified": false,
+  "reason": "official example does not render supplied tool schemas; no verified current Responses serialization plus overhead bound"
+}

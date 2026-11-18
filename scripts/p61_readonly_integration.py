@@ -525,7 +525,7 @@ def run_case(
             return result
 
         sdk.responses.create.side_effect = mock_create
-        agent = Agent(sdk, agent_prompt)
+        agent = Agent(sdk, agent_prompt, input_token_counter=lambda body: 0)
         scheduler = Scheduler(Worker(manager, agent))
 
         def normalize_captured_snapshot(response):

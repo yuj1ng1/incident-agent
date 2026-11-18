@@ -195,10 +195,27 @@ def _approve(approval, context, digest):
 class _SingleRequest:
     """Phase-local SDK adapter for the unchanged ModelClient interface."""
 
-    def __init__(self, sdk, body, root, *, live, mock_response, credential=""):
+    def __init__(
+        self,
+        sdk,
+        body,
+        root,
+        *,
+        live,
+        mock_response,
+        credential="",
+        input_token_counter=None,
+        max_input_tokens=65536,
+    ):
         self.sdk, self.body, self.root = sdk, body, root
         self.live, self.mock_response = live, mock_response
         self.credential = credential
+        self.input_token_counter = input_token_counter
+        if self.live and self.input_token_counter is None:
+            from model_client.token_counter import build_deepseek_input_token_counter
+
+            self.input_token_counter = build_deepseek_input_token_counter()
+        self.max_input_tokens = max_input_tokens
         self.requests = 0
         self.sdk_entries = 0
         self.request_started_at = None
@@ -212,8 +229,18 @@ class _SingleRequest:
 
     def create(self, **kwargs):
         expected = {key: self.body[key] for key in ("model", "input", "instructions", "tools")}
+        if "max_output_tokens" in kwargs:
+            expected["max_output_tokens"] = self.body["max_output_tokens"]
         if self.requests or kwargs != expected:
             raise ValueError("p63_single_request_or_body_violation")
+        if self.live or self.input_token_counter is not None:
+            from model_client.model_client import enforce_input_token_limit
+
+            enforce_input_token_limit(
+                self.body,
+                input_token_counter=self.input_token_counter,
+                max_input_tokens=self.max_input_tokens,
+            )
         self.requests += 1
         _write(self.root, "request-attempt.json", {
             "started_at": _utc(),
@@ -334,8 +361,27 @@ def run_prepared(
         from model_client.model_client import ModelClient
         from scripts.preflight_real_model import validate_model_answer
 
-        adapter = _SingleRequest(sdk, body, root, live=live, mock_response=mock_response, credential=key)
-        response = ModelClient(adapter, MODEL).call_once(
+        if live:
+            from model_client.token_counter import build_deepseek_input_token_counter
+
+            token_counter = build_deepseek_input_token_counter()
+        else:
+            token_counter = lambda request: 0
+        adapter = _SingleRequest(
+            sdk,
+            body,
+            root,
+            live=live,
+            mock_response=mock_response,
+            credential=key,
+            input_token_counter=token_counter,
+        )
+        response = ModelClient(
+            adapter,
+            MODEL,
+            max_output_tokens=body["max_output_tokens"],
+            input_token_counter=token_counter,
+        ).call_once(
             input_data=body["input"], instructions=body["instructions"],
             tools=[], timeout=TIMEOUT,
         )

@@ -1,0 +1,70 @@
+[
+  {
+    "synthetic_gzip": false,
+    "reconstructed": false,
+    "http": 1,
+    "closed": 1,
+    "status": "completed",
+    "calls": 5,
+    "usage": {
+      "input_tokens": 10117,
+      "input_tokens_details": {
+        "cache_write_tokens": null,
+        "cached_tokens": 0
+      },
+      "output_tokens": 535,
+      "output_tokens_details": {
+        "reasoning_tokens": 279
+      },
+      "total_tokens": 10652
+    }
+  },
+  {
+    "synthetic_gzip": false,
+    "reconstructed": true,
+    "http": 1,
+    "closed": 1,
+    "status": "completed",
+    "calls": 5,
+    "usage": {
+      "input_tokens": 10117,
+      "input_tokens_details": {
+        "cache_write_tokens": null,
+        "cached_tokens": 0
+      },
+      "output_tokens": 535,
+      "output_tokens_details": {
+        "reasoning_tokens": 279
+      },
+      "total_tokens": 10652
+    }
+  },
+  {
+    "synthetic_gzip": true,
+    "reconstructed": false,
+    "http": 1,
+    "closed": 1,
+    "status": "completed",
+    "calls": 5,
+    "usage": {
+      "input_tokens": 10117,
+      "input_tokens_details": {
+        "cache_write_tokens": null,
+        "cached_tokens": 0
+      },
+      "output_tokens": 535,
+      "output_tokens_details": {
+        "reasoning_tokens": 279
+      },
+      "total_tokens": 10652
+    }
+  },
+  {
+    "synthetic_gzip": true,
+    "reconstructed": true,
+    "http": 1,
+    "closed": 1,
+    "exception": "APIConnectionError",
+    "cause": "DecodingError"
+  }
+]

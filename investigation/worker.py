@@ -120,6 +120,15 @@ class Worker:
         failure_category = None
         try:
             try:
+                recorded_limits = checkpoint.get("execution_limits")
+                configured_limits = self.manager.limits.model_dump(mode="json")
+                if session.attempt_count == 0:
+                    checkpoint["execution_limits"] = configured_limits
+                elif (
+                    recorded_limits is not None
+                    and recorded_limits != configured_limits
+                ):
+                    raise RuntimeErrorBase("execution_limits_changed")
                 self._run(session.session_id, claim, checkpoint)
             except LostClaim:
                 raise

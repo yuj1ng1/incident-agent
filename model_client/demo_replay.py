@@ -37,7 +37,7 @@ class DemoReplay:
     def responses(self):
         return self
 
-    def create(self, *, model, input, instructions, tools):
+    def create(self, *, model, input, instructions, tools, max_output_tokens=8192):
         outputs = replay_outputs(input)
         names = {tool["name"] for tool in tools}
         if not outputs and {"query_metrics", "query_logs"} <= names:
