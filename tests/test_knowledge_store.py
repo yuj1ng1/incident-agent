@@ -181,6 +181,30 @@ def test_failed_import_preserves_published_version(kb_env):
     finally:
         event.remove(store.engine, "before_cursor_execute", fail_chunk_insert)
 
+    # Non-Operational SQLAlchemyError inside transaction raises knowledge_transaction_failed.
+    from sqlalchemy.exc import DataError
+
+    def fail_data_error(conn, cursor, statement, parameters, context, executemany):
+        if "INSERT INTO knowledge_chunks" in statement:
+            raise DataError(statement, parameters, RuntimeError("bad_data"))
+
+    event.listen(store.engine, "before_cursor_execute", fail_data_error)
+    try:
+        with pytest.raises(
+            KnowledgeStorageError,
+            match="knowledge_transaction_failed:DataError",
+        ):
+            store.import_document(
+                service="order-db",
+                source="order-db.md",
+                document_id="order-db-main",
+                raw_markdown=v2_md,
+                embedding_provider=provider,
+                publish=True,
+            )
+    finally:
+        event.remove(store.engine, "before_cursor_execute", fail_data_error)
+
     # Verify v1 is intact, still published, no v2 version leaked.
     versions = store.list_versions(service="order-db", document_id="order-db-main")
     assert [v.version_id for v in versions] == [v1.version.version_id]

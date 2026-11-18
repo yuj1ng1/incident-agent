@@ -106,10 +106,6 @@ class KnowledgeStore:
             raise KnowledgeStorageError("knowledge_database_unavailable") from exc
         except SQLAlchemyError as exc:
             raise KnowledgeStorageError(
-                f"knowledge_read_failed:{type(exc).__name__}"
-            ) from exc
-        except SQLAlchemyError as exc:
-            raise KnowledgeStorageError(
                 f"knowledge_transaction_failed:{type(exc).__name__}"
             ) from exc
 
