@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from remediation.approval import actor_name
 
 LOCAL_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
-Permission = Literal["request", "approve", "execute"]
+Permission = Literal["request", "approve", "execute", "knowledge_write"]
 
 
 class Operator(BaseModel):
