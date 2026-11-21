@@ -706,14 +706,25 @@ class InvestigationManager:
                              if p.incident_id == session.incident_id]
             except (RemediationError, OSError, FileLockError, ValueError) as exc:
                 remediation_store_error = _remediation_failure(exc)[0]
+        from alert_parser import (
+            extract_checkpoint_alert,
+            qualify_alert_origin,
+            qualify_investigation_origin,
+        )
         remediation_status = ("blocked" if checkpoint.get("remediation_blocked") else
                               "waiting_retry" if checkpoint.get("remediation_pending") else "not_pending")
+        origin_qualification = qualify_investigation_origin(
+            qualify_alert_origin(extract_checkpoint_alert(checkpoint)),
+            result=checkpoint.get("result"),
+            records=checkpoint.get("records", []),
+        )
         return {
             "session": session.model_dump(mode="json"),
             "investigation_result": checkpoint.get("result"),
             "result_trust": project_result_trust(
                 checkpoint.get("result"),
             ).model_dump(mode="json"),
+            "origin_qualification": origin_qualification,
             "limits": checkpoint.get("execution_limits"),
             "limits_source": (
                 "session_checkpoint" if checkpoint.get("execution_limits") else "unrecorded"

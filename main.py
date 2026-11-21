@@ -13,6 +13,7 @@ def main():
     from openai import OpenAI
     import tools
     from agent.agent import Agent
+    from alert_parser import normalize_snapshot
     from clients.prometheus_client import PrometheusClient
     from config import PROMETHEUS_URL, ALERT_POLL_INTERVAL_SECONDS
     from incident_store import IncidentStore
@@ -64,11 +65,26 @@ def main():
         )
         scheduler = Scheduler(Worker(runtime_manager, agent))
         recovery_worker = RecoveryWorker(incident_store)
+        normalizer = (
+            (
+                lambda response: normalize_snapshot(
+                    response,
+                    default_origin="demo_replay",
+                    default_origin_note=(
+                        "本地 Compose 演示回放环境（demo_replay），"
+                        "由受控故障触发告警并使用离线回放模型"
+                    ),
+                )
+            )
+            if mode == "demo_replay"
+            else normalize_snapshot
+        )
         monitor = IncidentMonitor(
             prometheus_client=prometheus_client,
             incident_store=incident_store,
             poll_interval=ALERT_POLL_INTERVAL_SECONDS,
             investigation_manager=runtime_manager,
+            normalizer=normalizer,
             recovery_worker=recovery_worker,
         )
         scheduler.start()

@@ -135,6 +135,18 @@
           "title": "Alertname",
           "type": "string"
         },
+        "evidence_origin": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Origin"
+        },
         "metric": {
           "anyOf": [
             {
@@ -158,6 +170,28 @@
             }
           ],
           "title": "Observed At"
+        },
+        "origin_note": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Origin Note"
+        },
+        "origin_status": {
+          "default": "unconfirmed",
+          "enum": [
+            "demo_replay",
+            "synthetic",
+            "unconfirmed"
+          ],
+          "title": "Origin Status",
+          "type": "string"
         },
         "state": {
           "maxLength": 100,
@@ -193,7 +227,9 @@
         "metric",
         "value",
         "threshold",
-        "observed_at"
+        "observed_at",
+        "evidence_origin",
+        "origin_note"
       ],
       "title": "AlertSummary",
       "type": "object"
@@ -1040,10 +1076,44 @@
           "title": "Answer Truncated",
           "type": "boolean"
         },
+        "evidence_origin": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Origin"
+        },
         "model_rounds": {
           "minimum": 0.0,
           "title": "Model Rounds",
           "type": "integer"
+        },
+        "origin_note": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Origin Note"
+        },
+        "origin_status": {
+          "default": "unconfirmed",
+          "enum": [
+            "demo_replay",
+            "synthetic",
+            "unconfirmed"
+          ],
+          "title": "Origin Status",
+          "type": "string"
         },
         "result_trust": {
           "$ref": "#/components/schemas/ResultTrust"
@@ -1075,7 +1145,9 @@
         "answer_truncated",
         "model_rounds",
         "tool_calls",
-        "result_trust"
+        "result_trust",
+        "evidence_origin",
+        "origin_note"
       ],
       "title": "InvestigationAnswer",
       "type": "object"
@@ -1092,6 +1164,18 @@
           "title": "Answer Truncated",
           "type": "boolean"
         },
+        "evidence_origin": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Origin"
+        },
         "investigated_at": {
           "format": "date-time",
           "title": "Investigated At",
@@ -1101,6 +1185,28 @@
           "minimum": 0.0,
           "title": "Model Rounds",
           "type": "integer"
+        },
+        "origin_note": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Origin Note"
+        },
+        "origin_status": {
+          "default": "unconfirmed",
+          "enum": [
+            "demo_replay",
+            "synthetic",
+            "unconfirmed"
+          ],
+          "title": "Origin Status",
+          "type": "string"
         },
         "result_trust": {
           "$ref": "#/components/schemas/ResultTrust"
@@ -1145,6 +1251,8 @@
         "model_rounds",
         "tool_calls",
         "result_trust",
+        "evidence_origin",
+        "origin_note",
         "session_id",
         "investigated_at"
       ],
@@ -2309,6 +2417,18 @@
     "SessionDetail": {
       "additionalProperties": false,
       "properties": {
+        "evidence_origin": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Origin"
+        },
         "human_requests": {
           "items": {
             "$ref": "#/components/schemas/HumanRequestView"
@@ -2348,6 +2468,28 @@
           "title": "Limits Source",
           "type": "string"
         },
+        "origin_note": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Origin Note"
+        },
+        "origin_status": {
+          "default": "unconfirmed",
+          "enum": [
+            "demo_replay",
+            "synthetic",
+            "unconfirmed"
+          ],
+          "title": "Origin Status",
+          "type": "string"
+        },
         "projection": {
           "$ref": "#/components/schemas/Projection"
         },
@@ -2363,6 +2505,8 @@
         "limits",
         "limits_source",
         "incident_budget_usage",
+        "evidence_origin",
+        "origin_note",
         "investigation_result",
         "projection",
         "proposal_generation",

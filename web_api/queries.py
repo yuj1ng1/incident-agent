@@ -4,6 +4,7 @@ import re
 
 from pydantic import ValidationError
 
+from alert_parser import qualify_alert_origin, qualify_investigation_origin
 from incident_store import IncidentStore
 from investigation.checkpoint import protect
 from investigation.manager import InvestigationManager
@@ -87,13 +88,28 @@ def public_text(value, limit=200):
     return value[:limit]
 
 
-def answer_view(result, *, history_record=False):
+def _incident_alert_origin(incident: Incident) -> dict[str, str | None]:
+    for alert in reversed(incident.alerts):
+        origin = qualify_alert_origin(alert)
+        if origin["origin_status"] != "unconfirmed":
+            return origin
+    return qualify_alert_origin(incident.alerts[-1] if incident.alerts else None)
+
+
+def answer_view(result, *, history_record=False, origin=None):
     text = public_text(result["answer"], limit=65536)
+    qualified_origin = origin or qualify_investigation_origin(result=result)
     return InvestigationAnswer(
         success=result.get("success"),
-        status=result["status"], answer=text[:8000], answer_truncated=len(text) > 8000,
-        model_rounds=result.get("model_rounds", 0), tool_calls=result.get("tool_calls", 0),
+        status=result["status"],
+        answer=text[:8000],
+        answer_truncated=len(text) > 8000,
+        model_rounds=result.get("model_rounds", 0),
+        tool_calls=result.get("tool_calls", 0),
         result_trust=project_result_trust(result, history_record=history_record),
+        origin_status=qualified_origin["origin_status"],
+        evidence_origin=public_text(qualified_origin["evidence_origin"], 120),
+        origin_note=public_text(qualified_origin["origin_note"], 200),
     )
 
 
@@ -272,18 +288,46 @@ class RuntimeQueries:
         incident = self.incident_record(incident_id)
         if incident is None:
             return None
+        alert_origin = _incident_alert_origin(incident)
+        recent_alerts = []
+        for alert in incident.alerts[-3:]:
+            item_origin = qualify_alert_origin(alert)
+            recent_alerts.append(
+                AlertSummary(
+                    alertname=public_text(alert.alertname),
+                    state=public_text(alert.state, 100),
+                    metric=public_text(alert.metric),
+                    value=alert.value,
+                    threshold=alert.threshold,
+                    observed_at=alert.observed_at,
+                    origin_status=item_origin["origin_status"],
+                    evidence_origin=public_text(item_origin["evidence_origin"], 120),
+                    origin_note=public_text(item_origin["origin_note"], 200),
+                )
+            )
+        recent_investigations = []
+        for record in incident.investigations[-3:]:
+            record_data = record.model_dump()
+            record_origin = qualify_investigation_origin(
+                alert_origin,
+                result=record_data,
+            )
+            recent_investigations.append(
+                InvestigationHistory(
+                    **answer_view(
+                        record_data,
+                        history_record=True,
+                        origin=record_origin,
+                    ).model_dump(),
+                    session_id=public_text(record.session_id, 120),
+                    investigated_at=record.investigated_at,
+                )
+            )
         return IncidentDetail(
             **incident_summary(incident).model_dump(),
             recovery_verification=recovery_verification_view(incident),
-            recent_alerts=[AlertSummary(
-                alertname=public_text(a.alertname), state=public_text(a.state, 100),
-                metric=public_text(a.metric), value=a.value, threshold=a.threshold,
-                observed_at=a.observed_at,
-            ) for a in incident.alerts[-3:]],
-            recent_investigations=[InvestigationHistory(
-                **answer_view(r.model_dump(), history_record=True).model_dump(),
-                session_id=public_text(r.session_id, 120), investigated_at=r.investigated_at,
-            ) for r in incident.investigations[-3:]],
+            recent_alerts=recent_alerts,
+            recent_investigations=recent_investigations,
             evidence_count=len(incident.evidence),
             archived_session_count=sum(len(ref.session_ids) for ref in incident.history_archives),
         )
@@ -312,11 +356,37 @@ class RuntimeQueries:
         if workflow["session"]["session_id"] != session_id:
             raise RuntimeIntegrityError("runtime_session_identity_mismatch")
         from investigation.models import InvestigationSession
+        origin = dict(
+            workflow.get("origin_qualification")
+            or {
+                "origin_status": "unconfirmed",
+                "evidence_origin": None,
+                "origin_note": None,
+            }
+        )
+        if origin["origin_status"] == "unconfirmed":
+            try:
+                incident = self.incident_record(workflow["session"]["incident_id"])
+            except Exception:
+                incident = None
+            if incident is not None and incident.alerts:
+                origin = qualify_investigation_origin(
+                    _incident_alert_origin(incident),
+                    result=workflow.get("investigation_result"),
+                )
         return SessionDetail(
             session=session_summary(InvestigationSession.model_validate(workflow["session"])),
-            limits=workflow["limits"], incident_budget_usage=workflow["incident_budget_usage"],
+            limits=workflow["limits"],
+            incident_budget_usage=workflow["incident_budget_usage"],
             limits_source=workflow["limits_source"],
-            investigation_result=answer_view(workflow["investigation_result"]) if workflow["investigation_result"] else None,
+            origin_status=origin["origin_status"],
+            evidence_origin=public_text(origin["evidence_origin"], 120),
+            origin_note=public_text(origin["origin_note"], 200),
+            investigation_result=(
+                answer_view(workflow["investigation_result"], origin=origin)
+                if workflow["investigation_result"]
+                else None
+            ),
             projection=Projection(
                 projected=workflow["projected"], blocked=workflow["projection_blocked"],
                 error_category=public_text(workflow["projection_error_category"]),

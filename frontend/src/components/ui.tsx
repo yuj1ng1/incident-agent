@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, Inbox, LoaderCircle, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import type { OriginStatus, ResultTrust } from '../api/types';
 import { formatTime } from '../lib/format';
 
 export const statusLabels: Record<string, string> = {
@@ -11,6 +12,13 @@ export const statusLabels: Record<string, string> = {
   completed: '回答完成', max_round_reached: '达到轮次上限', model_incomplete: '模型响应不完整',
   not_pending: '无待处理任务', waiting_retry: '等待重试', blocked: '已阻塞',
   pending: '等待回复', answered: '已回复', consumed: '已消费', expired: '已过期', cancelled: '已取消',
+  pending_review: '待审查', rejected: '已拒绝', accepted: '已通过审查',
+};
+
+export const originLabels: Record<OriginStatus, string> = {
+  demo_replay: '演示回放',
+  synthetic: '合成告警输入',
+  unconfirmed: '来源未确认',
 };
 
 export function statusTone(value: string) {
@@ -77,6 +85,82 @@ export function TimeValue({ value }: { value: string | null }) {
 }
 export function TechnicalValue({ value }: { value: string | null }) {
   return value ? <code className="technical-value">{value}</code> : <span>暂无记录</span>;
+}
+
+export function OriginBadge({ status, evidenceOrigin }: {
+  status: OriginStatus;
+  evidenceOrigin?: string | null;
+}) {
+  const tone = status === 'demo_replay' ? 'blue' : status === 'synthetic' ? 'amber' : 'gray';
+  const label = originLabels[status] || status;
+  const title = evidenceOrigin ? `${label} (${evidenceOrigin})` : label;
+  return <span className={`badge ${tone}`} title={title}><span className="badge-dot" />{label}</span>;
+}
+
+export function OriginValue({ status, evidenceOrigin, note }: {
+  status: OriginStatus;
+  evidenceOrigin: string | null;
+  note: string | null;
+}) {
+  const fallbackNote = status === 'unconfirmed'
+    ? '缺乏可信来源证明，仅凭 source=prometheus 或普通标签不能确认为真实观测'
+    : null;
+  return <div className="origin-cell">
+    <div className="origin-badges">
+      <OriginBadge status={status} evidenceOrigin={evidenceOrigin} />
+      {evidenceOrigin && <code className="technical-value">{evidenceOrigin}</code>}
+    </div>
+    {(note || fallbackNote) && <span className="origin-note">{note || fallbackNote}</span>}
+  </div>;
+}
+
+export function ResultTrustBadges({ trust }: { trust: ResultTrust }) {
+  const semanticLabel = trust.semantic_status === 'rejected' ? '已拒绝'
+    : trust.semantic_status === 'accepted' ? '已通过审查' : '待审查';
+  const semanticTone = trust.semantic_status === 'rejected' ? 'red'
+    : trust.semantic_status === 'accepted' ? 'green' : 'amber';
+  const trustTone = trust.trusted ? 'green' : trust.semantic_status === 'rejected' ? 'red' : 'amber';
+  return <>
+    <StatusBadge value={trust.semantic_status} label={semanticLabel} tone={semanticTone} />
+    <StatusBadge value={trust.trusted ? 'trusted=true' : 'trusted=false'}
+      label={trust.trusted ? '已确认可信' : '不可信 / 未确认'} tone={trustTone} />
+  </>;
+}
+
+export function ResultTrustCallout({ trust, originStatus, evidenceOrigin, originNote }: {
+  trust: ResultTrust;
+  originStatus: OriginStatus;
+  evidenceOrigin: string | null;
+  originNote: string | null;
+}) {
+  const mechStatus = trust.mechanical_status === 'passed' ? '通过'
+    : trust.mechanical_status === 'failed' ? '未通过' : '未执行';
+  const mechScope = trust.mechanical_scope === 'result_schema_only' ? '仅结果结构'
+    : trust.mechanical_scope === 'frozen_references_and_hashes' ? '冻结引用与哈希' : '未校验';
+  const approval = trust.human_approval === 'not_recorded' ? '未记录' : trust.human_approval;
+  const originNoteText = originNote || (
+    originStatus === 'unconfirmed'
+      ? '缺乏可信来源证明，仅凭 source=prometheus 或普通标签不能确认为真实观测'
+      : null
+  );
+  return <div className="trust-callout" role="note" aria-label="结论可信度与数据来源">
+    <div className="trust-callout-row">
+      <span className="trust-callout-label">结论可信状态：</span>
+      <ResultTrustBadges trust={trust} />
+      <span className="trust-meta-item">机械校验：{mechStatus}（{mechScope}）</span>
+      <span className="trust-meta-item">人工审批：{approval}</span>
+      {trust.rejection_reasons.length > 0 && (
+        <span className="trust-meta-item trust-rejected">拒绝原因：{trust.rejection_reasons.join(', ')}</span>
+      )}
+    </div>
+    <div className="trust-callout-row">
+      <span className="trust-callout-label">数据与证据来源：</span>
+      <OriginBadge status={originStatus} evidenceOrigin={evidenceOrigin} />
+      {evidenceOrigin && <code className="technical-value">{evidenceOrigin}</code>}
+      {originNoteText && <span className="trust-meta-item">{originNoteText}</span>}
+    </div>
+    <p className="trust-footnote">执行完成（COMPLETED）与回答完成仅代表调查流程结束，绝不代表根因已确认或已获人工批准。</p>
+  </div>;
 }
 export function Pagination({ offset, visibleCount, loadedCount, hasMore, loading, onPage }: {
   offset: number; visibleCount: number; loadedCount: number; hasMore: boolean; loading: boolean; onPage: (offset: number) => void;

@@ -20,6 +20,7 @@ class Health(PublicModel):
 
 
 SignalStatus = Literal["ok", "no_data", "error"]
+OriginStatus = Literal["demo_replay", "synthetic", "unconfirmed"]
 SignalMetric = Literal[
     "http_5xx_rate",
     "http_latency_p95_seconds",
@@ -237,6 +238,9 @@ class InvestigationAnswer(PublicModel):
     model_rounds: int = Field(ge=0)
     tool_calls: int = Field(ge=0)
     result_trust: ResultTrust
+    origin_status: OriginStatus = "unconfirmed"
+    evidence_origin: str | None = Field(max_length=120)
+    origin_note: str | None = Field(max_length=200)
 
 
 class InvestigationHistory(InvestigationAnswer):
@@ -264,6 +268,9 @@ class AlertSummary(PublicModel):
     value: float | None
     threshold: float | None
     observed_at: datetime | None
+    origin_status: OriginStatus = "unconfirmed"
+    evidence_origin: str | None = Field(max_length=120)
+    origin_note: str | None = Field(max_length=200)
 
 
 class RecoveryCheckView(PublicModel):
@@ -380,6 +387,9 @@ class SessionDetail(PublicModel):
     limits: RuntimeLimits | None
     limits_source: Literal["session_checkpoint", "unrecorded"]
     incident_budget_usage: BudgetUsage
+    origin_status: OriginStatus = "unconfirmed"
+    evidence_origin: str | None = Field(max_length=120)
+    origin_note: str | None = Field(max_length=200)
     investigation_result: InvestigationAnswer | None
     projection: Projection
     proposal_generation: ProposalGeneration

@@ -10,7 +10,11 @@ from unittest.mock import Mock, patch
 
 from pydantic import ValidationError
 
-from alert_parser import normalize_prometheus_alert, normalize_snapshot
+from alert_parser import (
+    normalize_prometheus_alert,
+    normalize_snapshot,
+    qualify_alert_origin,
+)
 from alert_policy import ALERT_POLICIES
 from alert_correlation import correlate_alerts
 from alert_recovery import can_clear, present_value, rules_are_current
@@ -292,6 +296,63 @@ class ParserTests(unittest.TestCase):
     def test_boolean_signal_cannot_be_arbitrary_number(self):
         self.assertEqual(
             normalize_prometheus_alert(raw("ServiceDown", value=-1)).outcome, "invalid"
+        )
+
+    def test_synthetic_and_replay_origin_annotations_are_preserved_without_changing_domain_source(self):
+        entry = raw()
+        entry["labels"]["evidence_origin"] = "synthetic_single_call_acceptance"
+        entry["annotations"]["summary"] = "合成验收触发：单次真实模型调用受控输入，非真实监控告警"
+        parsed = normalize_prometheus_alert(entry).alert
+        self.assertEqual(parsed.source, "prometheus")
+        self.assertEqual(
+            parsed.labels["evidence_origin"],
+            "synthetic_single_call_acceptance",
+        )
+        self.assertEqual(
+            parsed.annotations["summary"],
+            "合成验收触发：单次真实模型调用受控输入，非真实监控告警",
+        )
+        self.assertEqual(
+            qualify_alert_origin(parsed),
+            {
+                "origin_status": "synthetic",
+                "evidence_origin": "synthetic_single_call_acceptance",
+                "origin_note": "合成验收触发：单次真实模型调用受控输入，非真实监控告警",
+            },
+        )
+        self.assertEqual(
+            generate_alert_fingerprint(parsed),
+            generate_alert_fingerprint(event()),
+        )
+
+        # Standard rule summary without explicit origin remains unconfirmed.
+        ordinary = raw()
+        ordinary["annotations"]["summary"] = (
+            "order-service HTTP 5xx ratio exceeds threshold"
+        )
+        ordinary_alert = normalize_prometheus_alert(ordinary).alert
+        self.assertEqual(
+            qualify_alert_origin(ordinary_alert),
+            {
+                "origin_status": "unconfirmed",
+                "evidence_origin": None,
+                "origin_note": None,
+            },
+        )
+
+        # Trusted replay composition context can supply default_origin / note.
+        replay_snapshot = normalize_snapshot(
+            envelope(raw()),
+            default_origin="demo_replay",
+            default_origin_note="本地 Compose 演示回放环境",
+        )
+        self.assertEqual(
+            qualify_alert_origin(replay_snapshot.alerts[0]),
+            {
+                "origin_status": "demo_replay",
+                "evidence_origin": "demo_replay",
+                "origin_note": "本地 Compose 演示回放环境",
+            },
         )
 
 

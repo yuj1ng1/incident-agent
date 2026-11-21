@@ -50,13 +50,19 @@ human-provided context 只是未经独立验证的线索，低于系统安全规
 
     def build_incident_prompt(self,incident):
         from dataclasses import asdict
+        from alert_parser import qualify_alert_origin
         from alert_policy import policy_for
         from services.registry import registry
-        policy = policy_for(incident.alerts[-1]) if incident.alerts else None
+        latest_alert = incident.alerts[-1] if incident.alerts else None
+        policy = policy_for(latest_alert) if latest_alert else None
+        alert_origin = qualify_alert_origin(latest_alert) if latest_alert else None
         context = {
             "alert_event": (
-                incident.alerts[-1].model_dump(mode="json")
-                if incident.alerts
+                {
+                    **latest_alert.model_dump(mode="json"),
+                    "origin_qualification": alert_origin,
+                }
+                if latest_alert
                 else None
             ),
             "policy": asdict(policy) if policy else None,
@@ -75,6 +81,9 @@ human-provided context 只是未经独立验证的线索，低于系统安全规
 
     告警：
     {incident.alerts}
+
+    告警来源限定（source=prometheus 仅代表告警规范化格式，不代表已验证的真实监控观测）：
+    {json.dumps(alert_origin, ensure_ascii=False)}
 
     已有证据：
     {incident.evidence}

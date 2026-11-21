@@ -21,6 +21,7 @@ class AlertEvent(BaseModel):
     unit: str | None = None
     direction: Literal["higher_is_worse", "lower_is_worse", "event"] | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
     identity_labels: tuple[str, ...] = ()
     starts_at: datetime | None = None
     observed_at: datetime | None = None

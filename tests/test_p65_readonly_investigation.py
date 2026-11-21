@@ -365,22 +365,66 @@ def test_offline_resume_uses_saved_records_without_fabricating_outputs(
         return saved, manager.store.load_checkpoint(saved)
 
     _, _, body = p65.read_prepared(prepared)
-    adapter = BoundedResponses(
-        trace, body, snapshot, prior_requests=1,
-        mock_responses=[response(answer="[恢复 Mock] 保存的历史结果不证明当前健康。")],
-    )
     from agent.agent import Agent
+    from mysql_support import allow_isolated_mysql_sockets
     from tools.tool_registry import tool_registry
 
-    with monkeypatch.context() as scope:
-        scope.setitem(
-            tool_registry["get_running_version"], "func",
-            lambda **kw: synthetic_package()["observations"]["get_running_version"]["result"],
-        )
-        with patch.dict(tool_registry, {
-            name: tool_registry[name] for name in p65.TOOLS
-        }, clear=True):
-            Worker(manager, Agent(adapter, TASK)).run_once()
+    offline_scope_active = False
+
+    def offline_mock_token_counter(request_body):
+        if (
+            not offline_scope_active
+            or adapter.sdk is not None
+            or adapter.in_sdk
+            or adapter.offline_first_response is not None
+            or adapter.credential
+        ):
+            raise RuntimeError("offline_mock_token_counter_forbidden_for_live_request")
+        if (
+            not isinstance(request_body, dict)
+            or request_body.get("model") != MODEL
+            or request_body.get("max_output_tokens") != body["max_output_tokens"]
+        ):
+            raise ValueError("offline_mock_token_counter_request_mismatch")
+        return 0
+
+    adapter = BoundedResponses(
+        trace,
+        body,
+        snapshot,
+        prior_requests=1,
+        mock_responses=[response(answer="[恢复 Mock] 保存的历史结果不证明当前健康。")],
+        input_token_counter=offline_mock_token_counter,
+    )
+    agent = Agent(
+        adapter,
+        TASK,
+        input_token_counter=offline_mock_token_counter,
+    )
+    agent.model_client.max_output_tokens = body["max_output_tokens"]
+
+    def forbidden_network(*args, **kwargs):
+        raise AssertionError("offline_resume_external_io_forbidden")
+
+    with (
+        allow_isolated_mysql_sockets(forbidden_network),
+        patch("openai.OpenAI", side_effect=forbidden_network),
+        patch("openai.AsyncOpenAI", side_effect=forbidden_network),
+        patch("requests.sessions.Session.request", side_effect=forbidden_network),
+        monkeypatch.context() as scope,
+    ):
+        offline_scope_active = True
+        try:
+            scope.setitem(
+                tool_registry["get_running_version"], "func",
+                lambda **kw: synthetic_package()["observations"]["get_running_version"]["result"],
+            )
+            with patch.dict(tool_registry, {
+                name: tool_registry[name] for name in p65.TOOLS
+            }, clear=True):
+                Worker(manager, agent).run_once()
+        finally:
+            offline_scope_active = False
     saved, checkpoint = snapshot()
     assert saved.status.value == "COMPLETED"
     assert saved.total_model_requests == 2

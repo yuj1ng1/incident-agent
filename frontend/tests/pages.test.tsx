@@ -257,3 +257,91 @@ it('formats real Markdown conclusions while keeping HTML inert and excluding ima
   expect(container.querySelector('.markdown-text a, img, iframe, script')).toBeNull();
   expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
 });
+
+it('separates execution completion from pending semantic review and aligns trust and origin across Incident and Session pages', async () => {
+  const syntheticIncident = {
+    ...incident,
+    recent_alerts: [{
+      ...incident.recent_alerts[0],
+      origin_status: 'synthetic' as const,
+      evidence_origin: 'synthetic_single_call_acceptance',
+      origin_note: '合成验收触发：单次真实模型调用受控输入',
+    }],
+    recent_investigations: [{
+      ...incident.recent_investigations[0],
+      origin_status: 'synthetic' as const,
+      evidence_origin: 'synthetic_single_call_acceptance',
+      origin_note: '合成验收触发：单次真实模型调用受控输入',
+    }],
+  };
+  const syntheticDetail = {
+    ...detail,
+    origin_status: 'synthetic' as const,
+    evidence_origin: 'synthetic_single_call_acceptance',
+    origin_note: '合成验收触发：单次真实模型调用受控输入',
+    investigation_result: {
+      ...detail.investigation_result!,
+      origin_status: 'synthetic' as const,
+      evidence_origin: 'synthetic_single_call_acceptance',
+      origin_note: '合成验收触发：单次真实模型调用受控输入',
+    },
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('/incidents/')
+    ? json(syntheticIncident) : json(syntheticDetail)));
+
+  const { unmount } = open('/sessions/ses-fixture');
+  expect(await screen.findByText('执行状态')).toBeVisible();
+  expect(screen.getByText('已完成')).toBeVisible();
+  expect(screen.getByText('回答完成')).toBeVisible();
+  const sessionTrust = screen.getByRole('note', { name: '结论可信度与数据来源' });
+  expect(within(sessionTrust).getByText('待审查')).toBeVisible();
+  expect(within(sessionTrust).getByText('不可信 / 未确认')).toBeVisible();
+  expect(within(sessionTrust).getByText('机械校验：通过（仅结果结构）')).toBeVisible();
+  expect(within(sessionTrust).getByText('人工审批：未记录')).toBeVisible();
+  expect(within(sessionTrust).getByText('合成告警输入')).toBeVisible();
+  expect(within(sessionTrust).getByText('synthetic_single_call_acceptance')).toBeVisible();
+  expect(within(sessionTrust).getByText('合成验收触发：单次真实模型调用受控输入')).toBeVisible();
+  expect(within(sessionTrust).getByText(/绝不代表根因已确认或已获人工批准/)).toBeVisible();
+  unmount();
+
+  open('/incidents/inc-fixture');
+  expect(await screen.findByText('FixtureAlert')).toBeVisible();
+  const incidentTrust = screen.getByRole('note', { name: '结论可信度与数据来源' });
+  expect(within(incidentTrust).getByText('待审查')).toBeVisible();
+  expect(within(incidentTrust).getByText('不可信 / 未确认')).toBeVisible();
+  expect(within(incidentTrust).getByText('合成告警输入')).toBeVisible();
+  expect(within(incidentTrust).getByText('synthetic_single_call_acceptance')).toBeVisible();
+  expect(within(incidentTrust).getByText('合成验收触发：单次真实模型调用受控输入')).toBeVisible();
+});
+
+it('displays rejected semantic trust, demo_replay origin, and unrecorded non-checkpoint limits accurately', async () => {
+  const rejectedTrust = {
+    ...detail.investigation_result!.result_trust,
+    mechanical_status: 'failed' as const,
+    semantic_status: 'rejected' as const,
+    rejection_reasons: ['invalid_result_schema', 'claim_support_failed'],
+  };
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({
+    ...detail,
+    limits_source: 'unrecorded',
+    origin_status: 'demo_replay',
+    evidence_origin: 'demo_replay',
+    origin_note: '本地 Compose 演示回放环境',
+    investigation_result: {
+      ...detail.investigation_result!,
+      result_trust: rejectedTrust,
+      origin_status: 'demo_replay',
+      evidence_origin: 'demo_replay',
+      origin_note: '本地 Compose 演示回放环境',
+    },
+  })));
+  open('/sessions/ses-fixture');
+  const note = await screen.findByRole('note', { name: '结论可信度与数据来源' });
+  expect(within(note).getByText('已拒绝')).toBeVisible();
+  expect(within(note).getByText('不可信 / 未确认')).toBeVisible();
+  expect(within(note).getByText('机械校验：未通过（仅结果结构）')).toBeVisible();
+  expect(within(note).getByText('拒绝原因：invalid_result_schema, claim_support_failed')).toBeVisible();
+  expect(within(note).getByText('演示回放')).toBeVisible();
+  expect(within(note).getByText('本地 Compose 演示回放环境')).toBeVisible();
+  expect(screen.getByText('模型请求').closest('.budget-item')!.textContent).toContain('7 / 未记录');
+});

@@ -460,3 +460,141 @@ def test_old_plaintext_answers_are_redacted_without_rewriting_store(api):
     for secret in ("old-unconfigured-value", "other-unconfigured-value", "db password"):
         assert secret not in result.text
     assert incident_digest(manager.incident_store) == before
+
+
+def test_synthetic_demo_replay_and_unconfirmed_origins_align_between_incident_and_session(tmp_path):
+    from alert_parser import normalize_prometheus_alert
+    from fingerprint import generate_alert_fingerprint
+    from incident_factory import create_incident_from_alert
+    from model_client.demo_replay import DemoReplay
+    from agent.agent import Agent
+
+    manager = create_runtime(tmp_path)
+
+    # 1. Unconfirmed historical/default record: source=prometheus alone never claims real observation.
+    unconfirmed_session = create_session(manager)
+    Worker(manager, FixtureAgent([response(answer="历史记录结论待审查")])).run_once()
+
+    # 2. Synthetic alert with evidence_origin and Chinese annotation note.
+    synthetic_raw = {
+        "state": "firing",
+        "labels": {
+            "alertname": "HighHttp5xxRate",
+            "service": "inventory-service",
+            "metric": "http_5xx_rate",
+            "signal_type": "numeric",
+            "severity": "critical",
+            "evidence_origin": "synthetic_single_call_acceptance",
+        },
+        "annotations": {
+            "threshold": "0.20",
+            "unit": "ratio",
+            "direction": "higher_is_worse",
+            "window": "1m",
+            "minimum_requests": "20",
+            "summary": "合成验收触发：单次真实模型调用受控输入，非真实 Prometheus 告警",
+        },
+        "activeAt": "2026-11-18T00:00:00Z",
+        "value": "0.27",
+    }
+    synthetic_alert = normalize_prometheus_alert(synthetic_raw).alert
+    synthetic_fp = generate_alert_fingerprint(synthetic_alert)
+    synthetic_inc = create_incident_from_alert(synthetic_alert, synthetic_fp)
+    manager.incident_store.save_incident(synthetic_fp, synthetic_inc)
+    synthetic_session = manager.enqueue(synthetic_inc)
+    Worker(manager, FixtureAgent([response(answer="合成输入结论待审查")])).run_once()
+
+    # 3. DemoReplay investigation.
+    replay_alert = normalize_prometheus_alert(
+        {
+            **synthetic_raw,
+            "labels": {
+                "alertname": "HighHttpLatency",
+                "service": "order-service",
+                "metric": "http_latency_p95_seconds",
+                "signal_type": "numeric",
+                "severity": "warning",
+            },
+            "annotations": {
+                "threshold": "0.50",
+                "unit": "seconds",
+                "direction": "higher_is_worse",
+                "window": "1m",
+                "minimum_requests": "20",
+            },
+            "value": "0.85",
+        },
+        default_origin="demo_replay",
+        default_origin_note="本地 Compose 演示回放环境（demo_replay）",
+    ).alert
+    replay_fp = generate_alert_fingerprint(replay_alert)
+    replay_inc = create_incident_from_alert(replay_alert, replay_fp)
+    manager.incident_store.save_incident(replay_fp, replay_inc)
+    replay_session = manager.enqueue(replay_inc)
+    replay_agent = Agent(
+        client=DemoReplay(),
+        agent_prompt="演示回放测试",
+        input_token_counter=lambda body: 0,
+    )
+    Worker(manager, replay_agent).run_once()
+
+    before = (
+        manager.store.get(unconfirmed_session.session_id).state_version,
+        manager.store.get(synthetic_session.session_id).state_version,
+        manager.store.get(replay_session.session_id).state_version,
+        incident_digest(manager.incident_store),
+    )
+
+    app = create_app(
+        incident_url=manager.incident_store.database_url,
+        runtime_url=manager.store.database_url,
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        # Unconfirmed check
+        inc_unconfirmed = client.get(f"/api/incidents/{unconfirmed_session.incident_id}").json()
+        ses_unconfirmed = client.get(f"/api/sessions/{unconfirmed_session.session_id}").json()
+        assert inc_unconfirmed["recent_alerts"][0]["origin_status"] == "unconfirmed"
+        assert inc_unconfirmed["recent_alerts"][0]["evidence_origin"] is None
+        assert inc_unconfirmed["recent_investigations"][0]["origin_status"] == "unconfirmed"
+        assert ses_unconfirmed["origin_status"] == "unconfirmed"
+        assert ses_unconfirmed["investigation_result"]["origin_status"] == "unconfirmed"
+        assert (
+            inc_unconfirmed["recent_investigations"][0]["result_trust"]
+            == ses_unconfirmed["investigation_result"]["result_trust"]
+        )
+        assert ses_unconfirmed["investigation_result"]["result_trust"]["semantic_status"] == "pending_review"
+        assert ses_unconfirmed["investigation_result"]["result_trust"]["trusted"] is False
+
+        # Synthetic check (both Incident and Session match)
+        inc_synthetic = client.get(f"/api/incidents/{synthetic_session.incident_id}").json()
+        ses_synthetic = client.get(f"/api/sessions/{synthetic_session.session_id}").json()
+        expected_note = "合成验收触发：单次真实模型调用受控输入，非真实 Prometheus 告警"
+        for target in (
+            inc_synthetic["recent_alerts"][0],
+            inc_synthetic["recent_investigations"][0],
+            ses_synthetic,
+            ses_synthetic["investigation_result"],
+        ):
+            assert target["origin_status"] == "synthetic"
+            assert target["evidence_origin"] == "synthetic_single_call_acceptance"
+            assert target["origin_note"] == expected_note
+
+        # Demo replay check (both Incident and Session match)
+        inc_replay = client.get(f"/api/incidents/{replay_session.incident_id}").json()
+        ses_replay = client.get(f"/api/sessions/{replay_session.session_id}").json()
+        for target in (
+            inc_replay["recent_alerts"][0],
+            inc_replay["recent_investigations"][0],
+            ses_replay,
+            ses_replay["investigation_result"],
+        ):
+            assert target["origin_status"] == "demo_replay"
+            assert target["evidence_origin"] == "demo_replay"
+            assert target["origin_note"] == "本地 Compose 演示回放环境（demo_replay）"
+
+    assert before == (
+        manager.store.get(unconfirmed_session.session_id).state_version,
+        manager.store.get(synthetic_session.session_id).state_version,
+        manager.store.get(replay_session.session_id).state_version,
+        incident_digest(manager.incident_store),
+    )

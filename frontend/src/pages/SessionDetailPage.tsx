@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { SessionDetail } from '../api/types';
 import { InvestigationText } from '../components/InvestigationText';
-import { DataState, EmptyState, Fields, PageHeader, Panel, StatusBadge, TechnicalValue } from '../components/ui';
+import { DataState, EmptyState, Fields, OriginValue, PageHeader, Panel, ResultTrustCallout, StatusBadge, TechnicalValue, originLabels } from '../components/ui';
 import { useApi } from '../hooks/useApi';
 import { formatTime, recordPath } from '../lib/format';
 
@@ -25,15 +25,17 @@ export function SessionDetailPage() {
   const { sessionId = '' } = useParams();
   const result = useApi<SessionDetail>('/api/sessions/' + encodeURIComponent(sessionId));
   const detail = result.data;
+  const checkpointLimits = detail?.limits_source === 'session_checkpoint' ? detail.limits : null;
   return <>
-    <PageHeader title="Session 详情" description="调查结论、资源用量与后续处理进度。"
+    <PageHeader title="Session 详情" description="调查结论、可信度审查、证据来源、资源用量与后续处理进度。"
       back={{ to: '/sessions', label: '返回 Sessions' }} loading={result.loading}
       reload={result.reload} fetchedAt={result.fetchedAt} />
     <DataState loading={result.loading} error={result.error} retry={result.reload}>
       {detail && <>
         <div className="detail-banner">
           <div><span className="eyebrow">INVESTIGATION SESSION</span><h2>{detail.session.service}</h2><span className="full-id">{detail.session.session_id}</span></div>
-          <div className="session-summary"><StatusBadge value={detail.session.status} />
+          <div className="session-summary">
+            <div className="badge-group"><span className="status-caption">执行状态</span><StatusBadge value={detail.session.status} /></div>
             <div className="session-metrics"><span><strong>{detail.session.total_model_requests}</strong> 模型调用</span><span><strong>{detail.session.total_tool_executions}</strong> 工具执行</span></div>
           </div>
         </div>
@@ -41,18 +43,22 @@ export function SessionDetailPage() {
           <div className="detail-main">
             <Panel title="Incident 累计预算" subtitle="同一授权组共享额度，包含相关 Session 的已用次数">
               <div className="budget-grid">
-                <BudgetBar label="尝试次数" used={detail.incident_budget_usage.attempts} limit={detail.limits?.max_attempts ?? null} />
-                <BudgetBar label="模型请求" used={detail.incident_budget_usage.model_requests} limit={detail.limits?.max_model_requests ?? null} />
-                <BudgetBar label="工具执行" used={detail.incident_budget_usage.tool_executions} limit={detail.limits?.max_tool_executions ?? null} />
-                <BudgetBar label="恢复次数" used={detail.incident_budget_usage.resumes} limit={detail.limits?.max_resumes ?? null} />
-                <BudgetBar label="人类提问" used={detail.incident_budget_usage.human_requests} limit={detail.limits?.max_human_requests ?? null} />
+                <BudgetBar label="尝试次数" used={detail.incident_budget_usage.attempts} limit={checkpointLimits?.max_attempts ?? null} />
+                <BudgetBar label="模型请求" used={detail.incident_budget_usage.model_requests} limit={checkpointLimits?.max_model_requests ?? null} />
+                <BudgetBar label="工具执行" used={detail.incident_budget_usage.tool_executions} limit={checkpointLimits?.max_tool_executions ?? null} />
+                <BudgetBar label="恢复次数" used={detail.incident_budget_usage.resumes} limit={checkpointLimits?.max_resumes ?? null} />
+                <BudgetBar label="人类提问" used={detail.incident_budget_usage.human_requests} limit={checkpointLimits?.max_human_requests ?? null} />
               </div>
-              <p className="panel-footnote">授权开始：{formatTime(detail.incident_budget_usage.started_at)} · 时长上限：{detail.limits ? `${detail.limits.max_duration_seconds} 秒` : '未记录'}</p>
-              <p className="panel-footnote">{detail.limits ? '上限来自此调查持久化的执行配置。' : '历史调查未保存执行上限，无法确认当时约束。'}</p>
+              <p className="panel-footnote">授权开始：{formatTime(detail.incident_budget_usage.started_at)} · 时长上限：{checkpointLimits ? `${checkpointLimits.max_duration_seconds} 秒` : '未记录'}</p>
+              <p className="panel-footnote">{checkpointLimits ? '上限来自此调查持久化的执行配置。' : '历史调查未保存执行上限，无法确认当时约束。'}</p>
             </Panel>
-            <Panel title="Agent 最终回答" subtitle="调查结论与服务恢复验证分别记录"
+            <Panel title="Agent 最终回答" subtitle="调查结论、语义可信状态与服务恢复验证分别记录"
               action={detail.investigation_result && <StatusBadge value={detail.investigation_result.status} />}>
               {detail.investigation_result ? <div className="answer-container">
+                <ResultTrustCallout trust={detail.investigation_result.result_trust}
+                  originStatus={detail.investigation_result.origin_status}
+                  evidenceOrigin={detail.investigation_result.evidence_origin}
+                  originNote={detail.investigation_result.origin_note} />
                 <InvestigationText text={detail.investigation_result.answer || '没有保存回答正文。'} />
                 <div className="answer-meta">模型轮次 {detail.investigation_result.model_rounds} · 工具调用 {detail.investigation_result.tool_calls}
                   {detail.investigation_result.answer_truncated && <span className="truncated"> · 回答已被 API 截断为 8000 字符</span>}
@@ -73,6 +79,8 @@ export function SessionDetailPage() {
           <aside className="detail-aside" aria-label="Session 调查信息和后续处理">
             <Panel title="调查信息" action={<Link className="text-link" to={recordPath('incidents', detail.session.incident_id)}>关联 Incident<ArrowRight size={14} /></Link>}>
               <Fields items={[
+                ['数据来源', detail.investigation_result ? originLabels[detail.origin_status] : <OriginValue status={detail.origin_status} evidenceOrigin={detail.evidence_origin} note={detail.origin_note} />],
+                ['来源标识', <TechnicalValue value={detail.evidence_origin} />],
                 ['创建时间', formatTime(detail.session.created_at)], ['更新时间', formatTime(detail.session.updated_at)],
                 ['结束时间', formatTime(detail.session.completed_at)], ['下次重试', formatTime(detail.session.next_retry_at)],
                 ['当前尝试模型轮次', detail.session.current_attempt_rounds], ['当前尝试工具调用', detail.session.current_attempt_tool_calls],

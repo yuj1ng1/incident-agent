@@ -5,6 +5,7 @@ export const SESSION_STATUSES = [
 ] as const;
 export type SessionStatus = typeof SESSION_STATUSES[number];
 export type InvestigationStatus = 'completed' | 'max_round_reached' | 'model_incomplete';
+export type OriginStatus = 'demo_replay' | 'synthetic' | 'unconfirmed';
 export type HumanRequestStatus = 'pending' | 'answered' | 'consumed' | 'expired' | 'cancelled';
 export type RecoveryStatus = 'alert_firing' | 'pending' | 'running' | 'verified' | 'failed'
   | 'insufficient' | 'superseded' | 'not_recorded' | 'legacy_only';
@@ -167,6 +168,9 @@ export interface InvestigationAnswer {
   model_rounds: number;
   tool_calls: number;
   result_trust: ResultTrust;
+  origin_status: OriginStatus;
+  evidence_origin: string | null;
+  origin_note: string | null;
 }
 
 export interface IncidentDetail extends IncidentSummary {
@@ -174,6 +178,7 @@ export interface IncidentDetail extends IncidentSummary {
   recent_alerts: {
     alertname: string; state: string; metric: string | null;
     value: number | null; threshold: number | null; observed_at: string | null;
+    origin_status: OriginStatus; evidence_origin: string | null; origin_note: string | null;
   }[];
   recent_investigations: (InvestigationAnswer & {
     session_id: string | null; investigated_at: string;
@@ -215,6 +220,9 @@ export interface SessionDetail {
     attempts: number; model_requests: number; tool_executions: number;
     resumes: number; human_requests: number; started_at: string;
   };
+  origin_status: OriginStatus;
+  evidence_origin: string | null;
+  origin_note: string | null;
   investigation_result: InvestigationAnswer | null;
   projection: {
     projected: boolean; blocked: boolean; error_category: string | null; retry_at: string | null;
