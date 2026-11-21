@@ -76,6 +76,31 @@ METRICS_ALIGNED_CONTEXT_FIELDS = (
     "query_finished_at",
 )
 
+RUNBOOK_SEARCH_CONTEXT_FIELDS = (
+    "status",
+    "reason",
+    "service",
+    "query",
+    "method",
+    "evidence_type",
+    "authoritative_for_current_state",
+    "candidate_count",
+    "available",
+)
+
+RUNBOOK_HIT_CITATION_FIELDS = (
+    "document_id",
+    "version_id",
+    "chunk_id",
+    "service",
+    "title",
+    "heading_path",
+    "start_line",
+    "end_line",
+    "citation",
+    "score",
+)
+
 HUMAN_TOOL = {
     "type": "function",
     "name": "request_human_input",
@@ -323,21 +348,24 @@ class Worker:
             summary = self._observation_summary(output, item["name"])
             size = len(json.dumps(summary, ensure_ascii=False).encode("utf-8"))
             if call_summary_bytes + size > 16000:
-                keys = ("status", "reason")
-                if item["name"] == "query_metrics":
-                    keys += (
-                        "metric",
-                        "evaluated_at",
-                        "query_started_at",
-                        "query_finished_at",
-                    )
-                elif item["name"] == "query_metric_range":
-                    keys = METRIC_RANGE_CONTEXT_FIELDS
-                elif item["name"] == "query_metrics_aligned":
-                    keys = METRICS_ALIGNED_CONTEXT_FIELDS
-                summary = {
-                    key: summary[key] for key in keys if key in summary
-                } | {"summary_truncated": True}
+                if item["name"] == "search_runbooks":
+                    summary = self._runbook_search_compact_summary(summary)
+                else:
+                    keys = ("status", "reason")
+                    if item["name"] == "query_metrics":
+                        keys += (
+                            "metric",
+                            "evaluated_at",
+                            "query_started_at",
+                            "query_finished_at",
+                        )
+                    elif item["name"] == "query_metric_range":
+                        keys = METRIC_RANGE_CONTEXT_FIELDS
+                    elif item["name"] == "query_metrics_aligned":
+                        keys = METRICS_ALIGNED_CONTEXT_FIELDS
+                    summary = {
+                        key: summary[key] for key in keys if key in summary
+                    } | {"summary_truncated": True}
             else:
                 call_summary_bytes += size
             call_results.append({
@@ -361,6 +389,7 @@ class Worker:
                 "采集时的状态，固定 SHA 是版本参考。人类线索尚未验证。"
                 "metric_analysis 是历史派生分析，不是当前状态证据；"
                 "其中的候选解释尚未验证，suggested_checks 不会自动执行。"
+                "search_runbooks 返回的是运维手册参考线索，不能替代实时观测证明当前状态。"
             ),
             "context_collected_at": now.isoformat(),
             "remaining_session_budget": {
@@ -552,6 +581,8 @@ class Worker:
             return Worker._metric_range_summary(result)
         if tool_name == "query_metrics_aligned":
             return Worker._metrics_aligned_summary(result)
+        if tool_name == "search_runbooks":
+            return Worker._runbook_search_summary(result)
         truncated = False
         def bounded(value, depth=0):
             nonlocal truncated
@@ -654,6 +685,82 @@ class Worker:
             summary = {
                 key: summary[key] for key in METRIC_RANGE_CONTEXT_FIELDS if key in summary
             } | {"summary_truncated": True}
+        return summary
+
+    @staticmethod
+    def _runbook_search_compact_summary(summary):
+        """Preserve runbook status and exact citation fields under tight size limits."""
+        compact = {
+            key: summary[key]
+            for key in RUNBOOK_SEARCH_CONTEXT_FIELDS
+            if key in summary
+        }
+        if isinstance(compact.get("query"), str) and len(compact["query"]) > 200:
+            compact["query"] = compact["query"][:200] + " [summary truncated]"
+        hits = summary.get("hits")
+        if isinstance(hits, list):
+            compact["hits"] = [
+                {
+                    field: hit[field]
+                    for field in RUNBOOK_HIT_CITATION_FIELDS
+                    if field in hit
+                }
+                for hit in hits[:5]
+                if isinstance(hit, dict)
+            ]
+        compact["summary_truncated"] = True
+        return compact
+
+    @staticmethod
+    def _runbook_search_summary(result):
+        """Preserve top-ranked runbook hits and exact citations without mutating input."""
+        protected = protect(result)
+        if not isinstance(protected, dict):
+            return {"status": "invalid_tool_result"}
+        truncated = False
+        summary = {
+            key: protected[key]
+            for key in RUNBOOK_SEARCH_CONTEXT_FIELDS
+            if key in protected
+        }
+        if isinstance(summary.get("query"), str) and len(summary["query"]) > 500:
+            summary["query"] = summary["query"][:500] + " [summary truncated]"
+            truncated = True
+
+        raw_hits = protected.get("hits")
+        if isinstance(raw_hits, list):
+            if len(raw_hits) > 5:
+                truncated = True
+            summarized_hits = []
+            for hit in raw_hits[:5]:
+                if not isinstance(hit, dict):
+                    continue
+                item = {
+                    field: hit[field]
+                    for field in RUNBOOK_HIT_CITATION_FIELDS
+                    if field in hit
+                }
+                snippet = hit.get("snippet")
+                if isinstance(snippet, str):
+                    if len(snippet) > 360:
+                        item["snippet"] = snippet[:360] + " [summary truncated]"
+                        truncated = True
+                    else:
+                        item["snippet"] = snippet
+                summarized_hits.append(item)
+            summary["hits"] = summarized_hits
+
+        if truncated:
+            summary["summary_truncated"] = True
+
+        if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000:
+            summary = Worker._runbook_search_compact_summary(summary)
+            while (
+                isinstance(summary.get("hits"), list)
+                and len(summary["hits"]) > 1
+                and len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > 5000
+            ):
+                summary["hits"].pop()
         return summary
 
     def _validate_tool(self, name, arguments, service):

@@ -6,3 +6,4 @@ from tools.code_changes import get_recent_code_changes,get_commit_diff,get_sourc
 from tools.version import get_running_version
 
 from tools.capabilities import get_service_capabilities
+from tools.runbooks import search_runbooks

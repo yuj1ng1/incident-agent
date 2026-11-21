@@ -711,6 +711,7 @@ class ToolBoundaryTests(unittest.TestCase):
             "get_source_file",
             "get_running_version",
             "get_service_capabilities",
+            "search_runbooks",
         }
         self.assertEqual(set(tool_registry), expected)
 
