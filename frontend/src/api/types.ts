@@ -82,7 +82,8 @@ export interface IncidentSignals {
 }
 
 export type RemediationStatus = 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'verification_failed' | 'closed';
-export interface OperatorView { actor: string; permissions: ('request' | 'approve' | 'execute')[] }
+export type OperatorPermission = 'request' | 'approve' | 'execute' | 'knowledge_write';
+export interface OperatorView { actor: string; permissions: OperatorPermission[] }
 export interface CompensationTargetView {
   target_id: string; service: string; commit_sha: string; artifact_sha256: string;
   configuration_digest: string; preconditions: string; side_effects: string;
@@ -236,4 +237,108 @@ export interface SessionDetail {
   human_requests: {
     request_id: string; status: HumanRequestStatus; question: string; created_at: string; expires_at: string;
   }[];
+  runbook_citations: RunbookCitationView[];
+}
+
+export interface RunbookCitationView {
+  document_id: string;
+  version_id: string;
+  chunk_id: string;
+  service: string;
+  title: string;
+  heading_path: string;
+  start_line: number;
+  end_line: number;
+  snippet: string | null;
+  score: number | null;
+  citation: string;
+}
+
+export type KnowledgeVersionStatus = 'draft' | 'published' | 'archived';
+export type KnowledgePublishStatus = 'published' | 'unpublished';
+export type KnowledgeSearchMethod = 'hybrid_rrf' | 'mysql_ngram' | 'vector_cosine';
+export type KnowledgeSearchStatus = 'ok' | 'no_match' | 'unavailable';
+
+export interface KnowledgeVersionSummary {
+  version_id: string;
+  content_sha256: string;
+  status: KnowledgeVersionStatus;
+  created_at: string;
+}
+
+export interface KnowledgeDocumentSummary {
+  document_id: string;
+  service: string;
+  title: string;
+  source: string;
+  published_version_id: string | null;
+  published_status: KnowledgePublishStatus;
+  version_count: number;
+  versions: KnowledgeVersionSummary[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeDocumentPage extends Page<KnowledgeDocumentSummary> {
+  total: number;
+}
+
+export interface KnowledgeChunkItem {
+  chunk_id: string;
+  ordinal: number;
+  heading_path: string;
+  start_line: number;
+  end_line: number;
+  chunk_text: string;
+  embedding_model: string | null;
+  embedding_dim: number | null;
+}
+
+export interface KnowledgeVersionDetail {
+  document_id: string;
+  service: string;
+  title: string;
+  source: string;
+  published_version_id: string | null;
+  version_id: string;
+  status: KnowledgeVersionStatus;
+  content_sha256: string;
+  created_at: string;
+  raw_markdown: string;
+  chunks: KnowledgeChunkItem[];
+}
+
+export interface KnowledgeImportResponse {
+  document: KnowledgeDocumentSummary;
+  version: KnowledgeVersionSummary;
+  chunk_count: number;
+  idempotent: boolean;
+}
+
+export interface KnowledgeSearchHit {
+  document_id: string;
+  version_id: string;
+  chunk_id: string;
+  service: string;
+  title: string;
+  source: string;
+  heading_path: string;
+  start_line: number;
+  end_line: number;
+  snippet: string;
+  score: number;
+  lexical_rank: number | null;
+  vector_rank: number | null;
+  exact_match: boolean;
+  citation: string;
+}
+
+export interface KnowledgeSearchResponse {
+  status: KnowledgeSearchStatus;
+  service: string;
+  query: string;
+  method: KnowledgeSearchMethod;
+  hits: KnowledgeSearchHit[];
+  candidate_count: number;
+  reason: string | null;
 }

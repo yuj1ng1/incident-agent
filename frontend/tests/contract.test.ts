@@ -53,11 +53,14 @@ it('checks actual TypeScript response types against live-checked OpenAPI, includ
     ['SessionPage', '/api/sessions'], ['SessionDetail', '/api/sessions/{session_id}'],
     ['RemediationPage', '/api/remediations'], ['RemediationDetail', '/api/remediations/{proposal_id}'],
     ['OperatorView', '/api/operator'],
+    ['KnowledgeDocumentPage', '/api/knowledge/documents'],
+    ['KnowledgeVersionDetail', '/api/knowledge/documents/{document_id}/versions/{version_id}'],
+    ['KnowledgeSearchResponse', '/api/knowledge/search'],
   ].map(([name, path]) => 'type Check_' + name + ' = Assert<Equal<' + name + ', ' + schemaType(contract.responses[path]) + '>>;');
   // Flatten intersections in retained investigation records without widening
   // literal unions or dropping optional/nullable fields.
   const source = [
-    'import type { IncidentPage, IncidentDetail, IncidentSignals, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus, RemediationPage, RemediationDetail, OperatorView } from ' + JSON.stringify(typePath) + ';',
+    'import type { IncidentPage, IncidentDetail, IncidentSignals, IncidentSummary, SessionPage, SessionDetail, SessionSummary, SessionStatus, RemediationPage, RemediationDetail, OperatorView, KnowledgeDocumentPage, KnowledgeVersionDetail, KnowledgeSearchResponse } from ' + JSON.stringify(typePath) + ';',
     'type Normalize<T> = T extends readonly unknown[] ? { [K in keyof T]: Normalize<T[K]> } : T extends object ? { [K in keyof T]: Normalize<T[K]> } : T;',
     'type Equal<A, B> = (<T>() => T extends Normalize<A> ? 1 : 2) extends (<T>() => T extends Normalize<B> ? 1 : 2) ? true : false;',
     'type Assert<T extends true> = T;',
@@ -70,6 +73,7 @@ it('checks actual TypeScript response types against live-checked OpenAPI, includ
     'type Reject_Null = Assert<Equal<Omit<SessionSummary, "last_error_category"> & { last_error_category: string }, SessionSummary> extends false ? true : false>;',
     'type Reject_Enum = Assert<Equal<Omit<SessionSummary, "status"> & { status: string }, SessionSummary> extends false ? true : false>;',
     'type Reject_Nested = Assert<Equal<Omit<SessionDetail, "limits"> & { limits: SessionDetail["limits"] & { drifted?: number } }, SessionDetail> extends false ? true : false>;',
+    'type Reject_KnowledgeStatus = Assert<Equal<Omit<KnowledgeSearchResponse, "status"> & { status: string }, KnowledgeSearchResponse> extends false ? true : false>;',
   ].join('\n');
   // Compile temporary assertions with the project's installed compiler. No
   // compiler API dependency, checked-in generated TS, or Python in npm test.
