@@ -21,6 +21,8 @@ TTL = {
     "get_recent_code_changes": 60,
     "get_service_dependencies": 300,
     "get_service_capabilities": 300,
+    # Reference SOPs: cacheable within a short window, never current live health.
+    "search_runbooks": 300,
     # Mutable refs (including short SHAs) expire; full SHAs are handled by stable().
     "get_source_file": 60,
     "get_commit_diff": 60,
@@ -87,8 +89,14 @@ def effective_records(records, identity=None, now=None, service=None):
         # A newly fetched alert window remains evidence about that interval.
         # Its collection TTL permits caching, not a claim about current health.
         and not (
-            record["name"] in {"query_metric_range", "query_metrics_aligned"}
+            record["name"] in {
+                "query_metric_range",
+                "query_metrics_aligned",
+                "search_runbooks",
+            }
             or record["result"].get("evidence_scope") == "time_window"
+            or record["result"].get("evidence_type") == "reference_runbook"
+            or record["result"].get("authoritative_for_current_state") is False
             or (
                 record["name"] == "query_logs" and (
                     record["arguments"].get("start") is not None

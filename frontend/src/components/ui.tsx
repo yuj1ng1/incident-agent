@@ -13,6 +13,7 @@ export const statusLabels: Record<string, string> = {
   not_pending: '无待处理任务', waiting_retry: '等待重试', blocked: '已阻塞',
   pending: '等待回复', answered: '已回复', consumed: '已消费', expired: '已过期', cancelled: '已取消',
   pending_review: '待审查', rejected: '已拒绝', accepted: '已通过审查',
+  published: '已发布', draft: '草稿', archived: '已归档', unpublished: '未发布',
 };
 
 export const originLabels: Record<OriginStatus, string> = {
@@ -22,9 +23,9 @@ export const originLabels: Record<OriginStatus, string> = {
 };
 
 export function statusTone(value: string) {
-  return ['COMPLETED', 'resolved', 'completed', 'cleared', 'answered', 'consumed'].includes(value) ? 'green'
+  return ['COMPLETED', 'resolved', 'completed', 'cleared', 'answered', 'consumed', 'published'].includes(value) ? 'green'
     : ['FAILED', 'EXHAUSTED', 'critical', 'blocked', 'model_incomplete', 'firing'].includes(value) ? 'red'
-    : ['WAITING_HUMAN', 'WAITING_RETRY', 'PAUSED', 'warning', 'waiting_retry', 'pending', 'max_round_reached'].includes(value) ? 'amber'
+    : ['WAITING_HUMAN', 'WAITING_RETRY', 'PAUSED', 'warning', 'waiting_retry', 'pending', 'max_round_reached', 'draft', 'unpublished'].includes(value) ? 'amber'
     : ['RUNNING', 'investigating', 'QUEUED'].includes(value) ? 'blue' : 'gray';
 }
 

@@ -1,4 +1,15 @@
-import type { IncidentDetail, ResultTrust, SessionDetail, SessionSummary } from '../src/api/types';
+import type {
+  IncidentDetail,
+  KnowledgeDocumentPage,
+  KnowledgeDocumentSummary,
+  KnowledgeImportResponse,
+  KnowledgeSearchResponse,
+  KnowledgeVersionDetail,
+  ResultTrust,
+  RunbookCitationView,
+  SessionDetail,
+  SessionSummary,
+} from '../src/api/types';
 
 // Synthetic records belong only to tests. The application has no fixture fallback.
 const resultTrust: ResultTrust = {
@@ -47,6 +58,146 @@ export const detail: SessionDetail = {
   proposal_generation: { status: 'not_pending', pending: false, attempts: 0, blocked: false,
     blocked_reason: null, error_category: null, retry_at: null, evidence_gap: 'fixture_evidence_gap' },
   human_requests: [],
+  runbook_citations: [],
+};
+
+export const runbookCitation: RunbookCitationView = {
+  document_id: 'doc-order-5xx-001',
+  version_id: 'ver-order-5xx-v2',
+  chunk_id: 'chk-order-5xx-02',
+  service: 'order-service',
+  title: '订单服务 HTTP 5xx 排障手册',
+  heading_path: '订单服务 HTTP 5xx 排障手册 > 常见错误码 > HighHttp5xxRate',
+  start_line: 4,
+  end_line: 7,
+  citation: 'doc-order-5xx-001@ver-order-5xx-v2#L4-L7',
+  snippet: '检查近期发布与 simulate_code_regression 开关，并核对 /order 实时指标。',
+  score: 0.0328,
+};
+
+export const knowledgeDocument: KnowledgeDocumentSummary = {
+  document_id: 'doc-order-5xx-001',
+  service: 'order-service',
+  title: '订单服务 HTTP 5xx 排障手册',
+  source: 'order_service_5xx_runbook.md',
+  published_version_id: 'ver-order-5xx-v2',
+  published_status: 'published',
+  version_count: 2,
+  versions: [
+    {
+      version_id: 'ver-order-5xx-v1',
+      status: 'archived',
+      content_sha256: '1'.repeat(64),
+      created_at: '2026-11-18T02:00:00Z',
+    },
+    {
+      version_id: 'ver-order-5xx-v2',
+      status: 'published',
+      content_sha256: '2'.repeat(64),
+      created_at: '2026-11-20T04:00:00Z',
+    },
+  ],
+  created_at: '2026-11-18T02:00:00Z',
+  updated_at: '2026-11-20T04:00:00Z',
+};
+
+export const knowledgeDocumentPage: KnowledgeDocumentPage = {
+  items: [knowledgeDocument],
+  total: 1,
+  limit: 20,
+  offset: 0,
+  has_more: false,
+};
+
+export const knowledgeVersionDetail: KnowledgeVersionDetail = {
+  document_id: 'doc-order-5xx-001',
+  service: 'order-service',
+  title: '订单服务 HTTP 5xx 排障手册',
+  source: 'order_service_5xx_runbook.md',
+  published_version_id: 'ver-order-5xx-v2',
+  version_id: 'ver-order-5xx-v2',
+  status: 'published',
+  content_sha256: '2'.repeat(64),
+  created_at: '2026-11-20T04:00:00Z',
+  raw_markdown: [
+    '# 订单服务 HTTP 5xx 排障手册',
+    '',
+    '## 常见错误码',
+    '### HighHttp5xxRate',
+    '当 order-service 出现 5xx 飙升时，先查询实时指标与 Loki 日志。',
+    '排查 simulate_code_regression 与下游 order-db 连通性。',
+    '切勿仅凭手册判断当前根因，需以实时观测为准。',
+    '',
+    '## 恢复核对',
+    '确认 /order 业务探针返回 HTTP 200 且无错误日志。',
+  ].join('\n'),
+  chunks: [
+    {
+      chunk_id: 'chk-order-5xx-01',
+      ordinal: 0,
+      heading_path: '订单服务 HTTP 5xx 排障手册',
+      start_line: 1,
+      end_line: 3,
+      chunk_text: '# 订单服务 HTTP 5xx 排障手册\n\n## 常见错误码',
+      embedding_model: 'offline-ngram-v1',
+      embedding_dim: 256,
+    },
+    {
+      chunk_id: 'chk-order-5xx-02',
+      ordinal: 1,
+      heading_path: '订单服务 HTTP 5xx 排障手册 > 常见错误码 > HighHttp5xxRate',
+      start_line: 4,
+      end_line: 7,
+      chunk_text: '### HighHttp5xxRate\n当 order-service 出现 5xx 飙升时，先查询实时指标与 Loki 日志。',
+      embedding_model: 'offline-ngram-v1',
+      embedding_dim: 256,
+    },
+    {
+      chunk_id: 'chk-order-5xx-03',
+      ordinal: 2,
+      heading_path: '订单服务 HTTP 5xx 排障手册 > 恢复核对',
+      start_line: 9,
+      end_line: 10,
+      chunk_text: '## 恢复核对\n确认 /order 业务探针返回 HTTP 200 且无错误日志。',
+      embedding_model: 'offline-ngram-v1',
+      embedding_dim: 256,
+    },
+  ],
+};
+
+export const knowledgeSearchOk: KnowledgeSearchResponse = {
+  status: 'ok',
+  service: 'order-service',
+  query: 'HighHttp5xxRate',
+  method: 'hybrid_rrf',
+  candidate_count: 12,
+  reason: null,
+  hits: [
+    {
+      document_id: 'doc-order-5xx-001',
+      version_id: 'ver-order-5xx-v2',
+      chunk_id: 'chk-order-5xx-02',
+      service: 'order-service',
+      title: '订单服务 HTTP 5xx 排障手册',
+      source: 'order_service_5xx_runbook.md',
+      heading_path: '订单服务 HTTP 5xx 排障手册 > 常见错误码 > HighHttp5xxRate',
+      start_line: 4,
+      end_line: 7,
+      snippet: '当 order-service 出现 5xx 飙升时，先查询实时指标与 Loki 日志。',
+      score: 0.0528,
+      lexical_rank: 1,
+      vector_rank: 1,
+      exact_match: true,
+      citation: 'doc-order-5xx-001@ver-order-5xx-v2#L4-L7',
+    },
+  ],
+};
+
+export const knowledgeImportResponse: KnowledgeImportResponse = {
+  document: knowledgeDocument,
+  version: knowledgeDocument.versions[1],
+  chunk_count: 3,
+  idempotent: false,
 };
 
 export function json(data: unknown, status = 200) {

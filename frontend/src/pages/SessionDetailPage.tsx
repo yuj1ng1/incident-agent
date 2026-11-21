@@ -1,10 +1,11 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, BookOpen } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { SessionDetail } from '../api/types';
 import { InvestigationText } from '../components/InvestigationText';
 import { DataState, EmptyState, Fields, OriginValue, PageHeader, Panel, ResultTrustCallout, StatusBadge, TechnicalValue, originLabels } from '../components/ui';
 import { useApi } from '../hooks/useApi';
 import { formatTime, recordPath } from '../lib/format';
+import { knowledgeVersionPath } from '../lib/knowledge';
 
 function BudgetBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
   const knownPositive = limit !== null && limit > 0;
@@ -65,6 +66,45 @@ export function SessionDetailPage() {
                 </div>
               </div> : <EmptyState title="尚无最终回答" description="当前 Session 没有保存最终调查结果；请结合运行状态查看。" />}
             </Panel>
+            {detail.runbook_citations && detail.runbook_citations.length > 0 && (
+              <Panel
+                title="手册引用（辅助线索，非实时状态）"
+                subtitle="调查过程中通过 search_runbooks 检索到的已发布 Runbook 切片；仅作排查参考，不代表实时系统状态或已确认根因"
+              >
+                <ul className="kb-citations-list" aria-label="手册引用列表">
+                  {detail.runbook_citations.map((citation, index) => (
+                    <li
+                      className="kb-citation-item"
+                      key={`${citation.document_id}-${citation.version_id}-${citation.chunk_id}-${index}`}
+                    >
+                      <div className="kb-citation-head">
+                        <span className="kb-citation-title">
+                          <BookOpen size={14} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: '6px' }} />
+                          {citation.title}
+                        </span>
+                        <Link
+                          className="text-link"
+                          to={knowledgeVersionPath(citation.document_id, citation.version_id, {
+                            start: citation.start_line,
+                            end: citation.end_line,
+                            chunk: citation.chunk_id,
+                          })}
+                        >
+                          查看手册原文（L{citation.start_line}-L{citation.end_line}）
+                          <ArrowUpRight size={14} aria-hidden="true" />
+                        </Link>
+                      </div>
+                      <div className="kb-citation-meta">
+                        <span>章节：{citation.heading_path}</span>
+                        <span>引用：<code>{citation.citation}</code></span>
+                        {citation.score !== null && <span>相关度：{citation.score.toFixed(4)}</span>}
+                      </div>
+                      {citation.snippet && <p className="kb-citation-snippet">{citation.snippet}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            )}
             <Panel title="人工请求" subtitle="调查中提出的问题及其回复状态">
               {detail.human_requests.length ? <div className="human-request-list">{detail.human_requests.map(request =>
                 <article className="human-request" key={request.request_id}>

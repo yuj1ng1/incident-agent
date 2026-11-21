@@ -9,6 +9,15 @@
     "/api/incidents/{incident_id}/signals": {
       "$ref": "#/components/schemas/IncidentSignals"
     },
+    "/api/knowledge/documents": {
+      "$ref": "#/components/schemas/KnowledgeDocumentPage"
+    },
+    "/api/knowledge/documents/{document_id}/versions/{version_id}": {
+      "$ref": "#/components/schemas/KnowledgeVersionDetail"
+    },
+    "/api/knowledge/search": {
+      "$ref": "#/components/schemas/KnowledgeSearchResponse"
+    },
     "/api/operator": {
       "$ref": "#/components/schemas/OperatorView"
     },
@@ -1268,6 +1277,524 @@
       "title": "InvestigationStatus",
       "type": "string"
     },
+    "KnowledgeChunkItem": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "chunk_text": {
+          "title": "Chunk Text",
+          "type": "string"
+        },
+        "embedding_dim": {
+          "anyOf": [
+            {
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Embedding Dim"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Embedding Model"
+        },
+        "end_line": {
+          "minimum": 1.0,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "heading_path": {
+          "maxLength": 500,
+          "title": "Heading Path",
+          "type": "string"
+        },
+        "ordinal": {
+          "minimum": 0.0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "start_line": {
+          "minimum": 1.0,
+          "title": "Start Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "ordinal",
+        "heading_path",
+        "start_line",
+        "end_line",
+        "chunk_text",
+        "embedding_model",
+        "embedding_dim"
+      ],
+      "title": "KnowledgeChunkItem",
+      "type": "object"
+    },
+    "KnowledgeDocumentPage": {
+      "additionalProperties": false,
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/components/schemas/KnowledgeDocumentSummary"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "limit": {
+          "maximum": 100.0,
+          "minimum": 1.0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "maximum": 10000.0,
+          "minimum": 0.0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0.0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "limit",
+        "offset",
+        "has_more"
+      ],
+      "title": "KnowledgeDocumentPage",
+      "type": "object"
+    },
+    "KnowledgeDocumentSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "document_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Document Id",
+          "type": "string"
+        },
+        "published_status": {
+          "enum": [
+            "published",
+            "unpublished"
+          ],
+          "title": "Published Status",
+          "type": "string"
+        },
+        "published_version_id": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Published Version Id"
+        },
+        "service": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "version_count": {
+          "minimum": 0.0,
+          "title": "Version Count",
+          "type": "integer"
+        },
+        "versions": {
+          "items": {
+            "$ref": "#/components/schemas/KnowledgeVersionSummary"
+          },
+          "maxItems": 100,
+          "title": "Versions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "document_id",
+        "service",
+        "title",
+        "source",
+        "published_version_id",
+        "published_status",
+        "version_count",
+        "versions",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "KnowledgeDocumentSummary",
+      "type": "object"
+    },
+    "KnowledgeSearchHit": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "citation": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Citation",
+          "type": "string"
+        },
+        "document_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Document Id",
+          "type": "string"
+        },
+        "end_line": {
+          "minimum": 1.0,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "exact_match": {
+          "title": "Exact Match",
+          "type": "boolean"
+        },
+        "heading_path": {
+          "maxLength": 500,
+          "title": "Heading Path",
+          "type": "string"
+        },
+        "lexical_rank": {
+          "anyOf": [
+            {
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Lexical Rank"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "service": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "snippet": {
+          "maxLength": 1200,
+          "title": "Snippet",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1.0,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "vector_rank": {
+          "anyOf": [
+            {
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vector Rank"
+        },
+        "version_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "version_id",
+        "chunk_id",
+        "service",
+        "title",
+        "source",
+        "heading_path",
+        "start_line",
+        "end_line",
+        "snippet",
+        "score",
+        "lexical_rank",
+        "vector_rank",
+        "exact_match",
+        "citation"
+      ],
+      "title": "KnowledgeSearchHit",
+      "type": "object"
+    },
+    "KnowledgeSearchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_count": {
+          "minimum": 0.0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "hits": {
+          "items": {
+            "$ref": "#/components/schemas/KnowledgeSearchHit"
+          },
+          "maxItems": 20,
+          "title": "Hits",
+          "type": "array"
+        },
+        "method": {
+          "enum": [
+            "hybrid_rrf",
+            "mysql_ngram",
+            "vector_cosine"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "query": {
+          "maxLength": 2000,
+          "title": "Query",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "service": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "no_match",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "service",
+        "query",
+        "method",
+        "hits",
+        "candidate_count",
+        "reason"
+      ],
+      "title": "KnowledgeSearchResponse",
+      "type": "object"
+    },
+    "KnowledgeVersionDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "chunks": {
+          "items": {
+            "$ref": "#/components/schemas/KnowledgeChunkItem"
+          },
+          "title": "Chunks",
+          "type": "array"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "document_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Document Id",
+          "type": "string"
+        },
+        "published_version_id": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Published Version Id"
+        },
+        "raw_markdown": {
+          "title": "Raw Markdown",
+          "type": "string"
+        },
+        "service": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "version_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "service",
+        "title",
+        "source",
+        "published_version_id",
+        "version_id",
+        "status",
+        "content_sha256",
+        "created_at",
+        "raw_markdown",
+        "chunks"
+      ],
+      "title": "KnowledgeVersionDetail",
+      "type": "object"
+    },
+    "KnowledgeVersionSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version_id",
+        "status",
+        "content_sha256",
+        "created_at"
+      ],
+      "title": "KnowledgeVersionSummary",
+      "type": "object"
+    },
     "LogSample": {
       "additionalProperties": false,
       "properties": {
@@ -1426,7 +1953,8 @@
             "enum": [
               "request",
               "approve",
-              "execute"
+              "execute",
+              "knowledge_write"
             ],
             "type": "string"
           },
@@ -2330,6 +2858,100 @@
       "title": "ResultTrust",
       "type": "object"
     },
+    "RunbookCitationView": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "citation": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Citation",
+          "type": "string"
+        },
+        "document_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Document Id",
+          "type": "string"
+        },
+        "end_line": {
+          "minimum": 1.0,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "heading_path": {
+          "maxLength": 500,
+          "title": "Heading Path",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Score"
+        },
+        "service": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "snippet": {
+          "anyOf": [
+            {
+              "maxLength": 600,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Snippet"
+        },
+        "start_line": {
+          "minimum": 1.0,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "version_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "version_id",
+        "chunk_id",
+        "service",
+        "title",
+        "heading_path",
+        "start_line",
+        "end_line",
+        "citation",
+        "snippet",
+        "score"
+      ],
+      "title": "RunbookCitationView",
+      "type": "object"
+    },
     "RuntimeLimits": {
       "additionalProperties": false,
       "properties": {
@@ -2506,6 +3128,15 @@
         },
         "proposal_generation": {
           "$ref": "#/components/schemas/ProposalGeneration"
+        },
+        "runbook_citations": {
+          "default": [],
+          "items": {
+            "$ref": "#/components/schemas/RunbookCitationView"
+          },
+          "maxItems": 20,
+          "title": "Runbook Citations",
+          "type": "array"
         },
         "session": {
           "$ref": "#/components/schemas/SessionSummary"
@@ -2904,6 +3535,21 @@
       "exclude_unset": false
     },
     "/api/incidents/{incident_id}/signals": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/knowledge/documents": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/knowledge/documents/{document_id}/versions/{version_id}": {
+      "exclude_defaults": false,
+      "exclude_none": false,
+      "exclude_unset": false
+    },
+    "/api/knowledge/search": {
       "exclude_defaults": false,
       "exclude_none": false,
       "exclude_unset": false

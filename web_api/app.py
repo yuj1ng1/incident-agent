@@ -17,18 +17,41 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from investigation.models import SessionStatus
 from investigation.state import RuntimeErrorBase, RuntimeIntegrityError
 from incident_store import IncidentStore
+from knowledge.models import KnowledgeError
 from models.remediation import RemediationStatus
 from remediation.executor import ActionExecutor
 from remediation.state import RemediationError
 from remediation.store import RemediationStore, StoreError
 from web_api.auth import LOCAL_ORIGINS, WebAuthorization
+from web_api.knowledge_views import (
+    KnowledgeViews,
+    extract_session_runbook_citations,
+    knowledge_error_response,
+)
 from web_api.observations import incident_signals
 from web_api.queries import ROOT, RemediationQueries, RuntimeQueries
 from web_api.remediation_views import safe_text
 from web_api.schemas import (
-    CompensationRequest, Health, IncidentDetail, IncidentPage, IncidentSignals, OperatorView,
-    ReasonCommand, RemediationCommand, RemediationDetail, RemediationPage,
-    SessionDetail, SessionPage,
+    CompensationRequest,
+    Health,
+    IncidentDetail,
+    IncidentPage,
+    IncidentSignals,
+    KnowledgeDocumentImportRequest,
+    KnowledgeDocumentPage,
+    KnowledgeImportResponse,
+    KnowledgeSearchMethod,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+    KnowledgeVersionCreateRequest,
+    KnowledgeVersionDetail,
+    OperatorView,
+    ReasonCommand,
+    RemediationCommand,
+    RemediationDetail,
+    RemediationPage,
+    SessionDetail,
+    SessionPage,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +67,8 @@ def create_app(
     include_runtime: bool = True,
     remediation_url: str | None = None,
     remediation_path: Path | None = None,
+    knowledge_url: str | None = None,
+    embedding_provider=None,
     authorization=None,
     executor_factory=ActionExecutor,
 ) -> FastAPI:
@@ -51,6 +76,9 @@ def create_app(
         incident_url = incident_path
     if remediation_url is None and remediation_path is not None:
         remediation_url = remediation_path
+    resolved_knowledge_url = (
+        knowledge_url if knowledge_url is not None else runtime_url
+    )
     auth = authorization or WebAuthorization()
     app = FastAPI(title="Incident Agent 本地工作台 API", version="0.2.0", debug=False)
     # Direct browser GETs from the local workbench; no proxy or credentials.
@@ -64,13 +92,31 @@ def create_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     queries = RuntimeQueries(incident_url, runtime_url, include_runtime=include_runtime)
     remediations = RemediationQueries(remediation_url)
+    knowledge = KnowledgeViews(
+        resolved_knowledge_url,
+        embedding_provider=embedding_provider,
+    )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc):
         # FastAPI's default errors echo invalid input, including caller secrets.
-        if request.url.path.startswith("/api/remediations"):
+        if request.url.path.startswith("/api/remediations") or (
+            request.method == "POST"
+            and request.url.path.startswith("/api/knowledge")
+        ):
             return JSONResponse(status_code=422, content={"detail": "invalid_request"})
         return await request_validation_exception_handler(request, exc)
+
+    @app.exception_handler(KnowledgeError)
+    def knowledge_failure(request: Request, exc: KnowledgeError):
+        status_code, code = knowledge_error_response(exc)
+        if status_code >= 500:
+            logger.error(
+                "Knowledge API failed category=%s code=%s",
+                type(exc).__name__,
+                code,
+            )
+        return JSONResponse(status_code=status_code, content={"detail": code})
 
     @app.exception_handler(RemediationError)
     def remediation_failure(request: Request, exc):
@@ -280,7 +326,96 @@ def create_app(
         result = queries.session(session_id)
         if result is None:
             raise HTTPException(status_code=404, detail="session_not_found")
+        if include_runtime:
+            citations = extract_session_runbook_citations(
+                runtime_url=runtime_url,
+                session_id=session_id,
+                default_service=result.session.service,
+            )
+            if citations:
+                result = result.model_copy(
+                    update={"runbook_citations": citations}
+                )
         return result
+
+    @app.get(
+        "/api/knowledge/documents",
+        response_model=KnowledgeDocumentPage,
+    )
+    def list_knowledge_documents(
+        limit: PageLimit = 20,
+        offset: PageOffset = 0,
+        service: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+        status: Literal["published", "unpublished", "all"] | None = None,
+    ):
+        return knowledge.list_documents(
+            limit=limit,
+            offset=offset,
+            service=service,
+            status=status,
+        )
+
+    @app.post(
+        "/api/knowledge/documents",
+        response_model=KnowledgeImportResponse,
+    )
+    def import_knowledge_document(
+        body: KnowledgeDocumentImportRequest,
+        operator=Depends(auth.require("knowledge_write")),
+    ):
+        del operator
+        return knowledge.import_document(body)
+
+    @app.post(
+        "/api/knowledge/documents/{document_id}/versions",
+        response_model=KnowledgeImportResponse,
+    )
+    def create_or_publish_knowledge_version(
+        document_id: str,
+        body: KnowledgeVersionCreateRequest,
+        operator=Depends(auth.require("knowledge_write")),
+    ):
+        del operator
+        return knowledge.create_or_publish_version(document_id, body)
+
+    @app.get(
+        "/api/knowledge/documents/{document_id}/versions/{version_id}",
+        response_model=KnowledgeVersionDetail,
+    )
+    def get_knowledge_version(
+        document_id: str,
+        version_id: str,
+    ):
+        return knowledge.get_version_detail(document_id, version_id)
+
+    @app.post(
+        "/api/knowledge/search",
+        response_model=KnowledgeSearchResponse,
+    )
+    def search_knowledge_post(body: KnowledgeSearchRequest):
+        return knowledge.search(
+            service=body.service,
+            query=body.query,
+            limit=body.limit,
+            method=body.method,
+        )
+
+    @app.get(
+        "/api/knowledge/search",
+        response_model=KnowledgeSearchResponse,
+    )
+    def search_knowledge_get(
+        service: Annotated[str, Query(min_length=1, max_length=200)],
+        query: Annotated[str, Query(min_length=1, max_length=2000)],
+        limit: Annotated[int, Query(ge=1, le=20)] = 5,
+        method: KnowledgeSearchMethod = "hybrid_rrf",
+    ):
+        return knowledge.search(
+            service=service,
+            query=query,
+            limit=limit,
+            method=method,
+        )
 
     return app
 
