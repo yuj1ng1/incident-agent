@@ -1,0 +1,494 @@
+{
+  "schema_version": "1.0",
+  "description": "Stage 2 运维知识库检索评测数据集，覆盖 order-service、order-db、inventory-service 六类场景与 dev/holdout 划分。",
+  "queries": [
+    {
+      "query_id": "q01",
+      "split": "dev",
+      "service": "order-service",
+      "category": "app_5xx",
+      "query": "order-service 触发 HighHttp5xxRate，日志显示 error_type=application_error，如何确认是否由代码回归开关引起并完成修复审批？",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx"
+      ],
+      "expected_heading_hints": [
+        "核对运行版本与回归开关",
+        "审批执行 disable_demo_regression"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1",
+        "inventory-service-high-5xx"
+      ]
+    },
+    {
+      "query_id": "q02",
+      "split": "dev",
+      "service": "inventory-service",
+      "category": "app_5xx",
+      "query": "inventory-service 出现大量 HTTP 500 报错，如何检查 simulate_inventory_error 并验证是否可以归因给数据库？",
+      "expected_doc_ids": [
+        "inventory-service-high-5xx"
+      ],
+      "expected_heading_hints": [
+        "服务特征与无数据库依赖边界",
+        "simulate_inventory_error 故障注入识别"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-db-dependency-failure",
+        "inventory-service-legacy-cache-sop"
+      ]
+    },
+    {
+      "query_id": "q03",
+      "split": "dev",
+      "service": "order-service",
+      "category": "app_5xx",
+      "query": "如何核对 order-service 当前运行的 APP_COMMIT_SHA 和 PROCESS_STARTED_AT，判断 5xx 是否与最近代码变更有关？",
+      "expected_doc_ids": [
+        "order-service-deployment-rollback",
+        "order-service-high-http-5xx"
+      ],
+      "expected_heading_hints": [
+        "运行版本与进程启动时间核对",
+        "核心业务文件 app.py 与观测埋点"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q04",
+      "split": "holdout",
+      "service": "inventory-service",
+      "category": "app_5xx",
+      "query": "inventory-service 上游并发突增导致大量 503 拒绝请求，应该如何联合观测请求速率并抑制重试风暴？",
+      "expected_doc_ids": [
+        "inventory-service-backpressure-circuit-breaker",
+        "inventory-service-high-5xx"
+      ],
+      "expected_heading_hints": [
+        "联动观测 http_request_rate 与 5xx 曲线",
+        "抑制重试放大与限流恢复"
+      ],
+      "forbidden_doc_ids": [
+        "inventory-service-legacy-cache-sop",
+        "order-service-high-http-5xx"
+      ]
+    },
+    {
+      "query_id": "q05",
+      "split": "holdout",
+      "service": "order-service",
+      "category": "app_5xx",
+      "query": "order-service 执行 disable_demo_regression 处置后，需要检查哪些指标和 /order 返回字段才算业务恢复？",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx"
+      ],
+      "expected_heading_hints": [
+        "业务读链路恢复验证"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q06",
+      "split": "dev",
+      "service": "order-db",
+      "category": "dependency_unavailable",
+      "query": "order-db 触发 DatabaseUnavailable 告警时，为什么需要先确认 exporter_scrape_up 再按四阶段探针排查？",
+      "expected_doc_ids": [
+        "order-db-unavailable"
+      ],
+      "expected_heading_hints": [
+        "告警前置条件：确认 Exporter 在线",
+        "四阶段连通性探针诊断"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q07",
+      "split": "dev",
+      "service": "order-service",
+      "category": "dependency_unavailable",
+      "query": "order-service 的 /order 接口报错 database_connection_error 且 demo_dependency_up 变为 0，数据库恢复后需要重启 order-service 吗？",
+      "expected_doc_ids": [
+        "order-service-db-dependency-failure"
+      ],
+      "expected_heading_hints": [
+        "区分 database_connection_error 与 database_query_error",
+        "核实 demo_dependency_up 与数据库连接恢复"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1",
+        "inventory-service-high-5xx"
+      ]
+    },
+    {
+      "query_id": "q08",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "dependency_unavailable",
+      "query": "order-db 连接数接近上限报 too many clients already，如何排查 idle in transaction 长事务并安全释放连接？",
+      "expected_doc_ids": [
+        "order-db-connection-pool-saturation"
+      ],
+      "expected_heading_hints": [
+        "排查 idle in transaction 长事务",
+        "应急处置与恢复观察"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q09",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "dependency_unavailable",
+      "query": "order-db 出现大量 Lock 等待导致上游 /order 查询超过 3 秒被取消，如何定位阻塞链？",
+      "expected_doc_ids": [
+        "order-db-lock-waits-and-slow-queries"
+      ],
+      "expected_heading_hints": [
+        "查询 pg_stat_activity 阻塞会话",
+        "核对 statement_timeout 与锁超时错误"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q10",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "dependency_unavailable",
+      "query": "触发 PostgresExporterDown 且 pg_up 缺失时，如何检查 postgres_monitor 角色权限和 Exporter 抓取状态？",
+      "expected_doc_ids": [
+        "order-db-exporter-down"
+      ],
+      "expected_heading_hints": [
+        "监控缺失与数据库宕机的区分",
+        "检查 postgres_monitor 只读监控角色"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q11",
+      "split": "dev",
+      "service": "order-service",
+      "category": "stale_doc",
+      "query": "order-service 发生 500 故障时，还能按照旧流程去查 MySQL 3306 或者直接 systemctl restart order-api 吗？现行处理步骤是什么？",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx",
+        "order-service-db-dependency-failure"
+      ],
+      "expected_heading_hints": [
+        "快速分流：应用异常与数据库异常",
+        "审批执行 disable_demo_regression"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q12",
+      "split": "dev",
+      "service": "order-db",
+      "category": "stale_doc",
+      "query": "order-db 连接不通或报连接拒绝时，能否执行 docker compose down -v 删除数据卷重建或用 pg_ctl immediate 强杀？",
+      "expected_doc_ids": [
+        "order-db-unavailable"
+      ],
+      "expected_heading_hints": [
+        "四阶段连通性探针诊断",
+        "DNS 与 TCP 5432 端口检查"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q13",
+      "split": "dev",
+      "service": "inventory-service",
+      "category": "stale_doc",
+      "query": "inventory-service 出现 503 或 500 时，需要连接 redis-inventory:6379 执行 FLUSHDB 或调用 /api/v1/stock/flush 吗？",
+      "expected_doc_ids": [
+        "inventory-service-high-5xx",
+        "inventory-service-backpressure-circuit-breaker"
+      ],
+      "expected_heading_hints": [
+        "服务特征与无数据库依赖边界",
+        "抑制重试放大与限流恢复"
+      ],
+      "forbidden_doc_ids": [
+        "inventory-service-legacy-cache-sop"
+      ]
+    },
+    {
+      "query_id": "q14",
+      "split": "holdout",
+      "service": "order-service",
+      "category": "stale_doc",
+      "query": "请求 /v1/orders/health 失败后可以直接 kill -9 重启订单服务进程吗？当前最新的恢复和审批方式是什么？",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx",
+        "order-service-service-down"
+      ],
+      "expected_heading_hints": [
+        "审批执行 disable_demo_regression",
+        "验证实例监听与健康端点"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q15",
+      "split": "holdout",
+      "service": "inventory-service",
+      "category": "stale_doc",
+      "query": "库存服务发生缓存击穿或限流拒绝时，现在的版本还需要清理 Redis 缓存吗？正确的限流恢复流程是什么？",
+      "expected_doc_ids": [
+        "inventory-service-backpressure-circuit-breaker"
+      ],
+      "expected_heading_hints": [
+        "抑制重试放大与限流恢复"
+      ],
+      "forbidden_doc_ids": [
+        "inventory-service-legacy-cache-sop"
+      ]
+    },
+    {
+      "query_id": "q16",
+      "split": "dev",
+      "service": "order-service",
+      "category": "chinese_paraphrase",
+      "query": "订单服务接口失败率突然飙升，怎么分清是业务代码写坏了还是后面的数据库连不上？",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx",
+        "order-service-db-dependency-failure"
+      ],
+      "expected_heading_hints": [
+        "判断日志中的 error_type",
+        "排查顺序：先依赖后应用"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q17",
+      "split": "dev",
+      "service": "order-db",
+      "category": "chinese_paraphrase",
+      "query": "抓不到数据库监控数据的时候，能不能直接认为数据库已经挂了？",
+      "expected_doc_ids": [
+        "order-db-exporter-down"
+      ],
+      "expected_heading_hints": [
+        "监控缺失与数据库宕机的区分"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q18",
+      "split": "holdout",
+      "service": "inventory-service",
+      "category": "chinese_paraphrase",
+      "query": "库存服务的响应耗时变高，P95 超过了 500 毫秒，需要去查 PostgreSQL 数据库是不是有慢 SQL 吗？",
+      "expected_doc_ids": [
+        "inventory-service-high-latency"
+      ],
+      "expected_heading_hints": [
+        "排除不存在的下游数据库误判",
+        "检查运行时慢请求标志位"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-lock-waits-and-slow-queries",
+        "order-service-high-latency"
+      ]
+    },
+    {
+      "query_id": "q19",
+      "split": "holdout",
+      "service": "order-service",
+      "category": "chinese_paraphrase",
+      "query": "监控显示订单服务抓取状态变成 0 了，是不是意味着服务进程一定已经崩溃退出了？",
+      "expected_doc_ids": [
+        "order-service-service-down"
+      ],
+      "expected_heading_hints": [
+        "告警语义与常见误区",
+        "验证实例监听与健康端点"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q20",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "chinese_paraphrase",
+      "query": "数据库里堆了很多开启了事务但一直挂着不提交的连接，把可用连接数占满了该怎么办？",
+      "expected_doc_ids": [
+        "order-db-connection-pool-saturation"
+      ],
+      "expected_heading_hints": [
+        "排查 idle in transaction 长事务",
+        "应急处置与恢复观察"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q21",
+      "split": "dev",
+      "service": "order-db",
+      "category": "exact_code",
+      "query": "PG_CONN_REFUSED",
+      "expected_doc_ids": [
+        "order-db-unavailable"
+      ],
+      "expected_heading_hints": [
+        "DNS 与 TCP 5432 端口检查"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop",
+        "inventory-service-service-down"
+      ]
+    },
+    {
+      "query_id": "q22",
+      "split": "dev",
+      "service": "order-service",
+      "category": "exact_code",
+      "query": "ERR_ORDER_TIMEOUT",
+      "expected_doc_ids": [
+        "order-service-high-latency"
+      ],
+      "expected_heading_hints": [
+        "告警触发条件与延迟指标",
+        "区分应用层延迟与下游 order-db 慢查询"
+      ],
+      "forbidden_doc_ids": [
+        "inventory-service-high-latency"
+      ]
+    },
+    {
+      "query_id": "q23",
+      "split": "dev",
+      "service": "inventory-service",
+      "category": "exact_code",
+      "query": "INV_503_BACKPRESSURE",
+      "expected_doc_ids": [
+        "inventory-service-backpressure-circuit-breaker",
+        "inventory-service-high-5xx"
+      ],
+      "expected_heading_hints": [
+        "背压触发机制与错误标识",
+        "INV_503_BACKPRESSURE 限流背压触发"
+      ],
+      "forbidden_doc_ids": [
+        "inventory-service-legacy-cache-sop"
+      ]
+    },
+    {
+      "query_id": "q24",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "exact_code",
+      "query": "PG_LOCK_WAIT_TIMEOUT",
+      "expected_doc_ids": [
+        "order-db-lock-waits-and-slow-queries"
+      ],
+      "expected_heading_hints": [
+        "锁等待指标与上游症状关联",
+        "核对 statement_timeout 与锁超时错误"
+      ],
+      "forbidden_doc_ids": [
+        "order-db-legacy-backup-restart-sop"
+      ]
+    },
+    {
+      "query_id": "q25",
+      "split": "holdout",
+      "service": "order-service",
+      "category": "exact_code",
+      "query": "SIMULATE_CODE_REGRESSION",
+      "expected_doc_ids": [
+        "order-service-high-http-5xx",
+        "order-service-deployment-rollback"
+      ],
+      "expected_heading_hints": [
+        "核对运行版本与回归开关",
+        "核心业务文件 app.py 与观测埋点"
+      ],
+      "forbidden_doc_ids": [
+        "order-service-legacy-sop-v1"
+      ]
+    },
+    {
+      "query_id": "q26",
+      "split": "dev",
+      "service": "order-service",
+      "category": "no_match",
+      "query": "Kubernetes HPA 自动扩缩容未触发且 Istio mTLS 证书轮转失败怎么排查？",
+      "expected_doc_ids": [],
+      "expected_heading_hints": [],
+      "forbidden_doc_ids": []
+    },
+    {
+      "query_id": "q27",
+      "split": "dev",
+      "service": "inventory-service",
+      "category": "no_match",
+      "query": "orders 表写入报 Alembic 迁移版本冲突或主键序列溢出怎么处理？",
+      "expected_doc_ids": [],
+      "expected_heading_hints": [],
+      "forbidden_doc_ids": [
+        "order-db-lock-waits-and-slow-queries",
+        "order-db-unavailable"
+      ]
+    },
+    {
+      "query_id": "q28",
+      "split": "holdout",
+      "service": "order-db",
+      "category": "no_match",
+      "query": "Kafka Consumer Lag 消费堆积告警如何重置分区偏移量？",
+      "expected_doc_ids": [],
+      "expected_heading_hints": [],
+      "forbidden_doc_ids": []
+    },
+    {
+      "query_id": "q29",
+      "split": "holdout",
+      "service": "order-service",
+      "category": "no_match",
+      "query": "第三方微信支付回调验签失败（WECHAT_PAY_SIGN_INVALID）导致退款异步通知重试怎么处理？",
+      "expected_doc_ids": [],
+      "expected_heading_hints": [],
+      "forbidden_doc_ids": []
+    },
+    {
+      "query_id": "q30",
+      "split": "holdout",
+      "service": "inventory-service",
+      "category": "no_match",
+      "query": "Elasticsearch 索引分片 UNASSIGNED 且 JVM YoungGC 频繁停顿如何调整堆内存？",
+      "expected_doc_ids": [],
+      "expected_heading_hints": [],
+      "forbidden_doc_ids": []
+    }
+  ]
+}

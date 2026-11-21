@@ -10,6 +10,7 @@ from sqlalchemy import (
     Computed,
     ForeignKeyConstraint,
     Index,
+    Integer,
     MetaData,
     PrimaryKeyConstraint,
     SmallInteger,
@@ -17,7 +18,13 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.mysql import DATETIME, MEDIUMTEXT, TEXT, insert as mysql_insert
+from sqlalchemy.dialects.mysql import (
+    DATETIME,
+    MEDIUMBLOB,
+    MEDIUMTEXT,
+    TEXT,
+    insert as mysql_insert,
+)
 
 TABLE_OPTIONS = {
     "mysql_engine": "InnoDB",
@@ -323,6 +330,96 @@ remediation_state = Table(
     PrimaryKeyConstraint("id", name="pk_remediation_state"),
     CheckConstraint("id = 1", name="ck_remediation_state_singleton"),
     CheckConstraint("revision >= 0", name="ck_remediation_state_revision"),
+    **TABLE_OPTIONS,
+)
+
+# InnoDB ngram FULLTEXT boolean phrase queries on uppercase ASCII tokens fail
+# under utf8mb4_0900_bin; keep identifier columns binary and search text ai_ci.
+SEARCH_TEXT_COLLATION = "utf8mb4_0900_ai_ci"
+
+knowledge_documents = Table(
+    "knowledge_documents",
+    metadata,
+    Column("doc_pk", BigInteger, primary_key=True, autoincrement=True),
+    Column("document_id", String(120), nullable=False),
+    Column("service", String(200), nullable=False),
+    Column("title", String(300), nullable=False),
+    Column("source", String(300), nullable=False),
+    Column("published_version_id", String(120), nullable=True),
+    Column("created_at", UTC_DATETIME, nullable=False),
+    Column("updated_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("doc_pk", name="pk_knowledge_documents"),
+    UniqueConstraint("document_id", name="uq_knowledge_documents_document_id"),
+    Index("ix_knowledge_documents_service", "service"),
+    Index("ix_knowledge_documents_published_version", "published_version_id"),
+    **TABLE_OPTIONS,
+)
+
+knowledge_versions = Table(
+    "knowledge_versions",
+    metadata,
+    Column("version_pk", BigInteger, primary_key=True, autoincrement=True),
+    Column("version_id", String(120), nullable=False),
+    Column("document_id", String(120), nullable=False),
+    Column("content_sha256", String(64), nullable=False),
+    Column("raw_markdown", MEDIUMTEXT(), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("created_at", UTC_DATETIME, nullable=False),
+    PrimaryKeyConstraint("version_pk", name="pk_knowledge_versions"),
+    UniqueConstraint("version_id", name="uq_knowledge_versions_version_id"),
+    UniqueConstraint(
+        "document_id",
+        "content_sha256",
+        name="uq_knowledge_versions_document_sha256",
+    ),
+    ForeignKeyConstraint(
+        ["document_id"],
+        ["knowledge_documents.document_id"],
+        name="fk_knowledge_versions_document_id_knowledge_documents",
+    ),
+    Index("ix_knowledge_versions_document_status", "document_id", "status"),
+    Index("ix_knowledge_versions_document_created", "document_id", "created_at"),
+    **TABLE_OPTIONS,
+)
+
+knowledge_chunks = Table(
+    "knowledge_chunks",
+    metadata,
+    Column("chunk_pk", BigInteger, primary_key=True, autoincrement=True),
+    Column("chunk_id", String(120), nullable=False),
+    Column("version_id", String(120), nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column(
+        "heading_path",
+        String(500, collation=SEARCH_TEXT_COLLATION),
+        nullable=False,
+    ),
+    Column("start_line", Integer, nullable=False),
+    Column("end_line", Integer, nullable=False),
+    Column(
+        "chunk_text",
+        MEDIUMTEXT(collation=SEARCH_TEXT_COLLATION),
+        nullable=False,
+    ),
+    Column("embedding_model", String(120), nullable=True),
+    Column("embedding_dim", Integer, nullable=True),
+    Column("embedding_vector", MEDIUMBLOB(), nullable=True),
+    PrimaryKeyConstraint("chunk_pk", name="pk_knowledge_chunks"),
+    UniqueConstraint("chunk_id", name="uq_knowledge_chunks_chunk_id"),
+    ForeignKeyConstraint(
+        ["version_id"],
+        ["knowledge_versions.version_id"],
+        name="fk_knowledge_chunks_version_id_knowledge_versions",
+    ),
+    Index("ix_knowledge_chunks_version_ordinal", "version_id", "ordinal"),
+    Index("ix_knowledge_chunks_embedding", "embedding_model", "embedding_dim"),
+    Index(
+        "ft_knowledge_chunks_heading_text",
+        "heading_path",
+        "chunk_text",
+        mysql_prefix="FULLTEXT",
+        mysql_with_parser="ngram",
+    ),
     **TABLE_OPTIONS,
 )
 
