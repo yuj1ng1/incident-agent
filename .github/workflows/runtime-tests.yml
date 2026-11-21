@@ -42,6 +42,10 @@ jobs:
           INCIDENT_AGENT_CLEAN_ENV: '1'
           INCIDENT_AGENT_TEST_DATABASE_URL: mysql+pymysql://root:ci-local-only@127.0.0.1:${{ job.services.mysql.ports[3306] }}/bootstrap?charset=utf8mb4
         run: .ci-venv/bin/python -B -m pytest tests -q --disable-warnings
+      - name: Verify agent image packages knowledge module and corpus
+        run: |
+          docker build --target agent -f deploy/Dockerfile -t incident-agent-ci-check:local .
+          docker run --rm incident-agent-ci-check:local python -B -c "from pathlib import Path; import agent.agent, web_api.app; from knowledge.evaluator import import_corpus_into_store, load_corpus_documents, load_eval_queries; docs = load_corpus_documents(Path('/app/knowledge/corpus')); queries = load_eval_queries(Path('/app/knowledge/eval/queries.json')); assert len(docs) == 16 and len(queries) == 30"
 
   windows-remediation:
     runs-on: windows-latest

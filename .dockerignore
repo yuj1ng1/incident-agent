@@ -15,6 +15,9 @@
 !clients/**/*.py
 !db/**/*.py
 !investigation/**/*.py
+!knowledge/**/*.py
+!knowledge/corpus/*.md
+!knowledge/eval/queries.json
 !migrations/**/*.py
 !model_client/**/*.py
 !model_client/tokenizers/**

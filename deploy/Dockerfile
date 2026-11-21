@@ -10,6 +10,7 @@ COPY agent_logger agent_logger
 COPY clients clients
 COPY db db
 COPY investigation investigation
+COPY knowledge knowledge
 COPY migrations migrations
 COPY model_client model_client
 COPY models models
