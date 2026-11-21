@@ -1,7 +1,8 @@
 # 第一阶段回归修复、Web 真实性补齐与部署验收报告
 
-- 完成时间：2026-11-20 17:13:33 +08:00（Asia/Shanghai）
-- 基线起点：分支 `main`，`HEAD` 为 `bd07321161d9f02160f1a0b73bc756279a428d7a`（本次未暂存、未提交、未推送）
+- 本次正文更新时间：2026-11-21 11:29:58 +08:00（Asia/Shanghai）
+- 原部署验收完成时间：2026-11-20 17:13:33 +08:00（Asia/Shanghai）
+- 原修复基线：`main` / `bd07321161d9f02160f1a0b73bc756279a428d7a`；P6.5 与 Web 来源修复现已包含在远端 `89329b05037773a68025077b00a51fdcf6e11545`。P95 收官以该 SHA 为基线，第八节记录补齐的验证。
 - 验收范围：对照 [开发路线图](INCIDENT_AGENT_DEVELOPMENT_PLAN_2026-11-11_10-49-02.md) 第一阶段（部署、迁移、观测页面、`demo_replay` 回放演示及已发现缺陷修复），未进入第二阶段知识库、第三阶段 SSE/Web 人工回复或 MCP
 - 模型调用边界：**新增真实模型请求 0 次**；全部真实模型发送门禁保持关闭，未加载 `.env` 真实密钥，未继续旧 Session，未移除任何旧 `STOP_MODEL`
 
@@ -10,8 +11,8 @@
 ## 一、核心结论（分别判定）
 
 1. **第一阶段代码交付状态**：**已完成本轮目标修复与补齐。** 已复现并修复 [tests/test_p65_readonly_investigation.py](../tests/test_p65_readonly_investigation.py) 中唯一的回归失败，并补齐 `web_api/`、`frontend/`、[alert_parser.py](../alert_parser.py)、[models/incident.py](../models/incident.py)、[agent/agent.py](../agent/agent.py)、[main.py](../main.py) 与 [investigation/manager.py](../investigation/manager.py) 中的结果可信状态分离展示、Incident/Session 页面一致性、来源保留与未记录预算展示。
-2. **本地最终候选验收结论**：**第一阶段基线与 `demo_replay` 部署验收通过；真实模型调查能力尚未验收。** 最终冻结候选在隔离 MySQL 8.4.13 下完成与 CI 对齐的完整后端回归（**2953 passed, 190 subtests passed**，退出码 `0`）、Windows 专项回归（**356 passed, 81 subtests passed**，退出码 `0`）、前端回归与构建（**91 passed**、`tsc --noEmit` 与 Vite 构建退出码 `0`、OpenAPI 契约测试 **1 passed**）、Edge 浏览器多状态/窄屏/键盘实测，以及基于隔离源码的 Compose `demo_replay` 完整故障/恢复/跨机重启回读验收。上述结果不构成“真实多轮模型调查达到可用标准”。
-3. **远端 CI 状态**：**未更新（旧提交仍为失败）。** 远端 `HEAD`（`bd07321161d9f02160f1a0b73bc756279a428d7a`）上的 [GitHub Actions 第 71 轮](https://github.com/yuj1ng1/incident-agent/actions/runs/44248874248) 结论仍为 `failure`（`frontend`、`windows-remediation` 成功，`tests` 为 1 failed / 2843 passed / 107 skipped / 190 subtests passed，唯一失败即为本轮已修复的 P6.5 离线恢复用例）。因本轮未执行提交与推送，且按约束未重跑旧 SHA，远端 CI 需在获得提交/推送授权后针对新提交重新验证。
+2. **本地验收结论**：以下为 **2026-11-20 原候选的历史验收**，不能作为本轮 P95 候选完成部署验证的证据；P95 首次验证见第七节，收官复验见第八节。原候选在隔离 MySQL 8.4.13 下完成与 CI 对齐的完整后端回归（**2953 passed, 190 subtests passed**，退出码 `0`）、Windows 专项回归（**356 passed, 81 subtests passed**，退出码 `0`）、前端回归与构建（**91 passed**、`tsc --noEmit` 与 Vite 构建退出码 `0`、OpenAPI 契约测试 **1 passed**）、Edge 浏览器多状态/窄屏/键盘实测，以及基于隔离源码的 Compose `demo_replay` 完整故障/恢复/跨机重启回读验收。上述结果不构成“真实多轮模型调查达到可用标准”。
+3. **基线远端 CI 状态**：远端 `main` 为 `89329b05037773a68025077b00a51fdcf6e11545`，[第 72 轮](https://github.com/yuj1ng1/incident-agent/actions/runs/44853739807) 已完成，总结论 `failure`。[tests](https://github.com/yuj1ng1/incident-agent/actions/runs/44853739807/job/136690899233) 与 [windows-remediation](https://github.com/yuj1ng1/incident-agent/actions/runs/44853739807/job/136690899270) 均为 `success`；[frontend](https://github.com/yuj1ng1/incident-agent/actions/runs/44853739807/job/136690899046) 为 `failure`（90 passed / 1 failed，执行确认用例未找到“补偿后独立验证未通过”）。本地本轮完整前端运行 93 passed，未据此推断远端已恢复；当时的查询覆盖基线 SHA。
 
 ---
 
@@ -93,7 +94,7 @@
 
 ---
 
-## 五、当前保留运行的 `demo_replay` 工作台与停止方式
+## 五、原验收保留的 `demo_replay` 工作台与停止方式（历史配置）
 
 - **Web 工作台地址**：`http://127.0.0.1:8088`（就绪探针 `http://127.0.0.1:8088/readyz`，演示案例 `inc-eb53187c` / `ses-a168e860d08c4f3593b973de9465e849`）
 - **订单服务地址**：`http://127.0.0.1:18001`（`/version` 确认 `simulate_code_regression: false`，`/order` 返回 HTTP 200 正常订单）
@@ -122,3 +123,56 @@
   2. 另行授予多轮真实模型调用预算与发送许可后，验证完整 Compose 真实故障下的多轮 `function_call` / `call_id` 证据采集、结论来源引用准确性与语义可信审核闭环；
   3. 由真实人类操作者完成正式 Remediation 审批记录（已有记录仅为自动化身份验证与回放演示）；
   4. 后续按路线图另行启动第二阶段知识库、第三阶段 SSE/Web 人工回复与 MCP 开发。
+
+---
+
+## 七、P95 区间查询候选首次验证（2026-11-21）
+
+### 修复与公开契约
+
+参考 Prometheus 官方 [HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/) 与 [histogram_quantile 说明](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile)，区分提示、查询失败与数值是否有效。
+
+- 原因：`tools/metrics.py::_parse_metric_range_response` 将任意非空 `infos` 与失败响应等同，丢弃了 Prometheus 已返回的有效 `matrix` 样本。
+- 区间查询现在接受最多 8 条、每条 1～512 字符的字符串提示，保留在 `infos`；错误或超限响应不保留样本。`warnings`、非法结构、NaN/Inf、非法类型、越界时间点、非法时间网格、重复时间点及越界数值的拒绝逻辑保持不变。
+- `/api/incidents/{incident_id}/signals` 的 `MetricSignal` 新增必返 `infos: string[]`，使用 Pydantic 同时限制条数与字符串长度；`web_api/observations.py` 复用 `web_api/queries.py::public_text` 脱敏。OpenAPI 快照与 TypeScript 类型已同步。
+- `IncidentSignalsPanel` 在曲线或无样本状态下展示纯文本提示；不会执行提示中的 HTML、补零或补造样本。P95 单调性修正提示保留给操作者判断，不能当成数据完全健康的证明。
+- 复用现有解析、脱敏与展示链路，没有新增依赖、持久化格式、工具权限或模型预算；未进入第二阶段。
+
+### 初次实际验证
+
+| 检查 | 实际结果 | 边界 |
+| --- | --- | --- |
+| 修复前指标定向回归 | 5 failed / 32 passed，退出码 1 | 复现合法提示被拒绝、缺失 `infos` 和空区间错误原因；均为 Mock HTTP |
+| 修复前前端 P95 定向回归 | 1 failed，退出码 1 | 曲线存在但缺少提示文字 |
+| 修复后指标/契约专项 | 56 passed，退出码 0 | 含 5/9 样本、8×512 上界、越界拒绝、无样本及缺口 |
+| 指标与契约离线回归 | 523 passed / 25 deselected，退出码 0 | `test_metric_ranges.py`、`test_metrics_aligned.py`、`test_metric_timestamps.py`、`test_frontend_contract.py`；25 项需 MySQL 的用例未运行，非通过或跳过 |
+| 前端完整单测 | 6 文件 / 93 passed，退出码 0 | 含 P95 提示、HTML 按文本展示及空区间不绘图；远端既有失败用例本地通过 |
+| TypeScript 与生产构建 | `tsc --noEmit`、`npm run build` 均退出码 0 | 构建含再次类型检查 |
+| Web API HTTP / MySQL 回归 | 当前环境阻断，未完成 | TestClient 初始化停在 Windows asyncio `_fallback_socketpair` 的 `accept`；已中止本轮拥有的阻塞任务，未修改测试或业务代码来绕过限制 |
+| Compose 镜像与 `inc-eb53187c/signals` | 当前环境阻断，未完成 | Docker 引擎已启动，但执行进程访问 Docker 命名管道被拒；8088 本机套接字同样被权限拒绝，尚未重构建或重启容器 |
+| 新提交远端 CI | 待候选审阅与提交推送后验证 | 旧 SHA 第 72 轮实际结果见上文，未重跑旧 SHA |
+
+本轮开始时已有 `test_metric_ranges.py`、`test_web_api.py` 与 `frontend/tests/pages.test.tsx` 的 P95 回归测试修改。保留并补充这些测试，未覆盖个人文件。另一次同时运行两个前端定向用例出现查询等待超时；之后完整前端 92 项及补充空区间用例后的最终完整 93 项运行均通过，未放宽生产行为或测试断言。
+
+本机直接启动说明已补齐 Python 3.12 锁定依赖、显式 `INCIDENT_AGENT_DATABASE_URL`、`PYTHON_DOTENV_DISABLED=1` 与 `demo_replay` 示例，仅使用账号/密码/端口/schema 占位符。已核对锁定的 python-dotenv 1.2.3 实现确实支持该禁用环境变量；`INCIDENT_AGENT_CLEAN_ENV` 不是 `main.py` 禁用 dotenv 的开关。
+
+### 保护与交付状态
+
+- 开始时旧基线 633 个文件全部匹配；最终 629 个保持原 SHA-256，4 个差异仅为本次授权的部署指南改写/重命名及 3 处对应文档链接，未授权变更或缺失为 0。README 同步更新指南链接。6 个旧停止文件保留，2 份历史 SQLite 账本以 immutable/read-only 方式核对仍为 `CLOSED`，请求/工具计数均保持 1/1，前后 SHA-256 与原基线一致。本轮真实模型请求为 0，未加载真实 `.env`、未恢复旧 Session。
+- 历史审计证据仍记录 38 项警告：16 项 `legacy_checkpoint_event_identity_unavailable`、22 项 `checkpoint_result_display_count_mismatch`，原记录 `errors_count == 0`。本轮没有修改运行库或清除警告；当前环境尚不能重新连接数据库执行一致性核验。
+- P6.5 与 Web 真实性/来源修复已有提交，当前候选仅增加 P95 修复、相关契约与测试及本机启动说明和验收记录。不重复提交既有修复，不改写历史。
+- `prompts/agent_prompt.py`、`temp_test.py`、`command.md`、`.pytest_tmp_*`、其他历史未跟踪报告与 `D:\codex use\` 全部不纳入当前候选；本轮日志与临时验证文件位于已忽略的 `build/stage1-final-20261121/`。
+- `git add` 定向暂存也被当前只读 `.git` 权限拒绝（无法创建 `.git/index.lock`），真实暂存区保持为空，HEAD 与通过 GitHub API 核对的 `origin/main` 仍为 `89329b05037773a68025077b00a51fdcf6e11545`。尚未执行 `git commit` 或 `git push`。可以在忽略的临时目录生成独立索引和对象库用于候选预览；该预览不等于真实暂存或提交。
+- 当前尚未完成全部收官条件。需要在允许本机套接字、Docker 命名管道和 `.git` 写入的执行环境继续受阻的 Web/MySQL 与隔离工作台验证，再按用户要求确认实际暂存清单、提交说明与统计，获确认后提交推送，并据新 SHA 的三个 job 实际结果更新本记录。
+
+---
+
+## 八、P95 收官复验
+
+- Git 定向暂存预检可创建索引锁，`git ls-remote` 核对的提交前远端 `main` 为 `89329b05037773a68025077b00a51fdcf6e11545`。再次查询第 72 轮三个 job 并读取 frontend 失败日志，结果与基线记录一致。
+- 从基线提交导出源码并覆盖本次允许的 P95 文件。在 Python 3.12.14、Windows 和全新回环 MySQL 8.4.13 容器上，指标、OpenAPI 契约、Web API、Web 修复接口和回放回归共 **633 passed**，包括 58 项 Web API 测试。P95 非法样本与脱敏用例使用 Mock Prometheus 响应，存储回归使用隔离 MySQL。测试容器已移除。
+- Windows 使用 Node 24.15.0 重新执行 `npm ci`、`npm test` 和 `npm run build`，**6 个文件共 93 项通过**，TypeScript 检查和生产构建通过。前端测试覆盖提示的纯文本展示和空区间。
+- 从同一份候选源码重新构建 Compose 的 API 和前端镜像。核对原演示项目、专属网络、卷及容器配置后，临时启动读取历史观测所需的依赖，挂接本轮临时 API 和前端。入口 `/readyz` 返回 `ok / read_only=true`，生产前端资源包含 P95 提示视图。原 Monitor 与迁移容器保持停止，候选 API 采用 `demo_replay` 且密钥为空。
+- 回读既有 `inc-eb53187c` 与 `ses-a168e860d08c4f3593b973de9465e849`，记录为 `verified`、`demo_replay`、`trusted=false`。真实 Prometheus 3.15.0 在告警窗口的 41 个采样位置返回 **9 个 P95 样本和 1 条单调性修正提示**，候选 `signals` 的样本时间、数值及提示与原始响应一致。该接口同时返回 9 个 5xx、18 个 CPU、18 个 RSS 样本及 50 条 Loki 日志。
+- 实际 `GET /order` 返回 HTTP 200 和订单记录，`/version` 确认故障开关关闭。本轮使用健康的历史案例，故障注入次数和真实模型请求均为 0。已移除临时候选容器，将原演示栈恢复到开始时的停止状态，并保留其数据卷。
+- 按旧基线复核历史证据和停止文件。6 个停止文件均在，两份账本保持 `CLOSED` 且哈希一致，历史审计记录保持原样。本轮日志位于 Git 忽略目录 `build/stage1-p95-closeout-20261121/`。推送后用交付提交 SHA 对应的 GitHub Actions 运行记录核对远端 CI。

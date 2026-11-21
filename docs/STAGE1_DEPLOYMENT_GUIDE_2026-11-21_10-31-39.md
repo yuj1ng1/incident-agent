@@ -14,6 +14,32 @@ docker compose up --build -d --wait --wait-timeout 180
 
 Compose 仅向主机回环地址发布工作台和订单端口，数据库、Prometheus 和 Loki 通过内部网络访问。文件中的密码用于本地演示。已有宿主机 MySQL、订单库和其他 Compose 项目各自使用原有资源。
 
+## 直接从宿主机启动 Python 入口
+
+直接运行 `main.py`、`python -m alembic` 或 Web API 时，必须显式设置
+`INCIDENT_AGENT_DATABASE_URL`，指向已创建的 MySQL schema。程序没有文件存储或
+默认数据库回退；Compose 内部的 `mysql` 服务名也不能直接用作宿主机地址。
+
+使用 **Python 3.12** 创建独立环境，并安装锁定依赖。以下连接串仅为占位符，
+执行前替换为自己的本机测试账号、端口及空 schema；真实凭据不要写入仓库。
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.lock.txt
+.\.venv\Scripts\python -m pip check
+
+$env:INCIDENT_AGENT_DATABASE_URL = 'mysql+pymysql://<user>:<password>@127.0.0.1:<port>/<database>?charset=utf8mb4'
+$env:PYTHON_DOTENV_DISABLED = '1'
+$env:INCIDENT_AGENT_MODEL_MODE = 'demo_replay'
+.\.venv\Scripts\python -m alembic upgrade head
+.\.venv\Scripts\python main.py
+```
+
+`PYTHON_DOTENV_DISABLED=1` 禁止入口加载 `.env`，`demo_replay` 使用回放响应。
+数据库 URL、监控端点与订单服务地址需要匹配自己的隔离环境。运行测试时改用
+`requirements-test.lock.txt` 安装测试依赖，并单独配置
+`INCIDENT_AGENT_TEST_DATABASE_URL`，不得指向真实运行库。
+
 ## 一次完整故障演示
 
 在 Python 3.12 环境执行项目自带验收入口。
@@ -25,6 +51,12 @@ python scripts/stage1_demo_acceptance.py
 脚本先确认项目标签、完整订单源码 SHA、端口和健康基线，再给本次订单容器启用 SIMULATE_CODE_REGRESSION，持续访问真实 /order。Prometheus 按原有规则触发 HighHttp5xxRate，Monitor 建立 Incident，Worker 查询指标和日志。
 
 在工作台筛选 order-service，进入相应 Incident。观测区域显示同一告警时间窗的 HTTP 5xx、P95、进程 CPU、进程常驻内存和日志。曲线保留采样缺口，各项分别显示样本、无样本或查询失败。CPU 单位为消耗的核数，内存为应用进程 RSS。
+
+Prometheus 返回的合法 `infos` 会在对应曲线下作为“Prometheus 查询提示”显示，
+最多 8 条、每条 512 字符，经过脱敏且按纯文本展示。P95 单调性修正提示说明
+直方图输入需要检查；保留提示与有效数值不等于确认数据完全健康。
+`warnings`、非法响应结构、非有限数值、越界时间点及越界数值仍拒绝整段结果；
+没有样本时不补零。
 
 脚本在 finally 中关闭故障开关，等待原有业务恢复验证返回 HTTP 200 和 verified。随后停止 Monitor/API、重启 MySQL，再启动 Monitor/API，比较已保存 Incident 和 Session 的回读结果。成功输出包含 restart_readback=true、fault_flag_restored=true。
 

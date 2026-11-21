@@ -1355,6 +1355,16 @@
     "MetricSignal": {
       "additionalProperties": false,
       "properties": {
+        "infos": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Infos",
+          "type": "array"
+        },
         "metric": {
           "enum": [
             "http_5xx_rate",
@@ -1398,7 +1408,8 @@
         "metric",
         "status",
         "reason",
-        "samples"
+        "samples",
+        "infos"
       ],
       "title": "MetricSignal",
       "type": "object"

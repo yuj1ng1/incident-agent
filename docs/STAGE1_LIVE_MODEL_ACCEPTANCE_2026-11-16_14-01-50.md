@@ -22,7 +22,7 @@
 | 模型 | 原项目 `config.py` 中的 `deepseek-flash`，官方 `https://api.deepseek.com/responses`；响应也返回该别名，未独立核实实际服务端修订版本 |
 | 冻结参数 SHA-256 | `2d28e8f6c13418b5832c60af9a396edcdd5908ae8128b6e482dd77b46b421483` |
 
-未运行持续监控的原样 `main.py`，也未使用 `stage1_demo_acceptance.py` 的固定回放话术判定模型成功。受控入口的结果不能外推为原样 main.py 已通过。准备前已阅读当前 AGENTS.md、[阶段一验收](STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md) 和 [部署指南](STAGE1_DEPLOYMENT_GUIDE_2026-11-15_12-54-50.md)。
+未运行持续监控的原样 `main.py`，也未使用 `stage1_demo_acceptance.py` 的固定回放话术判定模型成功。受控入口的结果不能外推为原样 main.py 已通过。准备前已阅读当前 AGENTS.md、[阶段一验收](STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md) 和 [部署指南](STAGE1_DEPLOYMENT_GUIDE_2026-11-21_10-31-39.md)。
 
 ## 隔离、守卫和约束偏差
 

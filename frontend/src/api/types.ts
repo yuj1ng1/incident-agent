@@ -67,6 +67,7 @@ export interface MetricSignal {
   status: SignalStatus;
   reason: string | null;
   samples: { evaluated_at: string; value: number }[];
+  infos: string[];
 }
 
 export interface IncidentSignals {

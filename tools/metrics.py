@@ -30,6 +30,8 @@ ALIGNED_LIMITATIONS = [
 ]
 MAX_ALIGNED_PROMQL_BYTES = 4096
 MAX_ALIGNED_LABEL_BYTES = 2048
+MAX_RANGE_INFOS = 8
+MAX_RANGE_INFO_LENGTH = 512
 
 
 prometheus_client=PrometheusClient(
@@ -341,6 +343,7 @@ def query_metric_range(
         "use_for_current_state": False,
         "samples": [],
         "sample_count": 0,
+        "infos": [],
         "missing_point_count": None,
         "missing_evaluated_at": [],
         "truncated": None,
@@ -442,12 +445,15 @@ def query_metric_range(
     if len(encoded) > MAX_RANGE_RESPONSE_BYTES:
         return {
             key: value for key, value in result.items()
-            if key not in {"samples", "series_labels", "promql", "missing_evaluated_at"}
+            if key not in {
+                "samples", "series_labels", "promql", "missing_evaluated_at", "infos",
+            }
         } | {
             "status": "no_data",
             "reason": "metric_range_result_size_limit",
             "samples": [],
             "sample_count": 0,
+            "infos": [],
             "missing_point_count": None,
             "missing_evaluated_at": [],
             "truncated": True,
@@ -753,10 +759,21 @@ def _parse_metric_range_response(
             not isinstance(response, dict)
             or response.get("status") != "success"
             or response.get("warnings", []) != []
-            or response.get("infos", []) != []
             or not isinstance(response.get("data"), dict)
             or response["data"].get("resultType") != "matrix"
             or not isinstance(response["data"].get("result"), list)
+        ):
+            raise ValueError("invalid_metrics_range_response")
+        # Prometheus can return valid samples alongside informational query
+        # annotations. Keep them visible without weakening sample validation.
+        infos = response.get("infos", [])
+        if (
+            not isinstance(infos, list)
+            or len(infos) > MAX_RANGE_INFOS
+            or any(
+                not isinstance(info, str) or not 1 <= len(info) <= MAX_RANGE_INFO_LENGTH
+                for info in infos
+            )
         ):
             raise ValueError("invalid_metrics_range_response")
         series = response["data"]["result"]
@@ -823,6 +840,7 @@ def _parse_metric_range_response(
         "series_labels": labels,
         "samples": samples,
         "sample_count": len(samples),
+        "infos": infos,
         "missing_point_count": len(missing),
         "missing_evaluated_at": missing,
         "truncated": False,

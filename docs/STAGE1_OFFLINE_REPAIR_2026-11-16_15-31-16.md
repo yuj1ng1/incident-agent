@@ -6,7 +6,7 @@
 
 - 工作目录为 `D:\Incident Agent`，分支 main；开始和结束 HEAD 都是 `8e2bc425d304181e9cb95609db58b53e50820a8b`，暂存区为空，未提交、未推送。
 - 开始时本地 origin/main 引用与 HEAD 相同。本次未 fetch 或更新远端，不将本地引用当作最新远端查询结果。
-- 已阅读当前 AGENTS.md、[真实联调报告](STAGE1_LIVE_MODEL_ACCEPTANCE_2026-11-16_14-01-50.md)、[阶段一验收](STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md) 和 [部署指南](STAGE1_DEPLOYMENT_GUIDE_2026-11-15_12-54-50.md)。历史报告没有改写。
+- 已阅读当前 AGENTS.md、[真实联调报告](STAGE1_LIVE_MODEL_ACCEPTANCE_2026-11-16_14-01-50.md)、[阶段一验收](STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md) 和 [部署指南](STAGE1_DEPLOYMENT_GUIDE_2026-11-21_10-31-39.md)。历史报告没有改写。
 - 对原有 Prompt、temp_test.py、原隔离目录、原 data 和上一轮公开附件建立文件哈希清单，共 **9,191 个文件**；收尾时变更或缺失数为 **0**。没有 reset、clean 或覆盖旧证据。
 - 原根目录 `D:\codex use\2026-11-15\stage1-live-20261115-154614` 的 STOP_MODEL、WATCHDOG_DISARM 保留；账本仍是 CLOSED，模型/工具计数仍是 1/1。账本 SHA-256 仍为 `bf5180049f6411427e59a3850f83d40330dc75f13a2b5b4861aeed79a637a2f4`。
 - 原有 38 项历史审计警告没有删除、重解释、重新导入或通过补数据消除。旧 Session 的 EXHAUSTED / model_incomplete 和未执行的五个工具调用保持原证据含义。

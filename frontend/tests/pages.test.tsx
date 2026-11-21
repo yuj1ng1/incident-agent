@@ -82,9 +82,9 @@ it('renders samples, gaps and query failures independently in the alert window',
   const signals: IncidentSignals = {
     window: { start, end: '2026-11-11T02:02:00Z', step_seconds: 15 },
     metrics: [
-      { metric: 'http_5xx_rate', status: 'ok', reason: null, samples: [{ evaluated_at: start, value: 0 }] },
-      { metric: 'http_latency_p95_seconds', status: 'no_data', reason: 'no_samples_in_metric_range', samples: [] },
-      { metric: 'process_cpu_cores', status: 'error', reason: 'metrics_range_unreachable_or_invalid', samples: [] },
+      { metric: 'http_5xx_rate', status: 'ok', reason: null, samples: [{ evaluated_at: start, value: 0 }], infos: [] },
+      { metric: 'http_latency_p95_seconds', status: 'no_data', reason: 'no_samples_in_metric_range', samples: [], infos: [] },
+      { metric: 'process_cpu_cores', status: 'error', reason: 'metrics_range_unreachable_or_invalid', samples: [], infos: [] },
     ],
     logs: { status: 'ok', reason: null, truncated: false, entries: [{ timestamp: start, line: '<img> 订单业务错误' }] },
   };
@@ -94,6 +94,44 @@ it('renders samples, gaps and query failures independently in the alert window',
   expect(screen.getByText('这个时间窗没有指标样本')).toBeInTheDocument();
   expect(screen.getByText('指标查询失败')).toBeInTheDocument();
   expect(screen.getByText('<img> 订单业务错误')).toBeInTheDocument();
+});
+
+it('keeps the P95 curve visible with Prometheus infos and renders hints as text', async () => {
+  const start = '2026-11-11T02:00:00Z';
+  const info = 'PromQL info: input to histogram_quantile needed to be fixed for monotonicity';
+  const signals: IncidentSignals = {
+    window: { start, end: '2026-11-11T02:02:00Z', step_seconds: 15 },
+    metrics: [{
+      metric: 'http_latency_p95_seconds', status: 'ok', reason: null,
+      samples: [{ evaluated_at: start, value: 0.12 }],
+      infos: [info, '<img src=x onerror=alert(1)>'],
+    }],
+    logs: { status: 'no_data', reason: 'no_logs_in_query_range', truncated: false, entries: [] },
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => json(url.endsWith('/signals') ? signals : incident)));
+  const { container } = open('/incidents/inc-fixture');
+  expect(await screen.findByRole('img', { name: /P95 响应延迟曲线.*1 个样本.*120 ms/ })).toBeVisible();
+  expect(screen.getByText(info)).toBeVisible();
+  expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeVisible();
+  expect(screen.getByText('Prometheus 查询提示')).toBeVisible();
+  expect(screen.queryByText('指标查询失败')).not.toBeInTheDocument();
+  expect(container.querySelector('img')).toBeNull();
+});
+
+it('shows query hints for an empty P95 range without drawing samples', async () => {
+  const signals: IncidentSignals = {
+    window: { start: '2026-11-11T02:00:00Z', end: '2026-11-11T02:02:00Z', step_seconds: 15 },
+    metrics: [{
+      metric: 'http_latency_p95_seconds', status: 'no_data',
+      reason: 'no_samples_in_metric_range', samples: [], infos: ['No histogram observations'],
+    }],
+    logs: { status: 'no_data', reason: 'no_logs_in_query_range', truncated: false, entries: [] },
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => json(url.endsWith('/signals') ? signals : incident)));
+  open('/incidents/inc-fixture');
+  expect(await screen.findByText('这个时间窗没有指标样本')).toBeVisible();
+  expect(screen.getByText('No histogram observations')).toBeVisible();
+  expect(screen.queryByRole('img', { name: /P95 响应延迟曲线/ })).not.toBeInTheDocument();
 });
 
 it('uses an exact service filter across pages and keeps it when the status changes', async () => {

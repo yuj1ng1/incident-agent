@@ -124,6 +124,104 @@ def test_historical_points_and_local_request_times(prometheus):
     )
 
 
+MONOTONICITY_INFO = (
+    "PromQL info: input to histogram_quantile needed to be fixed for monotonicity "
+    "(see https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    "#histogram_quantile)"
+)
+
+
+@pytest.mark.parametrize("infos", [
+    [], [MONOTONICITY_INFO], ["mixed samples omitted"], ["x" * 512] * 8,
+])
+@pytest.mark.parametrize("point_count", [5, 9])
+def test_p95_range_preserves_valid_samples_and_bounded_infos(
+    prometheus,
+    infos,
+    point_count,
+):
+    samples = [
+        [(START + timedelta(seconds=i * 15)).timestamp(), "0.1"]
+        for i in range(point_count)
+    ]
+    set_payload(prometheus, matrix(samples) | {"infos": infos})
+    result = query_metric_range(**(WINDOW | {
+        "metric": "http_latency_p95_seconds",
+        "end": (START + timedelta(seconds=(point_count - 1) * 15)).isoformat(),
+    }))
+    assert result["status"] == "ok"
+    assert result["sample_count"] == point_count
+    assert result["samples"] == [
+        {"evaluated_at": (START + timedelta(seconds=i * 15)).isoformat(), "value": 0.1}
+        for i in range(point_count)
+    ]
+    assert result["missing_point_count"] == 0
+    assert result["infos"] == infos
+    assert result["use_for_current_state"] is False
+
+
+@pytest.mark.parametrize("infos", [
+    None, False, {}, "info", [None], [True], [1], [[]], [{}], [""],
+    ["x" * 513], ["info"] * 9,
+])
+def test_invalid_or_oversized_infos_reject_the_entire_range(prometheus, infos):
+    set_payload(prometheus, matrix() | {"infos": infos})
+    result = query_metric_range(**WINDOW)
+    assert_rejected(result)
+    assert result["reason"] == "invalid_metrics_range_response"
+
+
+@pytest.mark.parametrize("warnings", [["partial result"], None, False, {}, ""])
+def test_infos_never_override_range_warnings(prometheus, warnings):
+    set_payload(prometheus, matrix() | {
+        "infos": [MONOTONICITY_INFO], "warnings": warnings,
+    })
+    assert_rejected(query_metric_range(**WINDOW))
+
+
+@pytest.mark.parametrize("field,value", [
+    (1, "NaN"), (1, "Inf"), (1, "-Inf"), (1, None), (1, True), (1, {}),
+    (1, math.nan), (1, math.inf), (1, []),
+    (1, "-1"), (0, (START - timedelta(seconds=15)).timestamp()),
+    (0, (END + timedelta(seconds=15)).timestamp()),
+])
+def test_infos_never_override_invalid_p95_samples(prometheus, field, value):
+    payload = matrix() | {"infos": [MONOTONICITY_INFO]}
+    payload["data"]["result"][0]["values"][-1][field] = value
+    set_payload(prometheus, payload)
+    result = query_metric_range(**(WINDOW | {"metric": "http_latency_p95_seconds"}))
+    assert_rejected(result)
+
+
+def test_infos_do_not_fill_missing_or_empty_ranges(prometheus):
+    set_payload(prometheus, matrix([]) | {"infos": [MONOTONICITY_INFO]})
+    result = query_metric_range(**WINDOW)
+    assert_rejected(result)
+    assert result["reason"] == "no_samples_in_metric_range"
+    assert result["missing_point_count"] == 5
+    assert result["infos"] == [MONOTONICITY_INFO]
+
+
+def test_infos_preserve_gaps_without_filling_zero(prometheus):
+    values = matrix()["data"]["result"][0]["values"]
+    set_payload(prometheus, matrix(values[::2]) | {"infos": [MONOTONICITY_INFO]})
+    result = query_metric_range(**WINDOW)
+    assert result["status"] == "ok"
+    assert result["sample_count"] == 3
+    assert result["missing_point_count"] == 2
+    assert [sample["value"] for sample in result["samples"]] == [0.1] * 3
+    assert result["infos"] == [MONOTONICITY_INFO]
+
+
+def test_infos_never_override_out_of_domain_ratio(prometheus):
+    set_payload(prometheus, matrix([[START.timestamp(), "1.1"]]) | {
+        "infos": [MONOTONICITY_INFO],
+    })
+    result = query_metric_range(**WINDOW)
+    assert_rejected(result)
+    assert result["reason"] == "metric_value_outside_semantic_domain"
+
+
 @pytest.mark.parametrize("offset", [8, -5, 0])
 def test_explicit_timezone_is_converted_to_utc(prometheus, offset):
     zone = timezone(timedelta(hours=offset))
@@ -359,7 +457,6 @@ def test_response_point_count_is_independently_bounded(prometheus, count):
     {"status": "success", "data": {"resultType": "matrix", "result": [None]}},
     {"status": "success", "data": {"resultType": "matrix", "result": [{"values": []}]}},
     matrix() | {"warnings": ["partial result"]},
-    matrix() | {"infos": ["mixed samples omitted"]},
 ])
 def test_malformed_nonmatrix_and_partial_responses_are_not_evidence(
     prometheus,

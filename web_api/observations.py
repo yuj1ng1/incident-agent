@@ -73,7 +73,11 @@ async def incident_signals(incident: Incident) -> IncidentSignals:
     for metric, result in zip(METRICS, metric_results, strict=True):
         status, reason = signal_status(result)
         metrics.append(MetricSignal(
-            metric=metric, status=status, reason=reason, samples=result["samples"],
+            metric=metric,
+            status=status,
+            reason=reason,
+            samples=result["samples"],
+            infos=[public_text(info, 512) for info in result.get("infos", [])],
         ))
     status, reason = signal_status(log_result)
     logs = log_result.get("logs", [])

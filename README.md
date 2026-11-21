@@ -13,8 +13,9 @@ python scripts/stage1_demo_acceptance.py
 PostgreSQL、Prometheus、Loki、Alloy 和 MySQL。支持服务筛选、告警时间窗曲线与日志，
 验收脚本检查故障、业务恢复以及 MySQL 重启后的事件和调查回读。
 
-固定版本、配置、Windows 审批入口和停止方式见 [第一阶段部署与复跑](docs/STAGE1_DEPLOYMENT_GUIDE_2026-11-15_12-54-50.md)。
+固定版本、配置、Windows 审批入口和停止方式见 [第一阶段部署与复跑](docs/STAGE1_DEPLOYMENT_GUIDE_2026-11-21_10-31-39.md)。
 完整回归、真实告警与恢复、迁移兼容和已知限制见 [第一阶段验收记录](docs/STAGE1_ACCEPTANCE_2026-11-15_14-50-13.md)。
+P95 修复与补测见 [第一阶段收官验收](docs/STAGE1_REPAIR_AND_DEMO_ACCEPTANCE_2026-11-21_11-29-58.md)。
 
 当前版本：调查由持久化 Runtime 执行，支持人类介入、有限再调查及历史证据归档。
 

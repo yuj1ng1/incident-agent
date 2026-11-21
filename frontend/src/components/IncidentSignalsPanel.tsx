@@ -24,9 +24,14 @@ function SignalState({ status, reason, label }: { status: SignalStatus; reason: 
 function MetricChart({ signal, window }: { signal: MetricSignal; window: SignalWindow }) {
   const { title, unit, scale, decimals } = metrics[signal.metric];
   const last = signal.samples.at(-1);
+  const hints = signal.infos?.length ? <aside className="signal-message signal-infos" aria-label="Prometheus 查询提示">
+    <p>Prometheus 查询提示</p>
+    <ul>{signal.infos.map((info, index) => <li key={index}>{info}</li>)}</ul>
+  </aside> : null;
   if (signal.status !== 'ok' || !last) {
     return <article className="signal-metric"><h3>{title}</h3>
       <SignalState status={signal.status} reason={signal.reason} label="指标" />
+      {hints}
     </article>;
   }
 
@@ -67,6 +72,7 @@ function MetricChart({ signal, window }: { signal: MetricSignal; window: SignalW
       </svg>
     </div>
     <div className="signal-x-axis" aria-hidden="true"><span>{timeOfDay.format(from)}</span><span>{timeOfDay.format(to)}</span></div>
+    {hints}
   </article>;
 }
 

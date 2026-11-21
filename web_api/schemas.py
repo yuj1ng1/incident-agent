@@ -1,6 +1,6 @@
 """Explicit public fields: no raw checkpoint, tool output or operator messages."""
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,6 +45,7 @@ class MetricSignal(PublicModel):
     status: SignalStatus
     reason: str | None
     samples: list[MetricSample] = Field(max_length=120)
+    infos: list[Annotated[str, Field(min_length=1, max_length=512)]] = Field(max_length=8)
 
 
 class LogSample(PublicModel):

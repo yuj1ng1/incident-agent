@@ -34,6 +34,67 @@ from web_api.__main__ import main as web_main
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("case", ["infos", "warnings", "nan", "inf", "invalid_type"])
+def test_signals_preserve_p95_infos_without_accepting_invalid_samples(monkeypatch, case):
+    from datetime import datetime, timedelta, timezone
+
+    from incident_factory import create_incident_from_alert
+    from models.incident import Alert
+    from tools import logs, metrics
+    from web_api.queries import RuntimeQueries
+
+    incident = create_incident_from_alert(Alert(
+        service="order-service",
+        severity="warning",
+        metric="http_latency_p95_seconds",
+        value=0.5,
+        threshold=0.2,
+        observed_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+    ), "range-infos")
+    monkeypatch.setattr(RuntimeQueries, "incident_record", lambda self, key: incident)
+    monkeypatch.setattr(logs, "query_logs", lambda *args: {
+        "status": "no_data", "reason": "no_logs_in_query_range",
+    })
+    info = "PromQL info: input to histogram_quantile needed to be fixed for monotonicity"
+
+    def query_range(promql, *, start, end, step_seconds):
+        payload = {
+            "status": "success",
+            "infos": [info, "token=private-info-token"],
+            "data": {
+                "resultType": "matrix",
+                "result": [{
+                    "metric": {},
+                    "values": [[datetime.fromisoformat(start).timestamp(), "0.1"]],
+                }],
+            },
+        }
+        if case == "warnings":
+            payload["warnings"] = ["partial result"]
+        elif case in {"nan", "inf", "invalid_type"}:
+            payload["data"]["result"][0]["values"][0][1] = {
+                "nan": "NaN", "inf": "Inf", "invalid_type": True,
+            }[case]
+        return payload
+
+    monkeypatch.setattr(metrics.prometheus_client, "query_range", query_range)
+    with TestClient(create_app(), base_url="http://localhost") as client:
+        response = client.get(f"/api/incidents/{incident.incident_id}/signals")
+    assert response.status_code == 200
+    signal = next(item for item in response.json()["metrics"]
+                  if item["metric"] == "http_latency_p95_seconds")
+    if case == "infos":
+        assert signal["status"] == "ok"
+        assert [sample["value"] for sample in signal["samples"]] == [0.1]
+        assert signal["infos"] == [info, "token=[redacted]"]
+        assert signal["reason"] is None
+    else:
+        assert signal["status"] == "error"
+        assert signal["samples"] == []
+        assert signal["infos"] == []
+    assert "private-info-token" not in response.text
+
+
 @pytest.fixture
 def api(tmp_path):
     manager = create_runtime(tmp_path)
