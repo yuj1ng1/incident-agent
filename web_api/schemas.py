@@ -2,12 +2,14 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from investigation.models import RuntimeLimits, SessionStatus
 from investigation.result_trust import ResultTrust
+from knowledge.chunker import DEFAULT_MAX_MARKDOWN_BYTES
 from models.investigation import InvestigationStatus
 from models.recovery import Reason as RecoveryReason
+from web_api.auth import Permission
 
 
 class PublicModel(BaseModel):
@@ -68,7 +70,7 @@ class IncidentSignals(PublicModel):
 
 class OperatorView(PublicModel):
     actor: str
-    permissions: list[Literal["request", "approve", "execute"]]
+    permissions: list[Permission]
 
 
 class RemediationSummary(PublicModel):
@@ -383,6 +385,20 @@ class HumanRequestView(PublicModel):
     expires_at: datetime
 
 
+class RunbookCitationView(PublicModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    version_id: str = Field(min_length=1, max_length=120)
+    chunk_id: str = Field(min_length=1, max_length=120)
+    service: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    heading_path: str = Field(max_length=500)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    citation: str = Field(min_length=1, max_length=300)
+    snippet: str | None = Field(max_length=600)
+    score: float | None
+
+
 class SessionDetail(PublicModel):
     session: SessionSummary
     limits: RuntimeLimits | None
@@ -395,3 +411,168 @@ class SessionDetail(PublicModel):
     projection: Projection
     proposal_generation: ProposalGeneration
     human_requests: list[HumanRequestView] = Field(max_length=10)
+    runbook_citations: list[RunbookCitationView] = Field(
+        default=[],
+        max_length=20,
+    )
+
+
+KnowledgeVersionStatus = Literal["draft", "published", "archived"]
+KnowledgePublishStatus = Literal["published", "unpublished"]
+KnowledgeSearchMethod = Literal["hybrid_rrf", "mysql_ngram", "vector_cosine"]
+KnowledgeSearchStatus = Literal["ok", "no_match", "unavailable"]
+
+
+def _reject_path_traversal_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value in {".", ".."} or ".." in value:
+        raise ValueError("invalid_identifier")
+    return value
+
+
+class KnowledgeVersionSummary(PublicModel):
+    version_id: str = Field(min_length=1, max_length=120)
+    status: KnowledgeVersionStatus
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+
+
+class KnowledgeDocumentSummary(PublicModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    service: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    source: str = Field(min_length=1, max_length=300)
+    published_version_id: str | None = Field(max_length=120)
+    published_status: KnowledgePublishStatus
+    version_count: int = Field(ge=0)
+    versions: list[KnowledgeVersionSummary] = Field(max_length=100)
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeDocumentPage(PublicModel):
+    items: list[KnowledgeDocumentSummary] = Field(max_length=100)
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0, le=10000)
+    has_more: bool
+
+
+class KnowledgeChunkItem(PublicModel):
+    chunk_id: str = Field(min_length=1, max_length=120)
+    ordinal: int = Field(ge=0)
+    heading_path: str = Field(max_length=500)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    chunk_text: str
+    embedding_model: str | None = Field(max_length=120)
+    embedding_dim: int | None = Field(ge=1)
+
+
+class KnowledgeVersionDetail(PublicModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    service: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    source: str = Field(min_length=1, max_length=300)
+    published_version_id: str | None = Field(max_length=120)
+    version_id: str = Field(min_length=1, max_length=120)
+    status: KnowledgeVersionStatus
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+    raw_markdown: str
+    chunks: list[KnowledgeChunkItem]
+
+
+class KnowledgeImportResponse(PublicModel):
+    document: KnowledgeDocumentSummary
+    version: KnowledgeVersionSummary
+    chunk_count: int = Field(ge=1)
+    idempotent: bool
+
+
+class KnowledgeSearchHit(PublicModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    version_id: str = Field(min_length=1, max_length=120)
+    chunk_id: str = Field(min_length=1, max_length=120)
+    service: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    source: str = Field(min_length=1, max_length=300)
+    heading_path: str = Field(max_length=500)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    snippet: str = Field(max_length=1200)
+    score: float
+    lexical_rank: int | None = Field(ge=1)
+    vector_rank: int | None = Field(ge=1)
+    exact_match: bool
+    citation: str = Field(min_length=1, max_length=300)
+
+
+class KnowledgeSearchResponse(PublicModel):
+    status: KnowledgeSearchStatus
+    service: str = Field(min_length=1, max_length=200)
+    query: str = Field(max_length=2000)
+    method: KnowledgeSearchMethod
+    hits: list[KnowledgeSearchHit] = Field(max_length=20)
+    candidate_count: int = Field(ge=0)
+    reason: str | None = Field(max_length=200)
+
+
+class KnowledgeDocumentImportRequest(PublicModel):
+    service: str = Field(min_length=1, max_length=200)
+    title: str | None = Field(default=None, max_length=300)
+    source: str = Field(min_length=1, max_length=300)
+    raw_markdown: str = Field(
+        min_length=1,
+        max_length=DEFAULT_MAX_MARKDOWN_BYTES,
+    )
+    document_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[a-zA-Z0-9_.:-]+$",
+    )
+    publish: bool = True
+
+    @field_validator("document_id", mode="after")
+    @classmethod
+    def _validate_document_id(cls, value: str | None) -> str | None:
+        return _reject_path_traversal_id(value)
+
+
+class KnowledgeVersionCreateRequest(PublicModel):
+    raw_markdown: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=DEFAULT_MAX_MARKDOWN_BYTES,
+    )
+    title: str | None = Field(default=None, max_length=300)
+    source: str | None = Field(default=None, min_length=1, max_length=300)
+    publish: bool = True
+    publish_version_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[a-zA-Z0-9_.:-]+$",
+    )
+
+    @field_validator("publish_version_id", mode="after")
+    @classmethod
+    def _validate_publish_version_id(cls, value: str | None) -> str | None:
+        return _reject_path_traversal_id(value)
+
+    @model_validator(mode="after")
+    def _validate_exclusive_mode(self):
+        has_markdown = self.raw_markdown is not None
+        has_publish_id = self.publish_version_id is not None
+        if has_markdown == has_publish_id:
+            raise ValueError("specify_either_raw_markdown_or_publish_version_id")
+        return self
+
+
+class KnowledgeSearchRequest(PublicModel):
+    service: str = Field(min_length=1, max_length=200)
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=5, ge=1, le=20)
+    method: KnowledgeSearchMethod = "hybrid_rrf"
